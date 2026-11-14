@@ -3,8 +3,7 @@ import type {
   SiteEnvironmentSummary,
   WeatherHourlyPoint,
   WeatherScenario,
-} from "@nimbs/shared";
-import { encodeRgbaPng } from "../utils/png";
+} from "../types";
 import {
   MARS_LAPSE_RATE_K_PER_M,
   MARS_OBLIQUITY_RAD,
@@ -15,7 +14,6 @@ import {
 import type { TerrainGraph } from "./engine";
 
 const MAX_FIELD_CACHE_ENTRIES = 8;
-const MAX_PNG_CACHE_ENTRIES = 16;
 const IS_LITTLE_ENDIAN = new Uint32Array(new Uint8Array([1, 2, 3, 4]).buffer)[0] === 0x04030201;
 
 export interface SiteWeatherField {
@@ -89,9 +87,7 @@ class LruCache<K, V> {
 }
 
 const spatialCacheByGraph = new WeakMap<TerrainGraph, SpatialTerrainCache>();
-const fieldKeyByField = new WeakMap<SiteWeatherField, string>();
 const fieldLruCache = new LruCache<string, CachedFieldEntry>(MAX_FIELD_CACHE_ENTRIES);
-const pngLruCache = new LruCache<string, Uint8Array>(MAX_PNG_CACHE_ENTRIES);
 let nextGraphId = 1;
 
 function roundTo(val: number, decimals: number): number {
@@ -488,7 +484,6 @@ export function computeSiteWeatherField(
     meanPressurePa: validCount > 0 ? roundTo(sumPressurePa / validCount, 2) : 0,
   };
 
-  fieldKeyByField.set(field, cacheKey);
   fieldLruCache.set(cacheKey, { cacheKey, field });
   return field;
 }
@@ -548,7 +543,7 @@ function encodeMaskFromBins(
   lut32: Uint32Array,
   lutBytes: Uint8Array,
   binOf: (val: number) => number,
-): Uint8Array {
+): Uint8Array<ArrayBuffer> {
   const totalCells = graph.totalCells;
   const valid = graph.getValidMask();
   const rgba = new Uint8Array(totalCells * 4);
@@ -573,25 +568,20 @@ function encodeMaskFromBins(
     }
   }
 
-  return encodeRgbaPng(graph.cols, graph.rows, rgba, 1);
+  return rgba;
 }
 
 /**
- * Render an RGBA PNG highlighting atmospheric pressure limits:
+ * Render raw RGBA pixels highlighting atmospheric pressure limits:
  * - Blocked (< minPressurePa): magenta/violet (#d946ef -> #a21caf, alpha ~175)
  * - Caution (< minPressurePa * 1.04): warm yellow (#eab308, alpha ~115)
  * - Safe (>= minPressurePa * 1.04): teal/cyan gradient (#38bdf8 .. #0d9488, alpha ~45..95)
  */
-export function renderPressureMaskPng(
+export function renderPressureMaskRgba(
   graph: TerrainGraph,
   field: SiteWeatherField,
   minPressurePa: number,
-): Uint8Array {
-  const fieldKey = fieldKeyByField.get(field) ?? `${field.siteId}|${field.sol}|${field.lmstHour}`;
-  const pngKey = `${fieldKey}|p|${minPressurePa.toFixed(2)}`;
-  const cached = pngLruCache.get(pngKey);
-  if (cached) return cached;
-
+): Uint8Array<ArrayBuffer> {
   const lut32 = new Uint32Array(256);
   const lutBytes = new Uint8Array(256 * 4);
   // 0..85: blocked (#d946ef -> #a21caf), 86..127: caution (#eab308), 128..255: safe (#38bdf8 -> #0d9488)
@@ -604,7 +594,7 @@ export function renderPressureMaskPng(
   const cautionSpan = Math.max(1e-6, cautionTop - minPressurePa);
   const safeSpan = Math.max(10, field.maxPressurePa - cautionTop);
 
-  const png = encodeMaskFromBins(graph, field.pressurePa, lut32, lutBytes, (p) => {
+  return encodeMaskFromBins(graph, field.pressurePa, lut32, lutBytes, (p) => {
     if (p < minPressurePa) {
       const t = Math.max(0, Math.min(1, (minPressurePa - p) / blockedSpan));
       return Math.min(85, Math.round(t * 85));
@@ -616,27 +606,19 @@ export function renderPressureMaskPng(
     const t = Math.max(0, Math.min(1, (p - cautionTop) / safeSpan));
     return 128 + Math.min(127, Math.round(t * 127));
   });
-
-  pngLruCache.set(pngKey, png);
-  return png;
 }
 
 /**
- * Render an RGBA PNG highlighting modeled surface air temperature:
+ * Render raw RGBA pixels highlighting modeled surface air temperature:
  * - Blocked cold (< minAirTempC): icy blue/sapphire (#0284c7 -> #2563eb, alpha ~175)
  * - Near-limit (minAirTempC .. minAirTempC + 5 C): cyan-teal (#38bdf8, alpha ~95)
  * - Warm safe (>= minAirTempC + 5 C): amber-orange glow (#f59e0b -> #fb923c, alpha ~60..130)
  */
-export function renderTemperatureMaskPng(
+export function renderTemperatureMaskRgba(
   graph: TerrainGraph,
   field: SiteWeatherField,
   minAirTempC: number,
-): Uint8Array {
-  const fieldKey = fieldKeyByField.get(field) ?? `${field.siteId}|${field.sol}|${field.lmstHour}`;
-  const pngKey = `${fieldKey}|t|${minAirTempC.toFixed(2)}`;
-  const cached = pngLruCache.get(pngKey);
-  if (cached) return cached;
-
+): Uint8Array<ArrayBuffer> {
   const lut32 = new Uint32Array(256);
   const lutBytes = new Uint8Array(256 * 4);
   // 0..85: blocked cold (#0284c7 -> #2563eb), 86..127: near limit (#38bdf8), 128..255: warm safe (#f59e0b -> #fb923c)
@@ -651,7 +633,7 @@ export function renderTemperatureMaskPng(
   const blockedSpan = Math.max(5, minTempK - fieldMinK);
   const safeSpan = Math.max(5, fieldMaxK - cautionTopK);
 
-  const png = encodeMaskFromBins(graph, field.tempK, lut32, lutBytes, (tK) => {
+  return encodeMaskFromBins(graph, field.tempK, lut32, lutBytes, (tK) => {
     if (tK < minTempK) {
       const t = Math.max(0, Math.min(1, (minTempK - tK) / blockedSpan));
       return Math.min(85, Math.round(t * 85));
@@ -663,7 +645,4 @@ export function renderTemperatureMaskPng(
     const t = Math.max(0, Math.min(1, (tK - cautionTopK) / safeSpan));
     return 128 + Math.min(127, Math.round(t * 127));
   });
-
-  pngLruCache.set(pngKey, png);
-  return png;
 }

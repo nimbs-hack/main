@@ -5,11 +5,18 @@ import {
   type RoutePoint,
   type SiteMetadata,
   type WeatherScenario,
+  buildDirectMarsTileUrl,
   normalizeLon180,
   surfaceDistanceMeters,
 } from "@nimbs/shared";
 import L from "leaflet";
-import { type RefObject, useEffect, useMemo, useRef } from "react";
+import { type RefObject, useCallback, useEffect, useRef } from "react";
+import {
+  STATIC_HILLSHADE_URL,
+  renderPressureMaskUrl,
+  renderSlopeMaskUrl,
+  renderTemperatureMaskUrl,
+} from "../services/api";
 import type { MapPoint, MapPointClass } from "../services/pointStore";
 import { createPointIconSvgElement } from "./PointClassIcon";
 import { formatRouteDistance, getRouteStrategyVisual } from "./routeVisuals";
@@ -155,18 +162,31 @@ function buildPointPopupElement(
   return root;
 }
 
+class DirectMarsTileLayer extends L.TileLayer {
+  private readonly layerId: string;
+
+  constructor(layerId: string, urlTemplate: string, options?: L.TileLayerOptions) {
+    super(urlTemplate, options);
+    this.layerId = layerId;
+  }
+
+  override getTileUrl(coords: L.Coords): string {
+    return buildDirectMarsTileUrl(this.layerId, coords.z, coords.x, coords.y) ?? "";
+  }
+}
+
 const RASTER_PANE_NAME = "terrainRasterPane";
 
 function useDebouncedSiteOverlay(options: {
   mapRef: RefObject<L.Map | null>;
   site: SiteMetadata | null;
   visible: boolean;
-  url: string;
+  renderUrl: (signal: AbortSignal) => Promise<string>;
   opacity: number;
   zIndex: number;
   debounceMs: number;
 }) {
-  const { mapRef, site, visible, url, opacity, zIndex, debounceMs } = options;
+  const { mapRef, site, visible, renderUrl, opacity, zIndex, debounceMs } = options;
   const overlayRef = useRef<L.ImageOverlay | null>(null);
 
   useEffect(() => {
@@ -183,30 +203,46 @@ function useDebouncedSiteOverlay(options: {
 
     const [west, south, east, north] = site.bbox;
     const bounds = L.latLngBounds([south, west], [north, east]);
+    let cancelled = false;
+    const controller = new AbortController();
 
     const applyOverlay = () => {
-      if (overlayRef.current) {
-        overlayRef.current.setBounds(bounds);
-        overlayRef.current.setOpacity(opacity);
-        overlayRef.current.setZIndex(zIndex);
-        overlayRef.current.setUrl(url);
-      } else {
-        overlayRef.current = L.imageOverlay(url, bounds, {
-          opacity,
-          pane: RASTER_PANE_NAME,
-          zIndex,
-        }).addTo(map);
-      }
+      renderUrl(controller.signal)
+        .then((blobUrl) => {
+          if (cancelled) return;
+          if (overlayRef.current) {
+            overlayRef.current.setBounds(bounds);
+            overlayRef.current.setOpacity(opacity);
+            overlayRef.current.setZIndex(zIndex);
+            overlayRef.current.setUrl(blobUrl);
+          } else {
+            overlayRef.current = L.imageOverlay(blobUrl, bounds, {
+              opacity,
+              pane: RASTER_PANE_NAME,
+              zIndex,
+            }).addTo(map);
+          }
+        })
+        .catch(() => {
+          // Ignore aborted or failed intermediate overlay updates
+        });
     };
 
     if (!overlayRef.current) {
       applyOverlay();
-      return;
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
     }
 
     const timer = window.setTimeout(applyOverlay, debounceMs);
-    return () => window.clearTimeout(timer);
-  }, [mapRef, site, visible, url, opacity, zIndex, debounceMs]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [mapRef, site, visible, renderUrl, opacity, zIndex, debounceMs]);
 }
 
 export function MapView({
@@ -386,12 +422,13 @@ export function MapView({
       baseLayerRef.current.removeFrom(map);
     }
 
-    const tileLayer = L.tileLayer(activeBaseLayer.tileUrlTemplate, {
+    const tileLayer = new DirectMarsTileLayer(activeBaseLayer.id, activeBaseLayer.tileUrlTemplate, {
       tileSize: 256,
       minZoom: 0,
       maxZoom: 17,
       maxNativeZoom: activeBaseLayer.maxNativeZoom,
       noWrap: true,
+      crossOrigin: "anonymous",
       bounds: [
         [-90, -180],
         [90, 180],
@@ -442,7 +479,7 @@ export function MapView({
       hillshadeRef.current = null;
     }
     if (showHillshade) {
-      hillshadeRef.current = L.imageOverlay("/api/site/hillshade.png", bounds, {
+      hillshadeRef.current = L.imageOverlay(STATIC_HILLSHADE_URL, bounds, {
         opacity: 0.9,
         pane: RASTER_PANE_NAME,
         zIndex: 1,
@@ -465,34 +502,46 @@ export function MapView({
     }
   }, [site, showHillshade, showSiteBounds]);
 
-  const slopeMaskUrl = `/api/site/passability.png?maxSlopeDeg=${maxSlopeDeg.toFixed(1)}`;
-  const temperatureUrl = useMemo(() => {
-    const params = new URLSearchParams({
-      scenario: weatherScenario,
-      lmstHour: simLmstHour.toFixed(1),
-      minAirTempC: String(Math.round(minAirTempC)),
-    });
-    if (weatherSol !== undefined) params.set("sol", String(weatherSol));
-    return `/api/site/temperature.png?${params.toString()}`;
-  }, [weatherScenario, simLmstHour, minAirTempC, weatherSol]);
-
-  const pressureUrl = useMemo(() => {
-    const params = new URLSearchParams({
-      scenario: weatherScenario,
-      lmstHour: simLmstHour.toFixed(1),
-      minPressurePa: String(Math.round(minPressurePa)),
-    });
-    if (weatherSol !== undefined) params.set("sol", String(weatherSol));
-    return `/api/site/pressure.png?${params.toString()}`;
-  }, [weatherScenario, simLmstHour, minPressurePa, weatherSol]);
-
   const fieldOverlayOpacity = showPressureLayer && showTemperatureLayer ? 0.56 : 0.74;
+
+  const renderTemperatureOverlay = useCallback(
+    (signal: AbortSignal) =>
+      renderTemperatureMaskUrl(
+        {
+          scenario: weatherScenario,
+          sol: weatherSol,
+          lmstHour: simLmstHour,
+          minAirTempC: Math.round(minAirTempC),
+        },
+        signal,
+      ),
+    [weatherScenario, weatherSol, simLmstHour, minAirTempC],
+  );
+
+  const renderPressureOverlay = useCallback(
+    (signal: AbortSignal) =>
+      renderPressureMaskUrl(
+        {
+          scenario: weatherScenario,
+          sol: weatherSol,
+          lmstHour: simLmstHour,
+          minPressurePa: Math.round(minPressurePa),
+        },
+        signal,
+      ),
+    [weatherScenario, weatherSol, simLmstHour, minPressurePa],
+  );
+
+  const renderSlopeOverlay = useCallback(
+    (signal: AbortSignal) => renderSlopeMaskUrl(maxSlopeDeg, signal),
+    [maxSlopeDeg],
+  );
 
   useDebouncedSiteOverlay({
     mapRef,
     site,
     visible: showTemperatureLayer,
-    url: temperatureUrl,
+    renderUrl: renderTemperatureOverlay,
     opacity: fieldOverlayOpacity,
     zIndex: 2,
     debounceMs: 160,
@@ -502,7 +551,7 @@ export function MapView({
     mapRef,
     site,
     visible: showPressureLayer,
-    url: pressureUrl,
+    renderUrl: renderPressureOverlay,
     opacity: fieldOverlayOpacity,
     zIndex: 3,
     debounceMs: 160,
@@ -512,7 +561,7 @@ export function MapView({
     mapRef,
     site,
     visible: showSlopeHazard,
-    url: slopeMaskUrl,
+    renderUrl: renderSlopeOverlay,
     opacity: 0.78,
     zIndex: 4,
     debounceMs: 150,

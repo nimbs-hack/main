@@ -1,34 +1,15 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type {
-  MarsWeatherSnapshot,
-  RoutePlanResponse,
-  SiteDataset,
-  SiteEnvironmentSummary,
-} from "@nimbs/shared";
-import { createApp } from "../index";
+import { describe, expect, test } from "bun:test";
+import type { MarsWeatherSnapshot, SiteDataset } from "../types";
 import { generateMartianWeather } from "../weather/generator";
-import { WeatherService } from "../weather/service";
+import { decodeTerrainBinary, encodeTerrainBinary } from "./binary";
 import { TerrainGraph } from "./engine";
-import { computeSiteWeatherField, interpolateWeatherAtHour } from "./weatherField";
-
-const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-const tempDirs: string[] = [];
-
-function makeTempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "nimbs-terrain-weather-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(() => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) rmSync(dir, { recursive: true, force: true });
-  }
-});
+import {
+  computeSiteWeatherField,
+  interpolateWeatherAtHour,
+  renderPressureMaskRgba,
+  renderTemperatureMaskRgba,
+  toSiteEnvironmentSummary,
+} from "./weatherField";
 
 function makeRidgeDataset(): SiteDataset {
   // 11x11 grid (~1000m x 1000m, ~100m spacing) with a steep ridge down the middle col=5
@@ -110,27 +91,19 @@ describe("TerrainGraph and slope routing", () => {
     expect(res.status).toBe("out_of_bounds");
   });
 
-  test("API route endpoints respond cleanly", async () => {
-    const app = createApp(graph);
-    const health = await app.request("/api/health");
-    expect(health.status).toBe(200);
-    const healthJson = (await health.json()) as { ok: boolean; siteLoaded: boolean };
-    expect(healthJson.ok).toBe(true);
-    expect(healthJson.siteLoaded).toBe(true);
+  test("client slope mask RGBA renders hazardous pixels and binary terrain roundtrips cleanly", () => {
+    const rgba = graph.renderSlopeMaskRgba(10);
+    expect(rgba.byteLength).toBe(graph.totalCells * 4);
+    let nonZeroAlpha = 0;
+    for (let i = 3; i < rgba.length; i += 4) {
+      if ((rgba[i] ?? 0) > 0) nonZeroAlpha += 1;
+    }
+    expect(nonZeroAlpha).toBeGreaterThan(0);
 
-    const routeRes = await app.request("/api/graph/routes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ waypointA: a, waypointB: b, maxSlopeDeg: 10 }),
-    });
-    expect(routeRes.status).toBe(200);
-    const body = (await routeRes.json()) as { status: string; routes: unknown[] };
-    expect(body.status).toBe("ok");
-    expect(body.routes.length).toBeGreaterThanOrEqual(1);
-
-    const pngRes = await app.request("/api/site/passability.png?maxSlopeDeg=10");
-    expect(pngRes.status).toBe(200);
-    expect(pngRes.headers.get("content-type")).toBe("image/png");
+    const encoded = encodeTerrainBinary(graph.elevations);
+    const decoded = decodeTerrainBinary(encoded.buffer as ArrayBuffer, graph.totalCells);
+    expect(decoded.length).toBe(graph.totalCells);
+    expect(decoded[0]).toBeCloseTo(graph.elevations[0] ?? 0, 5);
   });
 });
 
@@ -352,45 +325,24 @@ describe("Spatial weather fields and weather-constrained routing", () => {
     expect(wrappedNoNext.sol).toBe(snapshot.sol + 1);
   });
 
-  test("HTTP pressure, temperature, environment-summary, and weather-constrained route endpoints", async () => {
-    const dir = makeTempDir();
-    const service = new WeatherService({
-      cacheDir: join(dir, "cache"),
-      siteWeatherPath: join(dir, "missing.json"),
-      enableLiveFetch: false,
+  test("client pressure, temperature RGBA masks and environment summary stay consistent", () => {
+    const snapshot = generateMartianWeather({
+      site: "jezero",
+      scenario: "nominal",
+      sol: 1859,
+      siteMeta: graph.meta,
     });
-    const app = createApp(graph, service);
+    const field = computeSiteWeatherField(graph, snapshot, 14);
 
-    const pressureRes = await app.request(
-      "/api/site/pressure.png?scenario=nominal&sol=1859&lmstHour=14&minPressurePa=700",
-    );
-    expect(pressureRes.status).toBe(200);
-    expect(pressureRes.headers.get("content-type")).toBe("image/png");
-    expect(pressureRes.headers.get("cache-control")).toBe("public, max-age=120");
-    expect(pressureRes.headers.get("x-layer-unit")).toBe("Pa");
-    expect(pressureRes.headers.get("x-layer-lmst")).toBe("14:00");
-    expect(Number.isFinite(Number(pressureRes.headers.get("x-layer-min")))).toBe(true);
-    expect(Number.isFinite(Number(pressureRes.headers.get("x-layer-max")))).toBe(true);
-    expect(Number.isFinite(Number(pressureRes.headers.get("x-layer-mean")))).toBe(true);
-    const pressureBytes = new Uint8Array(await pressureRes.arrayBuffer());
-    expect(Array.from(pressureBytes.slice(0, 8))).toEqual(PNG_MAGIC);
+    const pressureRgba = renderPressureMaskRgba(graph, field, 700);
+    expect(pressureRgba.byteLength).toBe(graph.totalCells * 4);
+    expect(pressureRgba[3]).toBeGreaterThan(0);
 
-    const tempRes = await app.request(
-      "/api/site/temperature.png?scenario=nominal&sol=1859&lmstHour=14&minAirTempC=-75",
-    );
-    expect(tempRes.status).toBe(200);
-    expect(tempRes.headers.get("content-type")).toBe("image/png");
-    expect(tempRes.headers.get("cache-control")).toBe("public, max-age=120");
-    expect(tempRes.headers.get("x-layer-unit")).toBe("C");
-    expect(tempRes.headers.get("x-layer-lmst")).toBe("14:00");
-    const tempBytes = new Uint8Array(await tempRes.arrayBuffer());
-    expect(Array.from(tempBytes.slice(0, 8))).toEqual(PNG_MAGIC);
+    const tempRgba = renderTemperatureMaskRgba(graph, field, -75);
+    expect(tempRgba.byteLength).toBe(graph.totalCells * 4);
+    expect(tempRgba[3]).toBeGreaterThan(0);
 
-    const summaryRes = await app.request(
-      "/api/site/environment-summary?scenario=nominal&sol=1859&lmstHour=14",
-    );
-    expect(summaryRes.status).toBe(200);
-    const summary = (await summaryRes.json()) as SiteEnvironmentSummary;
+    const summary = toSiteEnvironmentSummary(field);
     expect(summary.siteId).toBe("jezero");
     expect(summary.sol).toBe(1859);
     expect(summary.lmstHour).toBe(14);
@@ -402,69 +354,34 @@ describe("Spatial weather fields and weather-constrained routing", () => {
     expect(summary.minPressurePa).toBeLessThanOrEqual(summary.meanPressurePa);
     expect(summary.meanPressurePa).toBeLessThanOrEqual(summary.maxPressurePa);
 
-    // Weather-constrained POST /api/graph/routes: cold at 03:00 -> unreachable, warm at 14:00 -> ok
-    const coldRouteRes = await app.request("/api/graph/routes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        waypointA: a,
-        waypointB: b,
-        maxSlopeDeg: 20,
-        weatherConstraints: {
-          enabled: true,
-          scenario: "nominal",
-          sol: 1859,
-          lmstHour: 3,
-          minAirTempC: -75,
-          minPressurePa: 400,
-        },
-      }),
+    // Cold night field at 03:00 -> unreachable by temperature
+    const coldField = computeSiteWeatherField(graph, snapshot, 3);
+    const coldRes = graph.planRoutes(a, b, 20, {
+      lmstHour: coldField.lmstHour,
+      lmstLabel: coldField.lmstLabel,
+      minAirTempC: -75,
+      minPressurePa: 400,
+      cellTempK: coldField.tempK,
+      cellPressurePa: coldField.pressurePa,
     });
-    expect(coldRouteRes.status).toBe(200);
-    const coldBody = (await coldRouteRes.json()) as RoutePlanResponse;
-    expect(coldBody.status).toBe("unreachable");
-    expect(coldBody.blockedReason).toBe("temperature");
-    expect(coldBody.weatherApplied).toBe(true);
+    expect(coldRes.status).toBe("unreachable");
+    expect(coldRes.blockedReason).toBe("temperature");
+    expect(coldRes.weatherApplied).toBe(true);
 
-    const warmRouteRes = await app.request("/api/graph/routes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        waypointA: a,
-        waypointB: b,
-        maxSlopeDeg: 20,
-        weatherConstraints: {
-          enabled: true,
-          scenario: "nominal",
-          sol: 1859,
-          lmstHour: 14,
-          minAirTempC: -75,
-          minPressurePa: 400,
-          thermalWeight: 0.35,
-        },
-      }),
+    // Warm afternoon field at 14:00 -> navigable with thermal metrics attached
+    const warmRes = graph.planRoutes(a, b, 20, {
+      lmstHour: field.lmstHour,
+      lmstLabel: field.lmstLabel,
+      minAirTempC: -75,
+      minPressurePa: 400,
+      thermalWeight: 0.35,
+      cellTempK: field.tempK,
+      cellPressurePa: field.pressurePa,
     });
-    expect(warmRouteRes.status).toBe(200);
-    const warmBody = (await warmRouteRes.json()) as RoutePlanResponse;
-    expect(warmBody.status).toBe("ok");
-    expect(warmBody.weatherApplied).toBe(true);
-    expect(warmBody.appliedLmstHour).toBe(14);
-    expect(warmBody.routes[0]?.points[0]?.tempC).toBeDefined();
-    expect(warmBody.routes[0]?.points[0]?.pressurePa).toBeDefined();
-
-    // Validation errors return 400
-    const badScenario = await app.request("/api/site/pressure.png?scenario=invalid");
-    expect(badScenario.status).toBe(400);
-    const badWc = await app.request("/api/graph/routes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        waypointA: a,
-        waypointB: b,
-        maxSlopeDeg: 20,
-        weatherConstraints: { enabled: true, lmstHour: 99 },
-      }),
-    });
-    expect(badWc.status).toBe(400);
+    expect(warmRes.status).toBe("ok");
+    expect(warmRes.weatherApplied).toBe(true);
+    expect(warmRes.appliedLmstHour).toBe(14);
+    expect(warmRes.routes[0]?.points[0]?.tempC).toBeDefined();
+    expect(warmRes.routes[0]?.points[0]?.pressurePa).toBeDefined();
   });
 });

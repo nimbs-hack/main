@@ -22,11 +22,11 @@ export interface SiteMetadata {
   nodataValue: number;
 }
 
-/** Serialized 2D elevation grid stored under data/site-terrain.json. */
+/** Serialized 2D elevation grid stored under data/site-terrain.json or site-terrain.bin. */
 export interface SiteDataset {
   meta: SiteMetadata;
   /** Row-major (north-to-south, west-to-east) elevations in SI meters relative to Mars areoid. */
-  elevationsM: number[];
+  elevationsM: Float32Array | number[];
 }
 
 export interface ElevationResponse {

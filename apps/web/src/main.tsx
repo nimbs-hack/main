@@ -10,6 +10,18 @@ if (!rootEl) {
   throw new Error("Missing #root mount element");
 }
 
+if (
+  typeof window !== "undefined" &&
+  "serviceWorker" in navigator &&
+  (window.location.protocol === "https:" || window.location.protocol === "http:")
+) {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register("/sw.js").catch(() => {
+      // Non-fatal if Service Worker is blocked in private mode
+    });
+  });
+}
+
 createRoot(rootEl).render(
   <StrictMode>
     <App />

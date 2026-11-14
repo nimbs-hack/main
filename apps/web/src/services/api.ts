@@ -1,16 +1,22 @@
-import type {
-  ElevationResponse,
-  EvaRouteWeatherContext,
-  EvaWeatherLimits,
-  MapLayerMeta,
-  MarsWeatherSnapshot,
-  RoutePlanRequest,
-  RoutePlanResponse,
-  SiteEnvironmentSummary,
-  SiteMetadata,
-  WeatherApiResponse,
-  WeatherScenario,
+import {
+  DEFAULT_EVA_LIMITS,
+  type ElevationResponse,
+  type EvaRouteWeatherContext,
+  type EvaWeatherLimits,
+  MARS_BASE_LAYERS,
+  type MapLayerMeta,
+  type MarsWeatherSnapshot,
+  type RoutePlanRequest,
+  type RoutePlanResponse,
+  type SiteEnvironmentSummary,
+  type SiteMetadata,
+  type WeatherApiResponse,
+  type WeatherScenario,
+  ensureNextSolForecast,
+  evaluateEvaWeather,
 } from "@nimbs/shared";
+import { clientEngine } from "./clientEngine";
+import { defaultClientWeatherService } from "./clientWeather";
 
 export {
   type ComputedRoute,
@@ -49,46 +55,25 @@ export {
   type WeatherSourceType,
 } from "@nimbs/shared";
 
+export const STATIC_HILLSHADE_URL = "/data/site-hillshade.png";
+
 export async function fetchSiteMeta(): Promise<SiteMetadata> {
-  const res = await fetch("/api/site");
-  if (!res.ok) {
-    throw new Error(`Failed to load site metadata (${res.status})`);
-  }
-  const data = (await res.json()) as { meta: SiteMetadata };
-  return data.meta;
+  return clientEngine.ensureInitialized();
 }
 
 export async function fetchBaseLayers(): Promise<MapLayerMeta[]> {
-  const res = await fetch("/api/layers");
-  if (!res.ok) {
-    throw new Error(`Failed to load layers (${res.status})`);
-  }
-  const data = (await res.json()) as { layers: MapLayerMeta[] };
-  return data.layers;
+  return [...MARS_BASE_LAYERS];
 }
 
 export async function fetchElevation(lat: number, lon: number): Promise<ElevationResponse> {
-  const res = await fetch(`/api/terrain/elevation?lat=${lat}&lon=${lon}`);
-  if (!res.ok) {
-    throw new Error(`Elevation query failed (${res.status})`);
-  }
-  return (await res.json()) as ElevationResponse;
+  return clientEngine.queryElevation(lat, lon);
 }
 
 export async function planGraphRoutes(
   payload: RoutePlanRequest,
   signal?: AbortSignal,
 ): Promise<RoutePlanResponse> {
-  const res = await fetch("/api/graph/routes", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    signal,
-  });
-  if (!res.ok) {
-    throw new Error(`Route calculation failed (${res.status})`);
-  }
-  return (await res.json()) as RoutePlanResponse;
+  return clientEngine.planRoutes(payload, signal);
 }
 
 export async function fetchWeatherSnapshot(
@@ -101,20 +86,23 @@ export async function fetchWeatherSnapshot(
   },
   signal?: AbortSignal,
 ): Promise<WeatherApiResponse> {
-  const query = new URLSearchParams();
-  if (params?.site) query.set("site", params.site);
-  if (params?.scenario) query.set("scenario", params.scenario);
-  if (params?.sol !== undefined) query.set("sol", String(params.sol));
-  if (params?.lmstHour !== undefined && Number.isFinite(params.lmstHour)) {
-    query.set("lmstHour", String(params.lmstHour));
+  if (signal?.aborted) {
+    throw new DOMException("Operation aborted", "AbortError");
   }
-  if (params?.refresh) query.set("refresh", "1");
-  const qs = query.toString();
-  const res = await fetch(`/api/weather${qs ? `?${qs}` : ""}`, { signal });
-  if (!res.ok) {
-    throw new Error(`Weather query failed (${res.status})`);
-  }
-  return (await res.json()) as WeatherApiResponse;
+  const siteMeta = await clientEngine.ensureInitialized().catch(() => null);
+  const weather = await defaultClientWeatherService.getWeather({
+    site: params?.site ?? siteMeta?.id,
+    scenario: params?.scenario,
+    sol: params?.sol,
+    refresh: params?.refresh,
+    siteMeta,
+  });
+  const evaluation = evaluateEvaWeather(weather, {
+    limits: DEFAULT_EVA_LIMITS,
+    siteMeta,
+    lmstHour: params?.lmstHour,
+  });
+  return { weather, evaluation };
 }
 
 export async function evaluateWeatherConstraints(
@@ -130,16 +118,27 @@ export async function evaluateWeatherConstraints(
   },
   signal?: AbortSignal,
 ): Promise<WeatherApiResponse> {
-  const res = await fetch("/api/weather/evaluate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    signal,
-  });
-  if (!res.ok) {
-    throw new Error(`Weather evaluation failed (${res.status})`);
+  if (signal?.aborted) {
+    throw new DOMException("Operation aborted", "AbortError");
   }
-  return (await res.json()) as WeatherApiResponse;
+  const siteMeta = await clientEngine.ensureInitialized().catch(() => null);
+  const weather = payload.weather
+    ? ensureNextSolForecast(payload.weather)
+    : await defaultClientWeatherService.getWeather({
+        site: payload.site ?? siteMeta?.id,
+        scenario: payload.scenario,
+        sol: payload.sol,
+        siteMeta,
+      });
+
+  const evaluation = evaluateEvaWeather(weather, {
+    limits: payload.limits,
+    elevationM: payload.elevationM,
+    route: payload.route,
+    siteMeta,
+    lmstHour: payload.lmstHour,
+  });
+  return { weather, evaluation };
 }
 
 export async function fetchEnvironmentSummary(
@@ -150,16 +149,36 @@ export async function fetchEnvironmentSummary(
   },
   signal?: AbortSignal,
 ): Promise<SiteEnvironmentSummary> {
-  const query = new URLSearchParams();
-  if (params?.scenario) query.set("scenario", params.scenario);
-  if (params?.sol !== undefined) query.set("sol", String(params.sol));
-  if (params?.lmstHour !== undefined && Number.isFinite(params.lmstHour)) {
-    query.set("lmstHour", String(params.lmstHour));
-  }
-  const qs = query.toString();
-  const res = await fetch(`/api/site/environment-summary${qs ? `?${qs}` : ""}`, { signal });
-  if (!res.ok) {
-    throw new Error(`Environment summary query failed (${res.status})`);
-  }
-  return (await res.json()) as SiteEnvironmentSummary;
+  return clientEngine.computeEnvironmentSummary(params, signal);
+}
+
+export async function renderSlopeMaskUrl(
+  maxSlopeDeg: number,
+  signal?: AbortSignal,
+): Promise<string> {
+  return clientEngine.renderSlopeMaskUrl(maxSlopeDeg, signal);
+}
+
+export async function renderPressureMaskUrl(
+  params: {
+    scenario?: WeatherScenario;
+    sol?: number;
+    lmstHour: number;
+    minPressurePa: number;
+  },
+  signal?: AbortSignal,
+): Promise<string> {
+  return clientEngine.renderPressureMaskUrl(params, signal);
+}
+
+export async function renderTemperatureMaskUrl(
+  params: {
+    scenario?: WeatherScenario;
+    sol?: number;
+    lmstHour: number;
+    minAirTempC: number;
+  },
+  signal?: AbortSignal,
+): Promise<string> {
+  return clientEngine.renderTemperatureMaskUrl(params, signal);
 }

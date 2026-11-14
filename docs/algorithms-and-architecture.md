@@ -1,47 +1,49 @@
 # Algorithms and architecture
 
-This document covers the implemented terrain-graph prototype for Mars Mission Planner. All file paths, symbols, constants, formulas, HTTP endpoints, and test counts come directly from the codebase under `packages/shared`, `apps/api`, `apps/web`, and `scripts`. For exact signatures and per-function walkthroughs across every module, see [Function reference](function-reference.md).
+This document covers the client-side deployment architecture (`deploy-v1`) for Mars Mission Planner. All file paths, symbols, constants, formulas, browser caches, and test counts come directly from the codebase under `packages/shared`, `apps/web`, and `scripts`. For function-level notes, see [Function reference](function-reference.md).
 
 ## Monorepo layout
 
 The root `package.json`, named `mars-mission-planner`, configures Bun workspaces across `apps/*` and `packages/*`.
 
 ```text
-packages/shared/src/     Coordinate geodesy, basemap layer metadata, and shared TypeScript types for @nimbs/shared
-apps/api/src/            Hono HTTP API, TerrainGraph engine, spatial weather field, weather generator/evaluator, PNG encoder, and tile proxy for @nimbs/api
-apps/web/src/            React and Leaflet console UI, ToolRegistry, time-simulation controls, MIL-STD-2525C tactical point symbology (with fgdcSymbols.ts retained as legacy archive), weather panel, and CSS design tokens for @nimbs/web
-scripts/dev.ts           Process launcher running @nimbs/api with --hot and @nimbs/web Vite dev server
-scripts/data/            Offline terrain and weather ingestion scripts (fetch-site.ts, fetch-weather.ts)
+packages/shared/src/     Coordinate geodesy, basemap tile URLs, binary DEM packing, TerrainGraph, spatial weather field, weather generator, and RSS parsers for @nimbs/shared
+apps/web/src/            React and Leaflet console UI, terrain Web Worker, IndexedDB and localStorage caches, RGBA canvas overlay encoding, and client weather service for @nimbs/web
+apps/web/public/         Service worker (sw.js) for tile and static asset CacheStorage, plus packaged static /data/* assets generated at build time
+scripts/dev.ts           Launcher preparing static /data assets and running the @nimbs/web Vite dev server
+scripts/serve-static.ts  Static-only Bun file server serving apps/web/dist/ with zero backend API routes
+scripts/data/            Terrain and weather ingestion plus prepare-static-data.ts binary packager
 scripts/assets/          FGDC geologic symbol extractor (extract-fgdc-symbols.ts)
-data/                    Gitignored terrain grid, hillshade PNG, site-weather.json, tile/weather caches, and tracked SOURCES.md
+data/                    Gitignored terrain grid, hillshade PNG, site-weather.json, and tracked SOURCES.md
 docs/                    Visual language, tool extension guide, and architecture documentation
 ```
 
-`@nimbs/shared` exposes `coords.ts`, `layers.ts`, and `types.ts` directly as TypeScript through `packages/shared/src/index.ts`. Both `@nimbs/api` and `@nimbs/web` depend on `@nimbs/shared` via `workspace:*`.
+`@nimbs/shared` exposes `coords.ts`, `layers.ts`, `tiles.ts`, `types.ts`, `terrain/*`, and `weather/*` directly as TypeScript through `packages/shared/src/index.ts`. `@nimbs/web` runs all computations inside the browser and imports `@nimbs/shared` via `workspace:*`.
 
 ```mermaid
 flowchart LR
   COG["USGS STAC MRO CTX COG"] -->|HTTP Range| Fetch["scripts/data/fetch-site.ts"]
   Fetch -->|writes| Data["data/site-terrain.json and site-hillshade.png"]
-  Data -->|loads| API["apps/api: Hono and TerrainGraph"]
-  WMS["USGS WMS and Mars Trek WMTS"] -->|disk cache| API
-  API -->|"JSON and PNG over /api/*"| Web["apps/web: React and Leaflet EPSG:4326"]
+  Data -->|packages Float32 binary| Static["apps/web/public/data and dist/data"]
+  Static -->|"Served statically + IndexedDB"| Worker["apps/web: Web Worker TerrainGraph"]
+  WMS["USGS WMS and Mars Trek WMTS"] -->|"Direct CORS + CacheStorage (sw.js)"| Web["apps/web: React and Leaflet EPSG:4326"]
+  Worker -->|"OffscreenCanvas Blob URLs and routes"| Web
 ```
 
 ## Technology stack
 
-Each dependency keeps local tooling simple and avoids native compilation bottlenecks.
+Each dependency keeps deployment static-only while running all compute in the browser.
 
 | Component | Version | Role and rationale |
 | --- | --- | --- |
-| Bun | `@types/bun` `1.2.5` | Runs workspace scripts, `Bun.serve`, and `bun:test`. Direct TypeScript execution removes a compile step for the API and ingest scripts. |
-| Hono | `4.7.10` | Minimal typed router in `apps/api/src/index.ts` and `apps/api/src/routes/tiles.ts`. `app.request(...)` lets tests call routes in memory without binding a port. |
-| React and Vite | `18.3.1` / `6.2.0` | Local dev server on port `5173` proxying `/api` to `http://localhost:3001` via `apps/web/vite.config.ts`. |
+| Bun | `@types/bun` `1.2.5` | Runs workspace scripts, `scripts/serve-static.ts`, and `bun:test`. Zero backend application logic runs on the server. |
+| React and Vite | `18.3.1` / `6.2.0` | Builds the static SPA bundle and Web Worker (`apps/web/dist/`) served by any static host or `bun run serve`. |
+| Web Worker + Canvas | Native browser APIs | `apps/web/src/workers/terrainWorker.ts` runs `TerrainGraph` A*, weather fields, and zero-copy RGBA mask pixels; `rgbaBlob.ts` paints PNG `Blob`s via `OffscreenCanvas` / `HTMLCanvasElement`. |
+| IndexedDB + Cache API + `localStorage` | Native browser storage | `browserCache.ts` caches the `3.82 MiB` binary DEM, live weather snapshots, computed route plans, and overlay PNG blobs in IndexedDB; `sw.js` caches static assets and external Mars basemap tiles in CacheStorage; `localStorage` restores waypoints, layers, and limits across reloads. |
 | TypeScript | `5.7.3` | `tsconfig.base.json` sets `strict: true`, `noUncheckedIndexedAccess: true`, `isolatedModules: true`, `target: "ES2022"`, and `moduleResolution: "bundler"`. |
 | Biome | `1.9.4` | Formats with 2-space indentation and `lineWidth: 100` while running `recommended` lint rules across `apps`, `packages`, and `scripts`. |
-| `geotiff` | `2.1.3` | Pure TypeScript COG reader used by `scripts/data/fetch-site.ts` over HTTP Range requests, avoiding GDAL bindings and full-scene downloads. |
-| Custom PNG encoder | Node `node:zlib` | `apps/api/src/utils/png.ts` uses `deflateSync` (configurable compression level, default `6`, `1` for real-time hazard and weather masks), `DataView`, and a CRC32 table with polynomial `0xedb88320` to encode 8-bit RGBA PNGs with zero native image libraries. |
-| Leaflet | `1.9.4` | Uses `L.CRS.EPSG4326` directly so USGS WMS tiles, Mars Trek WMTS tiles, and site `L.imageOverlay` masks align without Web Mercator reprojection. |
+| `geotiff` | `2.1.3` | Pure TypeScript COG reader used by `scripts/data/fetch-site.ts` over HTTP Range requests during offline build preparation. |
+| Leaflet | `1.9.4` | Uses `L.CRS.EPSG4326` directly so direct USGS WMS tiles, Mars Trek WMTS tiles, and site `L.imageOverlay` blob masks align cleanly. |
 
 ## Geodesy and site data pipeline
 
@@ -194,10 +196,10 @@ Pressure follows `p = pScale * exp(-elev / 10800)` where `pScale = sample.pressu
 
 ### Mars weather acquisition, generator, and EVA feasibility
 
-Live NASA InSight weather endpoints no longer return current data (`mars.nasa.gov` Insight feed has an empty `sol_keys` array and `api.nasa.gov` `DEMO_KEY` rate-limits with HTTP 429). `scripts/data/fetch-weather.ts` and `apps/api/src/weather/service.ts` combine live rover feeds with PDS archive range sampling and calibrated climatology:
+Live NASA InSight weather endpoints no longer return current data (`mars.nasa.gov` Insight feed has an empty `sol_keys` array and `api.nasa.gov` `DEMO_KEY` rate-limits with HTTP 429). `scripts/data/fetch-weather.ts` and `apps/web/src/services/clientWeather.ts` combine live rover feeds with PDS archive snapshots bundled at `/data/site-weather.json`:
 
-- Real channels: `WeatherService` probes NASA Perseverance MEDA RSS and MSL REMS RSS with a 4s timeout and falls back to `data/site-weather.json` populated by `scripts/data/fetch-weather.ts` from `atmos.nmsu.edu` PDS4 MEDA (`DER_PS`, `CAL_ATS`, `DER_ANCILLARY`) and PDS3 REMS (`RME_*RMD*.TAB`).
-- Diurnal physics generator: `apps/api/src/weather/generator.ts` scales barometric pressure to target or crater-rim elevation using Martian scale height `MARS_SCALE_HEIGHT_M = 10_800` m (`P(z) = P_ref * exp(-(z - z_ref) / 10800)`) and adjusts air temperature with `MARS_LAPSE_RATE_K_PER_M = -0.0025` K/m. Seasonal pressure follows a two-harmonic CO2 condensation cycle, wind directions map into 16 compass sectors (`N` through `NNW`), and dust opacity `tau` attenuates solar irradiance via Beer-Lambert scaling.
+- Real channels: `ClientWeatherService` probes direct CORS NASA Perseverance MEDA RSS and MSL REMS RSS with a 4s timeout and falls back to `/data/site-weather.json` (plus IndexedDB cache) populated from `atmos.nmsu.edu` PDS4 MEDA (`DER_PS`, `CAL_ATS`, `DER_ANCILLARY`) and PDS3 REMS (`RME_*RMD*.TAB`).
+- Diurnal physics generator: `packages/shared/src/weather/generator.ts` scales barometric pressure to target or crater-rim elevation using Martian scale height `MARS_SCALE_HEIGHT_M = 10_800` m (`P(z) = P_ref * exp(-(z - z_ref) / 10800)`) and adjusts air temperature with `MARS_LAPSE_RATE_K_PER_M = -0.0025` K/m. Seasonal pressure follows a two-harmonic CO2 condensation cycle, wind directions map into 16 compass sectors (`N` through `NNW`), and dust opacity `tau` attenuates solar irradiance via Beer-Lambert scaling.
 - Explicit provenance: every `MarsWeatherSnapshot` records `isSimulated`, `sourceType` (`"real"`, `"hybrid"`, or `"simulated"`), `realChannels`, `simulatedChannels`, and a `disclaimer` string displayed in the `WXR` sidebar. Missing channels (such as MEDA wind after Sol 315 or dust-storm scenario overrides) are explicitly marked simulated.
 - EVA evaluation: `evaluateEvaWeather` scales pressure and temperature to `route.maxElevationM` (defaulting to the site's maximum elevation rim), evaluates 5 interactive threshold checks (`air_temp`, `wind_speed`, `pressure`, `pressure_swing`, `eva_duration`) returning `GO`, `DEGRADED`, or `NO-GO`, estimates traverse duration from `totalDistanceM / limits.flatSpeedMPerH + elevationGainM / limits.climbSpeedMPerH + elevationLossM / limits.descentSpeedMPerH` (defaulting to `2500`, `350`, and `800` m/h), and selects the longest contiguous safe daylight traverse window (`safeWindow`).
 - Spatial field and 48-hour timeline: `computeSiteWeatherField` projects the snapshot onto the site grid at a given LMST hour (see "Spatial weather fields and weather-constrained routing"), and `evaluateEvaWeather` accepts an `lmstHour` that fills a `selectedHourWeather` floor and rim summary plus a 48-hour `departureSlots` timeline and ranked `recommendedWindows` of `TraverseWindowRecommendation`. The `WXR` panel drives both from the `TimeSimulationControl` slider.
@@ -208,19 +210,18 @@ When `panelOpen` is true, the `64px` `.tool-rail` plus `416px` `.side-panel` equ
 
 `apps/web/src/components/MapView.tsx` initializes Leaflet with `crs: L.CRS.EPSG4326`, center `[18.46, 77.523]`, initial zoom `13`, `minZoom: 1`, `maxZoom: 17`, `zoomControl: false`, and `attributionControl: false`.
 
-- Basemap `L.tileLayer` instances use `tileSize: 256`, `noWrap: true`, bounds `[[-90, -180], [90, 180]]`, and `maxNativeZoom` from `MapLayerMeta`.
-- The local `L.imageOverlay` for `/api/site/hillshade.png` at `opacity: 0.9`, `/api/site/passability.png?maxSlopeDeg=...` at `opacity: 0.78`, and the dashed `#fff8f3` `L.rectangle` share `site.bbox` bounds `[south, west]` to `[north, east]`.
-- The pressure and temperature field overlays load `/api/site/temperature.png` (zIndex `2`) and `/api/site/pressure.png` (zIndex `3`) with the active scenario, `sol`, `lmstHour`, and suit limit, at `160 ms` debounce and opacity `0.74`, or `0.56` when both are stacked.
-- Terrain overlay effects in `MapView` isolate static overlays (hillshade + bounding box) from `maxSlopeDeg` updates and debounce slope hazard PNG URL swaps by `150 ms` using `setUrl`, preventing UI flicker when dragging the slope slider.
+- Basemap `L.tileLayer` subclasses (`DirectMarsTileLayer`) compute direct CORS USGS WMS 1.1.1 EPSG:4326 bounding-box URLs and Mars Trek WMTS tile URLs via `buildDirectMarsTileUrl`, while `public/sw.js` caches tile responses in browser CacheStorage (`nimbs-tiles-v1`).
+- The local `L.imageOverlay` renders static `/data/site-hillshade.png` at `opacity: 0.9`, while slope hazard (`zIndex: 4`, `opacity: 0.78`), temperature (`zIndex: 2`), and pressure (`zIndex: 3`) overlays are rendered as RGBA arrays in `terrainWorker.ts`, encoded into PNG `Blob` URLs on the client, and cached in IndexedDB (`nimbs-mars-cache-v1`).
+- Terrain overlay effects in `MapView` isolate static overlays (hillshade + bounding box) from slider updates, cancelling in-flight worker renders when controls change before `150..160 ms` debounce settles.
 - On `zoomend`, `moveend`, and `resize`, `updateScale` measures `surfaceDistanceMeters` across a `120 px` horizontal span at viewport center and picks the largest entry in `NICE_SCALE_METERS` from `50 m` to `500 km` that fits within `110 px`.
 - Right-clicking the map prevents the browser context menu, normalizes longitude with `normalizeLon180`, and opens `apps/web/src/components/ContextMenu.tsx` clamped within `window.innerWidth - 230` and `window.innerHeight - 150`. Selecting Set A Waypoint or Set B Waypoint updates coordinates, switches to the `route` tool, and opens the side panel.
-- Moving the pointer inside `site.bbox` triggers a `45 ms` debounced `GET /api/terrain/elevation` lookup for the top-right `ELEVATION` HUD readout.
+- Moving the pointer inside `site.bbox` queries `terrainWorker.ts` (`fetchElevation`) after a `45 ms` debounce for the top-right `ELEVATION` HUD readout.
 
 ### Reactive slope filtering, comparison UI, and telemetry profile
 
 - `apps/web/src/components/MaxSlopeControl.tsx` binds a `1..45°` slider with `0.5°` steps to a `0.5..60°` numeric input with `0.5°` steps.
 - `apps/web/src/components/RoutePlannerPanel.tsx` and `apps/web/src/components/routeVisuals.ts` replace multi-box waypoint/metric text readouts with a unified `A <-> B` corridor strip (with inline swap and clear controls), a compact constraint + graph passability bar, graphical blocked-threshold comparison bars when `status !== "ok"`, and candidate route cards carrying inline elevation sparklines, strategy glyphs, relative distance/slope bars, and weather chips.
-- Any change to `waypointA`, `waypointB`, `maxSlopeDeg`, the weather routing toggle, scenario, `simLmstHour`, or the temperature/pressure limits triggers a `120 ms` debounced `POST /api/graph/routes` call with cancellation on superseded requests, while `MapView` debounces `/api/site/passability.png?maxSlopeDeg=...` `setUrl` updates by `150 ms`.
+- Any change to `waypointA`, `waypointB`, `maxSlopeDeg`, the weather routing toggle, scenario, `simLmstHour`, or the temperature/pressure limits triggers a `120 ms` debounced `planGraphRoutes` call in `terrainWorker.ts` with cancellation on superseded requests and IndexedDB route caching, while `MapView` debounces `renderSlopeMaskUrl` updates by `150 ms`.
 - Candidate polylines in `MapView` sort so the active `selectedRouteId` renders on top in `#de233d` (`3.5 px` over a `#050709` `6.5 px` contrast halo). Unselected alternatives render interactively in strategy-coded dashed strokes (`#e5e0dc` fastest, `#38bdf8` flattest, `#eab308` detour, `#3fb68b` thermal) with sticky hover tooltips and click-to-select behavior.
 - `apps/web/src/components/ElevationProfile.tsx` renders a `384 x 148` multi-layer SVG chart pairing the filled elevation profile with a baseline slope hazard ribbon (`#3fb68b`, `#eab308`, `#de233d`), toggleable `ALL`/`SLP`/`T°`/`Pa` route temperature and pressure curves with suit threshold lines, live hover crosshair telemetry, and `.profile-hover-dot` map tracking.
 - Point, class, and picker icons in `apps/web/src/assets/milStd2525c.ts` and `apps/web/src/components/PointClassIcon.tsx` use 30 vector MIL-STD-2525C tactical symbols (`24x24` `currentColor` frames with 15-character SIDC codes) grouped across `UNITS`, `BASE`, `HZD`, `TAC`, and `METOC` themes, preserving automatic migration for legacy `fgdc-*` IDs in local storage.
@@ -230,57 +231,75 @@ When `panelOpen` is true, the `64px` `.tool-rail` plus `416px` `.side-panel` equ
 - `apps/web/src/components/TimeSimulationControl.tsx` renders an LMST hour slider over `0..47.5` at `0.5` steps, quick-jump buttons at `07:00`, `12:00`, `15:00`, and `22:00` (`QUICK_JUMP_HOURS`), a `PLAY`/`PAUSE` toggle, a `DAYLIGHT`/`NIGHT` tag, a `SOL n` readout, and a `+1D` badge past hour `24`. `clampSimLmstHour` clamps and rounds to `0.5`, `formatLmstClock` renders `HH:MM`, and `estimateLocalWeatherAtElevation` scales the cursor readout by `exp(-deltaElev / 10800)` for pressure and `-0.0025` K/m for temperature.
 - `apps/web/src/App.tsx` holds `simLmstHour` (default `12`). While playing it advances `0.5` hours every `600 ms` and wraps at `48`. The control also appears in compact form inside the `layers` tool.
 - `WeatherPanel` embeds the control and `TraverseWindowsPanel`, which draws the 48-hour `departureSlots` timeline with a cursor at the active hour and a ranked `recommendedWindows` list; each slot and window jumps the simulation time.
-- The `layers` tool toggles `PRESSURE OVERLAY (PA)` and `TEMPERATURE OVERLAY (°C)`. `MapView` loads the matching site PNG, and the HUD shows a legend with the field min and max from `GET /api/site/environment-summary`.
+- The `layers` tool toggles `PRESSURE OVERLAY (PA)` and `TEMPERATURE OVERLAY (°C)`. `MapView` renders the matching client-side mask blobs, and the HUD shows a legend with the field min and max computed by `terrainWorker.ts`.
 
 ### Visual language alignment
 
 `apps/web/src/styles/tokens.css` and `apps/web/src/styles/app.css` implement `docs/visual-language.md`: dark surfaces `#050709`, `#0c0e11`, and `#15181c`; warm off-white text `#fff8f3`; square corners via `--radius: 0`; `1px` borders; `12px` bottom-right clipped corners on `.chamfer-btn`; `Inter` and `JetBrains Mono` with `tabular-nums`; corner brackets on `.map-hud`; and `#de233d` reserved for active selection. Warning states use `--color-warn: #eab308` added to `tokens.css`, while slope hazard overlays and alert borders use `#f59e0b` directly in `engine.ts`, `ElevationProfile.tsx`, and `app.css` rather than reusing the red accent.
 
-## HTTP API reference
+## Static asset serving and client caching
 
-`createApp` in `apps/api/src/index.ts` serves all routes on `API_PORT`, defaulting to `3001`, and accepts an optional injected `TerrainGraph` and `WeatherService` for tests. Vite proxies `/api` to `http://localhost:3001` during development.
+The `deploy-v1` architecture removes `apps/api` and runs all terrain routing, weather modeling, and overlay rendering in the browser. The server hosts static files only.
 
-| Method and path | Input | Response payload | Status codes |
-| --- | --- | --- | --- |
-| `GET /api/health` | None | `{ ok: true, siteLoaded, siteId }` | `200` |
-| `GET /api/layers` | None | `{ layers: MARS_BASE_LAYERS }` | `200` |
-| `GET /api/site` | None | `{ meta: SiteMetadata }` | `200`, `503` if dataset missing |
-| `GET /api/site/hillshade.png` | None | `image/png` with `Cache-Control: public, max-age=3600` | `200`, `404` if PNG missing |
-| `GET /api/site/passability.png` | Query `maxSlopeDeg`, default `15`, clamped `[0.5, 89]` | Dynamic RGBA `image/png` with `Cache-Control: public, max-age=300` | `200`, `503` if dataset missing |
-| `GET /api/site/pressure.png` | Query `scenario`, optional `sol`, `lmstHour` (clamped `[0, 48]`, default `12`), `minPressurePa` (clamped `[0, 2500]`, default `650`) | RGBA `image/png` with `Cache-Control: public, max-age=120` and `X-Layer-Min`/`X-Layer-Max`/`X-Layer-Mean`, `X-Layer-Lmst`, `X-Layer-Unit: Pa` | `200`, `400` bad scenario or `sol`, `503` if dataset missing |
-| `GET /api/site/temperature.png` | Query `scenario`, optional `sol`, `lmstHour`, `minAirTempC` (clamped `[-180, 60]`, default `-75`) | RGBA `image/png` with `Cache-Control: public, max-age=120` and `X-Layer-Min`/`X-Layer-Max`/`X-Layer-Mean`, `X-Layer-Lmst`, `X-Layer-Unit: C` | `200`, `400` bad scenario or `sol`, `503` if dataset missing |
-| `GET /api/site/environment-summary` | Query `scenario`, optional `sol`, `lmstHour` (clamped `[0, 48]`, default `12`) | `SiteEnvironmentSummary` (`siteId`, `sol`, `lmstHour`, `lmstLabel`, `scenario`, `isSimulated`, min/max/mean `TempC` and `PressurePa`) | `200`, `400` bad scenario or `sol`, `503` if dataset missing |
-| `GET /api/terrain/elevation` | Query `lat`, `lon` as finite numbers | `{ lat, lon, insideSite, elevationM }` | `200`, `400` bad params, `503` if missing |
-| `POST /api/graph/routes` | JSON `{ waypointA, waypointB, maxSlopeDeg, weatherConstraints? }`, where `weatherConstraints` carries `enabled` plus optional `scenario`, `sol`, `lmstHour`, `minAirTempC`, `minPressurePa`, `thermalWeight` | `RoutePlanResponse` with `status`, `routes`, `passableEdgeRatio`, optional `minRequiredSlopeDeg`, `maxFeasibleMinTempC`, `maxFeasibleMinPressurePa`, `weatherApplied`, `appliedLmstHour`, `minTempFilterC`, `minPressureFilterPa`, `snappedA`, `snappedB` | `200`, `400` invalid body or constraints, `503` if missing |
-| `GET /api/tiles/:layer/:z/:x/:y` | Path params `layer`, `z`, `x`, `y` | `image/png` or `image/jpeg`, `X-Tile-Cache: HIT` or `MISS`, `Cache-Control: public, max-age=86400` | `200`, `400` bad coords, `404` unsupported layer/zoom, `502` upstream error, `504` fetch failure |
-| `GET /api/weather` | Query `site`, `scenario`, optional `sol`, `lmstHour` (`[0, 48]`), `refresh=1` | `{ weather: MarsWeatherSnapshot, evaluation: EvaWeatherEvaluation }` | `200`, `400` bad query params |
-| `POST /api/weather/evaluate` | JSON `WeatherEvaluateRequest` (`limits`, optional `site`, `scenario`, `sol`, `lmstHour`, `elevationM`, `route`, `weather`) | `{ weather: MarsWeatherSnapshot, evaluation: EvaWeatherEvaluation }` | `200`, `400` invalid body or limits |
+### Static dataset bundle (`scripts/data/prepare-static-data.ts`)
+
+`scripts/data/prepare-static-data.ts` packages raw files from `data/` into `apps/web/public/data/`:
+
+| Static file | Source | Format and purpose |
+| --- | --- | --- |
+| `/data/site-meta.json` | `data/site-terrain.json` | Grid metadata (`StaticSiteManifest`) excluding raw elevation arrays |
+| `/data/site-terrain.bin` | `data/site-terrain.json` | Little-endian `Float32Array` binary storing `rows * cols` elevation values in meters |
+| `/data/site-hillshade.png` | `data/site-hillshade.png` | Pre-rendered static hillshade raster overlay |
+| `/data/site-weather.json` | `data/site-weather.json` | Persisted NASA MEDA/REMS observations used as a static fallback |
+
+### Direct upstream tiles and weather
+
+`packages/shared/src/tiles.ts` and `packages/shared/src/layers.ts` resolve map tile coordinates directly to CORS-enabled upstream endpoints via `buildDirectMarsTileUrl`:
+
+- USGS Astrogeology WMS (`USGS_WMS_BASE_URL`) and JPL Mars Trek WMTS (`MARS_TREK_MOLA_TILE_TEMPLATE`) serve base map tiles directly to Leaflet (`DirectMarsTileLayer`) with `crossOrigin: "anonymous"`.
+- `ClientWeatherService` (`apps/web/src/services/clientWeather.ts`) probes direct CORS NASA MEDA/REMS RSS feeds with a 4 s timeout, caches snapshots for 15 minutes in memory and IndexedDB, and falls back to `/data/site-weather.json`, stale IndexedDB data, or deterministic `generateMartianWeather`.
+
+### Client compute and browser persistence layers
+
+- **Web Worker and engine (`apps/web/src/workers/terrainWorker.ts`, `apps/web/src/services/clientEngine.ts`):** Decodes `/data/site-terrain.bin`, builds `TerrainGraph`, runs elevation lookups, plans four-strategy A-B routes (`FASTEST`, `FLATTEST`, `THERMAL`, `DETOUR`), computes site environment summaries, and returns zero-copy transferable RGBA buffers for slope, pressure, and temperature masks. `apps/web/src/services/rgbaBlob.ts` encodes masks to PNG `Blob` object URLs (LRU cache max 32 entries). Falls back to in-thread execution if `Worker` is unavailable.
+- **IndexedDB (`apps/web/src/services/browserCache.ts`, DB `nimbs-mars-cache-v1`):** Persists `datasets`, `weather`, computed PNG `overlays` (LRU max 24), and cached `routes` (LRU max 32).
+- **`localStorage`:** Persists mission, waypoint, layer, and weather UI state under `nimbs.mars-mission-state.v1` and map point classes under `nimbs.mars-map-points.v1`.
+- **Service Worker (`apps/web/public/sw.js`):** Caches static assets and `/data/*` in `nimbs-static-v1` (`CacheStorage`) and caches upstream USGS WMS / Mars Trek tiles in `nimbs-tiles-v1` (LRU max 600 tiles).
+
+### Static file host (`scripts/serve-static.ts`)
+
+`scripts/serve-static.ts` serves `apps/web/dist/` on `HOST` (default `0.0.0.0`) and `PORT` (default `3000`). It contains no `/api/*` routes.
 
 ## CLI commands and verification
 
-Root `package.json` exposes six scripts:
+Root `package.json` defines these scripts:
 
 ```sh
 bun install
-bun run fetch-site              # Fetch default jezero 20x20 km CTX COG crop (1001x1001 nodes)
+bun run fetch-site
 bun run fetch-site --site=mount-sharp
-bun run dev                     # Run API on port 3001 with --hot and Vite on port 5173
-bun run build                   # Run tsc --noEmit and vite build for @nimbs/web
-bun run typecheck               # Run tsc --noEmit across shared, api, web
-bun run lint                    # Run biome check apps packages scripts
-bun test                        # Run all bun:test suites
+bun run fetch-weather
+bun run build:data
+bun run dev
+bun run build
+bun run serve
+bun run start
+bun run typecheck
+bun run lint
+bun test
 ```
 
-If `bun` is installed at `~/.local/bin/bun` outside the default shell `PATH`, export `PATH="$HOME/.local/bin:$PATH"` first or call `~/.local/bin/bun` directly. `scripts/dev.ts` spawns child processes using `process.execPath`, so launching `scripts/dev.ts` with `~/.local/bin/bun` propagates that binary to both servers.
+If `bun` is installed at `~/.local/bin/bun` outside the default shell `PATH`, export `PATH="$HOME/.local/bin:$PATH"` first or call `~/.local/bin/bun` directly. `scripts/dev.ts` spawns child processes using `process.execPath`, so launching `scripts/dev.ts` with `~/.local/bin/bun` propagates that binary.
 
 ### Automated test suites and lint scope
 
-The repository defines 29 `test` cases across 5 test files:
+The repository runs 32 `test` cases across 6 test files:
 
-- `packages/shared/src/coords.test.ts`, 3 tests: checks `[-180, 180)` longitude normalization, USGS Jezero HiRISE origin round-trip transforms, and `surfaceDistanceMeters` against `metersToLatDeg` and `metersToLonDeg`.
-- `apps/api/src/terrain/engine.test.ts`, 9 tests: 5 tests under "TerrainGraph and slope routing" build a synthetic `11 x 11` ridge grid with a pass at row `9` to verify strict `10°` detours, permissive `30°` direct crossings, `1°` `unreachable` results with `minRequiredSlopeDeg`, `out_of_bounds` rejections, and `createApp(graph)` HTTP responses; 4 tests under "Spatial weather fields and weather-constrained routing" build a `15 x 15` highland-valley grid to verify pressure-driven detours with attached route weather metrics, exact `maxFeasibleMinTempC` and `maxFeasibleMinPressurePa` bottleneck recovery, warmer-hour route unlocking with `48`-hour wrap interpolation, and the pressure, temperature, environment-summary, and weather-constrained route HTTP endpoints.
-- `apps/api/src/terrain/real-site.test.ts`, 3 tests gated by `describe.skipIf(!hasRealSite)` on `data/site-terrain.json`: verifies `1001 x 1001` Jezero grid loading, `/api/terrain/elevation` queries, `unreachable` threshold recovery via `minRequiredSlopeDeg`, and PNG magic bytes on `/api/site/passability.png` and `/api/site/hillshade.png`.
-- `apps/api/src/weather/weather.test.ts`, 10 tests: verifies barometric scale height adjustment, compass sectors and `K`/`C` conversions, nominal/dust-storm/cold-snap scenarios, hybrid real-channel provenance preservation, crater-rim pressure checks, thermal daylight window recommendations, MEDA RSS `--` filtering, memory/disk TTL caching and offline fallbacks, and `/api/weather` plus `/api/weather/evaluate` HTTP endpoints.
-- `apps/web/src/services/pointStore.test.ts`, 4 tests: checks default class visibility seeding, visibility toggling, custom class creation and `localStorage` persistence, and FGDC icon ID persistence with invalid-key fallback.
+- `packages/shared/src/coords.test.ts`: checks `[-180, 180)` longitude normalization, USGS Jezero HiRISE origin round-trip transforms, and `surfaceDistanceMeters` against `metersToLatDeg` and `metersToLonDeg`.
+- `packages/shared/src/terrain/engine.test.ts`: verifies `TerrainGraph` slope detours, `unreachable` threshold recovery (`minRequiredSlopeDeg`), `out_of_bounds` handling, slope/pressure/temperature RGBA mask generation, and weather-constrained routing with 48-hour wrap interpolation.
+- `packages/shared/src/terrain/real-site.test.ts`: gated on `data/site-terrain.json`, verifies `1001 x 1001` Jezero grid loading, binary terrain round-trip, elevation queries, `minRequiredSlopeDeg` recovery, passability RGBA overlay rendering, and static hillshade asset validation.
+- `packages/shared/src/weather/weather.test.ts`: verifies barometric scale height adjustment, compass sectors and `K`/`C` conversions, nominal/dust-storm/cold-snap scenarios, hybrid real-channel provenance, crater-rim pressure checks, thermal daylight windows, MEDA RSS `--` filtering, and direct Mars basemap URL generation.
+- `apps/web/src/services/pointStore.test.ts`: checks point filtering by class visibility, custom class creation and `localStorage` persistence, corrupted payload recovery, MIL-STD-2525C catalog and 15-char SIDC validation, legacy FGDC icon migration, and unknown icon stripping.
+- `apps/web/src/services/clientCache.test.ts`: verifies `loadMissionState`/`saveMissionState` validation and persistence plus `ClientWeatherService` fallback behavior.
 
 `bun run lint` runs `biome check apps packages scripts`, checking `apps/`, `packages/`, and `scripts/` while ignoring `docs/`, `data/`, `local/`, `node_modules/`, `dist/`, and `apps/web/src/styles/tokens.css` per `biome.json`.

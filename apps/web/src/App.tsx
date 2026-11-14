@@ -44,6 +44,7 @@ import {
   fetchWeatherSnapshot,
   planGraphRoutes,
 } from "./services/api";
+import { loadMissionState, saveMissionState } from "./services/browserCache";
 import {
   type MapPoint,
   type MapPointClass,
@@ -101,28 +102,36 @@ function sampleRoutePoints(points: RoutePoint[], maxSamples = 80): TraversePoint
 }
 
 export function App() {
+  const initialMissionState = useMemo(() => loadMissionState(), []);
+
   const [site, setSite] = useState<SiteMetadata | null>(null);
   const [siteError, setSiteError] = useState<string | null>(null);
   const [layers, setLayers] = useState([...MARS_BASE_LAYERS]);
-  const [activeLayerId, setActiveLayerId] = useState(DEFAULT_MARS_BASE_LAYER.id);
-  const [showHillshade, setShowHillshade] = useState(true);
-  const [showSlopeHazard, setShowSlopeHazard] = useState(true);
-  const [showPressureLayer, setShowPressureLayer] = useState(false);
-  const [showTemperatureLayer, setShowTemperatureLayer] = useState(false);
-  const [showSiteBounds, setShowSiteBounds] = useState(true);
+  const [activeLayerId, setActiveLayerId] = useState(initialMissionState.activeLayerId);
+  const [showHillshade, setShowHillshade] = useState(initialMissionState.showHillshade);
+  const [showSlopeHazard, setShowSlopeHazard] = useState(initialMissionState.showSlopeHazard);
+  const [showPressureLayer, setShowPressureLayer] = useState(initialMissionState.showPressureLayer);
+  const [showTemperatureLayer, setShowTemperatureLayer] = useState(
+    initialMissionState.showTemperatureLayer,
+  );
+  const [showSiteBounds, setShowSiteBounds] = useState(initialMissionState.showSiteBounds);
 
-  const [uiMode, setUiMode] = useState<UiMode>("basic");
-  const [presetId, setPresetId] = useState<TraversePresetId>("human");
-  const [activeToolId, setActiveToolId] = useState("route");
-  const [panelOpen, setPanelOpen] = useState(true);
-  const [lonFormat, setLonFormat] = useState<LonFormat>("180");
+  const [uiMode, setUiMode] = useState<UiMode>(initialMissionState.uiMode);
+  const [presetId, setPresetId] = useState<TraversePresetId>(initialMissionState.presetId);
+  const [activeToolId, setActiveToolId] = useState(initialMissionState.activeToolId);
+  const [panelOpen, setPanelOpen] = useState(initialMissionState.panelOpen);
+  const [lonFormat, setLonFormat] = useState<LonFormat>(initialMissionState.lonFormat);
 
-  const [maxSlopeDeg, setMaxSlopeDeg] = useState<number>(TRAVERSE_PRESETS.human.maxSlopeDeg);
-  const [weatherRoutingEnabled, setWeatherRoutingEnabled] = useState(true);
-  const [waypointA, setWaypointA] = useState<MarsCoord | null>(null);
-  const [waypointB, setWaypointB] = useState<MarsCoord | null>(null);
+  const [maxSlopeDeg, setMaxSlopeDeg] = useState<number>(initialMissionState.maxSlopeDeg);
+  const [weatherRoutingEnabled, setWeatherRoutingEnabled] = useState(
+    initialMissionState.weatherRoutingEnabled,
+  );
+  const [waypointA, setWaypointA] = useState<MarsCoord | null>(initialMissionState.waypointA);
+  const [waypointB, setWaypointB] = useState<MarsCoord | null>(initialMissionState.waypointB);
   const [routePlan, setRoutePlan] = useState<RoutePlanResponse | null>(null);
-  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(
+    initialMissionState.selectedRouteId,
+  );
   const [routingBusy, setRoutingBusy] = useState(false);
   const [hoveredProfilePoint, setHoveredProfilePoint] = useState<RoutePoint | null>(null);
 
@@ -142,7 +151,7 @@ export function App() {
   const [pointClasses, setPointClasses] = useState<MapPointClass[]>(initialPointState.classes);
   const [points, setPoints] = useState<MapPoint[]>(initialPointState.points);
   const [hiddenClassIds, setHiddenClassIds] = useState<string[]>(initialPointState.hiddenClassIds);
-  const [showPointsOverlay, setShowPointsOverlay] = useState(true);
+  const [showPointsOverlay, setShowPointsOverlay] = useState(initialMissionState.showPointsOverlay);
   const [pendingPointCoord, setPendingPointCoord] = useState<MarsCoord | null>(null);
   const [pendingPointElevM, setPendingPointElevM] = useState<number | null>(null);
   const [editingPoint, setEditingPoint] = useState<MapPoint | null>(null);
@@ -153,10 +162,14 @@ export function App() {
     seq: number;
   } | null>(null);
 
-  const [simLmstHour, setSimLmstHour] = useState(12);
+  const [simLmstHour, setSimLmstHour] = useState(initialMissionState.simLmstHour);
   const [isPlayingTime, setIsPlayingTime] = useState(false);
-  const [weatherLimits, setWeatherLimits] = useState<EvaWeatherLimits>(DEFAULT_EVA_WEATHER_LIMITS);
-  const [weatherScenario, setWeatherScenario] = useState<WeatherScenario>("auto");
+  const [weatherLimits, setWeatherLimits] = useState<EvaWeatherLimits>(
+    initialMissionState.weatherLimits,
+  );
+  const [weatherScenario, setWeatherScenario] = useState<WeatherScenario>(
+    initialMissionState.weatherScenario,
+  );
   const [weatherSnapshot, setWeatherSnapshot] = useState<MarsWeatherSnapshot | null>(null);
   const [weatherSnapshotRev, setWeatherSnapshotRev] = useState(0);
   const [weatherEval, setWeatherEval] = useState<EvaWeatherEvaluation | null>(null);
@@ -167,6 +180,56 @@ export function App() {
   const weatherSnapshotRef = useRef<MarsWeatherSnapshot | null>(null);
   const simLmstHourRef = useRef(simLmstHour);
   simLmstHourRef.current = simLmstHour;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      saveMissionState({
+        version: 1,
+        activeLayerId,
+        showHillshade,
+        showSlopeHazard,
+        showPressureLayer,
+        showTemperatureLayer,
+        showSiteBounds,
+        showPointsOverlay,
+        uiMode,
+        presetId,
+        activeToolId,
+        panelOpen,
+        lonFormat,
+        maxSlopeDeg,
+        weatherRoutingEnabled,
+        waypointA,
+        waypointB,
+        selectedRouteId,
+        simLmstHour,
+        weatherScenario,
+        weatherLimits,
+      });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeLayerId,
+    showHillshade,
+    showSlopeHazard,
+    showPressureLayer,
+    showTemperatureLayer,
+    showSiteBounds,
+    showPointsOverlay,
+    uiMode,
+    presetId,
+    activeToolId,
+    panelOpen,
+    lonFormat,
+    maxSlopeDeg,
+    weatherRoutingEnabled,
+    waypointA,
+    waypointB,
+    selectedRouteId,
+    simLmstHour,
+    weatherScenario,
+    weatherLimits,
+  ]);
 
   useEffect(() => {
     savePointState({

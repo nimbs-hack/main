@@ -8,4 +8,5 @@ dist/
 # Raw and processed datasets. See AGENTS.md.
 /data/*
 !/data/SOURCES.md
+/apps/web/public/data/*
 local/

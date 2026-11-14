@@ -1,10 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { SiteDataset } from "@nimbs/shared";
-import { createApp } from "../index";
+import { describe, expect, test } from "bun:test";
 import { TerrainGraph } from "../terrain/engine";
+import { buildDirectMarsTileUrl } from "../tiles";
+import type { SiteDataset } from "../types";
 import {
   DEFAULT_EVA_LIMITS,
   MARS_SCALE_HEIGHT_M,
@@ -15,24 +12,7 @@ import {
   kelvinToCelsius,
   scalePressureByElevation,
 } from "./generator";
-import { type SiteWeatherFile, WeatherService, parseMedaRssLatest } from "./service";
-
-const tempDirs: string[] = [];
-
-function makeTempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "nimbs-weather-test-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(() => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
-});
+import { parseMedaRssLatest, parseRemsRssLatest, persistedWeatherToObservedInput } from "./rss";
 
 function makeTestGraph(minElevM = -2550, maxElevM = -1680): TerrainGraph {
   const rows = 5;
@@ -233,8 +213,8 @@ describe("EVA feasibility evaluator", () => {
   });
 });
 
-describe("WeatherService caching and fallbacks", () => {
-  test("parses MEDA RSS skipping '--' entries and converts Celsius to Kelvin", () => {
+describe("Weather RSS parsing, hybrid adaptation, and tile URLs", () => {
+  test("parses MEDA and REMS RSS skipping '--' entries and converts Celsius to Kelvin", () => {
     const parsed = parseMedaRssLatest({
       sols: [
         { sol: "1128", min_temp: "--", max_temp: "--", pressure: "--" },
@@ -255,185 +235,65 @@ describe("WeatherService caching and fallbacks", () => {
     expect(parsed?.tempMinK).toBeCloseTo(193.85, 2);
     expect(parsed?.tempMaxK).toBeCloseTo(248.45, 2);
     expect(parsed?.pressureAvgPa).toBe(778.9);
-  });
 
-  test("caches live feed in memory and disk TTL and falls back cleanly when offline", async () => {
-    const dir = makeTempDir();
-    let fetchCalls = 0;
-    const mockFetch = (async () => {
-      fetchCalls += 1;
-      return new Response(
-        JSON.stringify({
-          sols: [
-            {
-              sol: "1133",
-              ls: "244.106",
-              terrestrial_date: "2024-04-27",
-              min_temp: -79.3,
-              max_temp: -24.7,
-              pressure: 778.9,
-              sunrise: "06:18:07",
-              sunset: "17:13:51",
-            },
-          ],
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    }) as unknown as typeof fetch;
+    if (parsed) {
+      const obs = persistedWeatherToObservedInput(parsed);
+      const hybrid = generateMartianWeather({ site: "jezero", observedOverrides: obs });
+      expect(hybrid.sourceType).toBe("hybrid");
+      expect(hybrid.sol).toBe(1133);
+    }
 
-    const service = new WeatherService({
-      cacheDir: join(dir, "cache"),
-      siteWeatherPath: join(dir, "site-weather.json"),
-      fetcher: mockFetch,
-    });
-
-    const first = await service.getWeather({ site: "jezero" });
-    const second = await service.getWeather({ site: "jezero" });
-    expect(fetchCalls).toBe(1);
-    expect(first.sol).toBe(1133);
-    expect(first.sourceType).toBe("hybrid");
-    expect(second.sol).toBe(1133);
-
-    // Now test fallback to site-weather.json when live network fails
-    const dirFallback = makeTempDir();
-    const persisted: SiteWeatherFile = {
-      generatedAt: "2026-08-11T00:00:00Z",
-      sites: {
-        jezero: {
-          siteId: "jezero",
-          sol: 1859,
-          lsDeg: 137.3,
-          tempMinK: 186.44,
-          tempAvgK: 216.04,
-          tempMaxK: 271.85,
-          pressureMinPa: 716.61,
-          pressureAvgPa: 734.2,
-          pressureMaxPa: 750.86,
-          sourceLabel: "NASA PDS4 MEDA (Sol 1859)",
-          realChannels: ["airTemp", "pressure", "pressureSwing", "ls"],
-          fetchedAt: "2026-08-11T00:00:00Z",
+    const rems = parseRemsRssLatest({
+      soles: [
+        {
+          sol: "4001",
+          ls: "180.5",
+          min_temp: -74.0,
+          max_temp: -5.5,
+          pressure: 810.0,
+          sunrise: "05:30",
+          sunset: "17:45",
         },
-      },
-    };
-    writeFileSync(join(dirFallback, "site-weather.json"), JSON.stringify(persisted));
-
-    const offlineService = new WeatherService({
-      cacheDir: join(dirFallback, "cache"),
-      siteWeatherPath: join(dirFallback, "site-weather.json"),
-      fetcher: (async () => {
-        throw new Error("Network down");
-      }) as unknown as typeof fetch,
+      ],
     });
-
-    const fromFile = await offlineService.getWeather({ site: "jezero" });
-    expect(fromFile.sol).toBe(1859);
-    expect(fromFile.sourceType).toBe("hybrid");
-    expect(fromFile.airTemp.minK).toBe(186.44);
-
-    // Pure simulated fallback when neither live nor site-weather.json exists
-    const pureFallbackService = new WeatherService({
-      cacheDir: join(dirFallback, "cache2"),
-      siteWeatherPath: join(dirFallback, "missing.json"),
-      enableLiveFetch: false,
-    });
-    const sim = await pureFallbackService.getWeather({ site: "gale" });
-    expect(sim.sourceType).toBe("simulated");
-    expect(sim.isSimulated).toBe(true);
+    expect(rems?.siteId).toBe("gale");
+    expect(rems?.sol).toBe(4001);
   });
-});
 
-describe("Weather HTTP API endpoints", () => {
-  test("GET /api/weather and POST /api/weather/evaluate work with injected graph and sliders", async () => {
-    const dir = makeTempDir();
-    const service = new WeatherService({
-      cacheDir: join(dir, "cache"),
-      siteWeatherPath: join(dir, "missing.json"),
-      enableLiveFetch: false,
-    });
+  test("evaluates fast rover speed parameters and builds direct Mars basemap URLs", () => {
     const graph = makeTestGraph(-2550, -1680);
-    const app = createApp(graph, service);
-
-    const getRes = await app.request("/api/weather?scenario=nominal&sol=1859");
-    expect(getRes.status).toBe(200);
-    const getBody = (await getRes.json()) as {
-      weather: { sol: number; sourceType: string; site: { maxElevationM: number } };
-      evaluation: { evaluationElevationM: number; checks: Array<{ id: string }> };
-    };
-    expect(getBody.weather.sol).toBe(1859);
-    expect(getBody.weather.sourceType).toBe("simulated");
-    expect(getBody.evaluation.evaluationElevationM).toBe(-1680);
-    expect(getBody.evaluation.checks).toHaveLength(5);
-
-    const badQuery = await app.request("/api/weather?scenario=hurricane");
-    expect(badQuery.status).toBe(400);
-
-    const evalRes = await app.request("/api/weather/evaluate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        scenario: "dust-storm",
-        sol: 1859,
-        limits: {
-          minAirTempC: -75,
-          maxWindSpeedMps: 15,
-          minPressurePa: 650,
-          maxPressureSwingPa: 35,
-          maxEvaHours: 4,
-        },
-        route: {
-          totalDistanceM: 4000,
-          elevationGainM: 150,
-          maxElevationM: -1750,
-        },
-      }),
+    const snapshot = generateMartianWeather({
+      site: "jezero",
+      scenario: "nominal",
+      sol: 1859,
+      siteMeta: graph.meta,
     });
-    expect(evalRes.status).toBe(200);
-    const evalBody = (await evalRes.json()) as {
-      evaluation: { status: string; estimatedRouteHours: number | null };
-    };
-    expect(evalBody.evaluation.status).toBe("NO-GO");
-    expect(evalBody.evaluation.estimatedRouteHours).toBeGreaterThan(1.5);
-
-    const badEval = await app.request("/api/weather/evaluate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limits: { maxEvaHours: -2 } }),
+    const fastEval = evaluateEvaWeather(snapshot, {
+      limits: {
+        ...DEFAULT_EVA_LIMITS,
+        minAirTempC: -110,
+        maxEvaHours: 8,
+        flatSpeedMPerH: 5000,
+        climbSpeedMPerH: 700,
+        descentSpeedMPerH: 1200,
+      },
+      route: {
+        totalDistanceM: 5000,
+        elevationGainM: 350,
+        elevationLossM: 0,
+        maxElevationM: -1750,
+      },
+      siteMeta: graph.meta,
     });
-    expect(badEval.status).toBe(400);
+    expect(fastEval.estimatedRouteHours).toBe(1.5);
 
-    const fastRoverEval = await app.request("/api/weather/evaluate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        scenario: "nominal",
-        sol: 1859,
-        limits: {
-          ...DEFAULT_EVA_LIMITS,
-          minAirTempC: -110,
-          maxEvaHours: 8,
-          flatSpeedMPerH: 5000,
-          climbSpeedMPerH: 700,
-          descentSpeedMPerH: 1200,
-        },
-        route: {
-          totalDistanceM: 5000,
-          elevationGainM: 350,
-          elevationLossM: 0,
-          maxElevationM: -1750,
-        },
-      }),
-    });
-    expect(fastRoverEval.status).toBe(200);
-    const fastBody = (await fastRoverEval.json()) as {
-      evaluation: { estimatedRouteHours: number | null };
-    };
-    expect(fastBody.evaluation.estimatedRouteHours).toBe(1.5);
+    const wmsUrl = buildDirectMarsTileUrl("usgs-mdim", 2, 1, 1);
+    expect(wmsUrl).toContain("planetarymaps.usgs.gov/cgi-bin/mapserv");
+    expect(wmsUrl).toContain("LAYERS=MDIM21_color");
+    expect(wmsUrl).toContain("SRS=EPSG%3A4326");
 
-    const badSpeedEval = await app.request("/api/weather/evaluate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limits: { flatSpeedMPerH: 10 } }),
-    });
-    expect(badSpeedEval.status).toBe(400);
+    const trekUrl = buildDirectMarsTileUrl("mola-trek", 5, 10, 12);
+    expect(trekUrl).toContain("trek.nasa.gov/tiles/Mars/");
+    expect(buildDirectMarsTileUrl("mola-trek", 9, 0, 0)).toBeNull();
   });
 });

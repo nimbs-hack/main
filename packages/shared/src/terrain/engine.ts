@@ -1,16 +1,13 @@
-import {
-  type ComputedRoute,
-  type MarsCoord,
-  type RouteBlockedReason,
-  type RoutePlanResponse,
-  type RoutePoint,
-  type RouteStrategy,
-  type SiteDataset,
-  type SiteMetadata,
-  normalizeLon180,
-  surfaceDistanceMeters,
-} from "@nimbs/shared";
-import { encodeRgbaPng } from "../utils/png";
+import { type MarsCoord, normalizeLon180, surfaceDistanceMeters } from "../coords";
+import type {
+  ComputedRoute,
+  RouteBlockedReason,
+  RoutePlanResponse,
+  RoutePoint,
+  RouteStrategy,
+  SiteDataset,
+  SiteMetadata,
+} from "../types";
 import { celsiusToKelvin, kelvinToCelsius } from "../weather/generator";
 
 export interface TerrainWeatherFilter {
@@ -179,7 +176,10 @@ export class TerrainGraph {
     this.rows = dataset.meta.rows;
     this.cols = dataset.meta.cols;
     this.totalCells = this.rows * this.cols;
-    this.elevations = Float32Array.from(dataset.elevationsM);
+    this.elevations =
+      dataset.elevationsM instanceof Float32Array
+        ? dataset.elevationsM
+        : Float32Array.from(dataset.elevationsM);
 
     const [west, south, east, north] = dataset.meta.bbox;
     this.west = west;
@@ -1113,8 +1113,8 @@ export class TerrainGraph {
     };
   }
 
-  /** Render an RGBA PNG mask highlighting steep impassable terrain for the given maxSlopeDeg. */
-  renderSlopeMaskPng(maxSlopeDeg: number): Uint8Array {
+  /** Render raw RGBA pixels highlighting steep impassable terrain for the given maxSlopeDeg. */
+  renderSlopeMaskRgba(maxSlopeDeg: number): Uint8Array<ArrayBuffer> {
     const rgba = new Uint8Array(this.totalCells * 4);
     const cautionThresh = maxSlopeDeg * 0.75;
 
@@ -1136,6 +1136,6 @@ export class TerrainGraph {
       }
     }
 
-    return encodeRgbaPng(this.cols, this.rows, rgba, 1);
+    return rgba;
   }
 }

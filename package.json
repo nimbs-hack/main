@@ -7,11 +7,15 @@
   ],
   "scripts": {
     "dev": "bun run scripts/dev.ts",
-    "build": "bun run --filter @nimbs/web build",
+    "build:data": "bun run scripts/data/prepare-static-data.ts",
+    "build": "bun run build:data && bun run --filter @nimbs/web build",
+    "serve": "bun run scripts/serve-static.ts",
+    "start": "bun run serve",
     "test": "bun test",
-    "typecheck": "bun run --filter @nimbs/shared typecheck && bun run --filter @nimbs/api typecheck && bun run --filter @nimbs/web typecheck",
+    "typecheck": "bun run --filter @nimbs/shared typecheck && bun run --filter @nimbs/web typecheck",
     "lint": "biome check apps packages scripts",
-    "fetch-site": "bun run scripts/data/fetch-site.ts"
+    "fetch-site": "bun run scripts/data/fetch-site.ts",
+    "fetch-weather": "bun run scripts/data/fetch-weather.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",

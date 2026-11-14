@@ -1,3 +1,4 @@
+import type { MarsCoord } from "../coords";
 import {
   DEFAULT_EVA_WEATHER_LIMITS,
   type EvaRouteContext,
@@ -6,7 +7,6 @@ import {
   type EvaWeatherCheck,
   type EvaWeatherEvaluation,
   type EvaWeatherLimits,
-  type MarsCoord,
   type MarsWeatherSnapshot,
   type MarsWeatherSolForecast,
   type SelectedHourWeatherSummary,
@@ -19,7 +19,7 @@ import {
   type WeatherHourlyPoint,
   type WeatherScenario,
   type WeatherSourceType,
-} from "@nimbs/shared";
+} from "../types";
 
 export {
   DEFAULT_EVA_WEATHER_LIMITS,

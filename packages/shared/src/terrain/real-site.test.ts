@@ -1,13 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type {
-  ElevationResponse,
-  RoutePlanResponse,
-  SiteDataset,
-  SiteMetadata,
-} from "@nimbs/shared";
-import { createApp } from "../index";
+import type { SiteDataset } from "../types";
+import { decodeTerrainBinary, encodeTerrainBinary } from "./binary";
 import { TerrainGraph } from "./engine";
 
 const DATA_DIR = resolve(import.meta.dir, "../../../../data");
@@ -22,36 +17,29 @@ describe.skipIf(!hasRealSite)("Real Jezero Crater site dataset", () => {
     ? (JSON.parse(readFileSync(TERRAIN_JSON_PATH, "utf8")) as SiteDataset)
     : null;
 
-  test("loads 20x20 km Jezero Crater DEM grid and answers elevation queries", async () => {
+  test("loads 20x20 km Jezero Crater DEM grid, roundtrips binary, and answers elevation queries", () => {
     if (!dataset) return;
     const graph = new TerrainGraph(dataset);
-    const app = createApp();
+    const meta = graph.meta;
 
-    const siteRes = await app.request("/api/site");
-    expect(siteRes.status).toBe(200);
-    const { meta } = (await siteRes.json()) as { meta: SiteMetadata };
     expect(meta.rows).toBe(1001);
     expect(meta.cols).toBe(1001);
     expect(meta.widthMeters).toBeGreaterThan(19900);
     expect(meta.widthMeters).toBeLessThan(20100);
 
-    const elevRes = await app.request(
-      `/api/terrain/elevation?lat=${meta.center.lat}&lon=${meta.center.lon}`,
-    );
-    expect(elevRes.status).toBe(200);
-    const elevBody = (await elevRes.json()) as ElevationResponse;
-    expect(elevBody.insideSite).toBe(true);
-    expect(elevBody.elevationM).not.toBeNull();
+    expect(graph.isInsideBounds(meta.center)).toBe(true);
     expect(graph.elevationAt(meta.center)).not.toBeNull();
+    expect(graph.isInsideBounds({ lat: 0, lon: 0 })).toBe(false);
+    expect(graph.elevationAt({ lat: 0, lon: 0 })).toBeNull();
 
-    const outsideRes = await app.request("/api/terrain/elevation?lat=0&lon=0");
-    expect(outsideRes.status).toBe(200);
-    const outsideBody = (await outsideRes.json()) as ElevationResponse;
-    expect(outsideBody.insideSite).toBe(false);
-    expect(outsideBody.elevationM).toBeNull();
+    const encoded = encodeTerrainBinary(dataset.elevationsM);
+    expect(encoded.byteLength).toBe(meta.rows * meta.cols * 4);
+    const decoded = decodeTerrainBinary(encoded.buffer as ArrayBuffer, meta.rows * meta.cols);
+    const binGraph = new TerrainGraph({ meta, elevationsM: decoded });
+    expect(binGraph.elevationAt(meta.center)).toBeCloseTo(graph.elevationAt(meta.center) ?? 0, 3);
   });
 
-  test("plans routes respecting maxSlopeDeg and reports unreachable minimum slope", async () => {
+  test("plans routes respecting maxSlopeDeg and reports unreachable minimum slope", () => {
     if (!dataset) return;
     const graph = new TerrainGraph(dataset);
     const a = graph.coordForCell(100, 100);
@@ -79,34 +67,21 @@ describe.skipIf(!hasRealSite)("Real Jezero Crater site dataset", () => {
     }
   });
 
-  test("serves passability and hillshade PNG overlays and API route plan", async () => {
+  test("renders passability RGBA overlay and validates static hillshade asset", () => {
     if (!dataset) return;
-    const app = createApp();
     const graph = new TerrainGraph(dataset);
     const a = graph.coordForCell(150, 150);
     const b = graph.coordForCell(850, 850);
 
-    const routeRes = await app.request("/api/graph/routes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ waypointA: a, waypointB: b, maxSlopeDeg: 25 }),
-    });
-    expect(routeRes.status).toBe(200);
-    const routeBody = (await routeRes.json()) as RoutePlanResponse;
+    const routeBody = graph.planRoutes(a, b, 25);
     expect(routeBody.status).toBe("ok");
     expect(routeBody.routes.length).toBeGreaterThanOrEqual(1);
 
-    const maskRes = await app.request("/api/site/passability.png?maxSlopeDeg=10");
-    expect(maskRes.status).toBe(200);
-    expect(maskRes.headers.get("content-type")).toBe("image/png");
-    const maskBytes = new Uint8Array(await maskRes.arrayBuffer());
-    expect(Array.from(maskBytes.slice(0, 8))).toEqual(PNG_MAGIC);
+    const maskRgba = graph.renderSlopeMaskRgba(10);
+    expect(maskRgba.byteLength).toBe(graph.totalCells * 4);
 
     if (existsSync(HILLSHADE_PNG_PATH)) {
-      const hsRes = await app.request("/api/site/hillshade.png");
-      expect(hsRes.status).toBe(200);
-      expect(hsRes.headers.get("content-type")).toBe("image/png");
-      const hsBytes = new Uint8Array(await hsRes.arrayBuffer());
+      const hsBytes = new Uint8Array(readFileSync(HILLSHADE_PNG_PATH));
       expect(Array.from(hsBytes.slice(0, 8))).toEqual(PNG_MAGIC);
     }
   });
