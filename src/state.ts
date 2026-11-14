@@ -11,25 +11,21 @@ export const STEPS = [
     id: 'mission',
     label: 'Mission',
     title: 'Mission',
-    help: 'Name the mission and pick the type closest to it. The type fills in the phases. You can change them in step 3.',
   },
   {
     id: 'crew',
     label: 'Crew',
     title: 'Crew',
-    help: 'Add everyone who is going. Sex, age, mass and height set how much food, water and oxygen each person needs.',
   },
   {
     id: 'phases',
     label: 'Phases',
     title: 'Phases',
-    help: 'The mission in order. Each phase sets how much is recycled and how many hours the crew spends outside.',
   },
   {
     id: 'sites',
     label: 'Sites',
     title: 'Sites and tasks',
-    help: 'Mark places on the map and give each one tasks. EVA tasks draw on the EVA hours of the phase they are in.',
   },
   {
     id: 'review',
@@ -102,6 +98,14 @@ const insertAfter = <T>(items: T[], index: number, item: T): T[] => [
   item,
   ...items.slice(index + 1),
 ]
+
+// Where position `index` ends up after the item at `from` moves to `to`.
+export const movedIndex = (index: number, from: number, to: number): number => {
+  if (index === from) return to
+  if (from < index && index <= to) return index - 1
+  if (to <= index && index < from) return index + 1
+  return index
+}
 
 // Tasks point at crew, phases and sites by position, so every edit that
 // shifts a list has to move those pointers with it.
@@ -198,21 +202,15 @@ export function createEdits(catalog: Catalog) {
       ...draft,
       phases: replaceAt(draft.phases, index, presetPhase(kind, draft.phases[index]!.days)),
     }),
-    movePhase: (draft: Draft, index: number, by: -1 | 1): Draft => {
-      const target = index + by
-      if (target < 0 || target >= draft.phases.length) return draft
+    // The phases between the two positions shift by one to make room.
+    movePhase: (draft: Draft, from: number, to: number): Draft => {
+      if (from === to || to < 0 || to >= draft.phases.length) return draft
       const phases = [...draft.phases]
-      ;[phases[index], phases[target]] = [phases[target]!, phases[index]!]
+      phases.splice(to, 0, ...phases.splice(from, 1))
       return {
         ...draft,
         phases,
-        tasks: retarget(draft, (task) =>
-          task.phase === index
-            ? { ...task, phase: target }
-            : task.phase === target
-              ? { ...task, phase: index }
-              : task,
-        ),
+        tasks: retarget(draft, (task) => ({ ...task, phase: movedIndex(task.phase, from, to) })),
       }
     },
     // Its tasks move to the phase that takes its place.

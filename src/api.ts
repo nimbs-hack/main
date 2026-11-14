@@ -120,6 +120,8 @@ export interface Catalog {
   activities: string[]
   taskKinds: string[]
   defaultMarginPercent: number
+  minMarginPercent: number
+  maxMarginPercent: number
   rates: Record<string, number>
   // Fictional, to start from.
   example: Mission

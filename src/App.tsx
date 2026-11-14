@@ -18,6 +18,7 @@ import {
   type StepId,
   createEdits,
   loadRoster,
+  movedIndex,
   stepOfProblem,
   store,
   storedDraft,
@@ -66,11 +67,22 @@ interface Start {
   planned: Planned
 }
 
+// A draft saved before the margin had limits would be refused whole. Move its
+// margin to the nearest limit so the rest of it opens.
+function withinMargin(saved: unknown, catalog: Catalog): unknown {
+  const margin = (saved as { marginPercent?: unknown } | null)?.marginPercent
+  if (typeof margin !== 'number') return saved
+  return {
+    ...(saved as object),
+    marginPercent: Math.min(Math.max(margin, catalog.minMarginPercent), catalog.maxMarginPercent),
+  }
+}
+
 // Fetches the planner's catalog, then opens the draft from the last session
 // if the planner still accepts it, or the example mission if not.
 async function start(): Promise<Start> {
   const catalog = await fetchCatalog()
-  const saved = storedDraft()
+  const saved = withinMargin(storedDraft(), catalog)
   if (saved !== undefined) {
     try {
       return { catalog, planned: await requestPlan(saved) }
@@ -361,7 +373,7 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
         <div className={`step${step === 'review' && !valid ? ' is-stale' : ''}`}>
           <div>
             <h1 className="planner__heading">{currentStep.title}</h1>
-            <p className="planner__intro">{currentStep.help}</p>
+            {'help' in currentStep && <p className="planner__intro">{currentStep.help}</p>}
           </div>
 
           {offline && (
@@ -470,7 +482,15 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
                 commit((d) => edits.updatePhase(d, i, patch), field && `phase ${i} ${field}`)
               }
               onKind={(i, kind) => commit((d) => edits.setPhaseKind(d, i, kind))}
-              onMove={(i, by) => structural((d) => edits.movePhase(d, i, by), { list: 'phase', index: i + by })}
+              onMove={(from, to) =>
+                structural(
+                  (d) => edits.movePhase(d, from, to),
+                  // The open phase stays open wherever the move puts it.
+                  selection?.list === 'phase'
+                    ? { list: 'phase', index: movedIndex(selection.index, from, to) }
+                    : selection,
+                )
+              }
               onDuplicate={(i) => structural((d) => edits.duplicatePhase(d, i), { list: 'phase', index: i + 1 })}
               onRemove={(i) => {
                 const moved = draft.tasks.filter((task) => task.phase === i).length

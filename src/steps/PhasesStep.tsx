@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { Catalog, Phase, PhaseParams } from '../api'
 import { num } from '../format'
 import type { Selection } from '../state'
@@ -45,10 +46,19 @@ export function PhasesStep({
   onAdd: (kind: string) => void
   onUpdate: (index: number, patch: Partial<Phase>, field: string) => void
   onKind: (index: number, kind: string) => void
-  onMove: (index: number, by: -1 | 1) => void
+  onMove: (from: number, to: number) => void
   onDuplicate: (index: number) => void
   onRemove: (index: number) => void
 }) {
+  // The phase being dragged and the one it is over, by position.
+  const [drag, setDrag] = useState<{ from: number; over: number } | null>(null)
+  const dragMark = (i: number) => {
+    if (!drag) return ''
+    if (drag.from === i) return 'is-dragged'
+    if (drag.over !== i) return ''
+    return drag.from < i ? 'is-drop-below' : 'is-drop-above'
+  }
+
   return (
     <>
       <div className="field">
@@ -83,6 +93,20 @@ export function PhasesStep({
               meta={Number.isNaN(phase.days) ? '' : `${num(phase.days)} d`}
               open={isOpen(selection, 'phase', i)}
               onToggle={() => onSelect(isOpen(selection, 'phase', i) ? null : { list: 'phase', index: i })}
+              drag={
+                phases.length > 1
+                  ? {
+                      mark: dragMark(i),
+                      onStart: () => setDrag({ from: i, over: i }),
+                      onEnd: () => setDrag(null),
+                      onOver: () => drag && drag.over !== i && setDrag({ ...drag, over: i }),
+                      onDrop: () => {
+                        if (drag) onMove(drag.from, i)
+                        setDrag(null)
+                      },
+                    }
+                  : undefined
+              }
             >
               <p className="note">{preset.summary}</p>
               <div className="fields fields--2">
@@ -118,10 +142,10 @@ export function PhasesStep({
                 )
               })}
               <div className="actions">
-                <Button disabled={i === 0} onClick={() => onMove(i, -1)}>
+                <Button disabled={i === 0} onClick={() => onMove(i, i - 1)}>
                   Earlier
                 </Button>
-                <Button disabled={i === phases.length - 1} onClick={() => onMove(i, 1)}>
+                <Button disabled={i === phases.length - 1} onClick={() => onMove(i, i + 1)}>
                   Later
                 </Button>
                 <Button onClick={() => onDuplicate(i)}>Duplicate</Button>

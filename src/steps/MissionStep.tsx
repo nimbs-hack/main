@@ -16,7 +16,6 @@ export function MissionStep({
   onType: (type: string) => void
   onMargin: (percent: number) => void
 }) {
-  const template = catalog.missionTypes.find((entry) => entry.id === draft.type)!
   return (
     <>
       <TextField
@@ -27,17 +26,12 @@ export function MissionStep({
         onChange={onName}
       />
       <Select label="Mission type" value={draft.type} options={catalog.missionTypes.map((entry) => entry.id)} onChange={onType} format={words} />
-      <p className="note">
-        {template.summary}
-        {template.phases.length > 0 &&
-          ` Starts with: ${template.phases.map((p) => `${p.kind} ${p.days} d`).join(', ')}.`}
-      </p>
       <Slider
         label="Margin on supplies"
         value={draft.marginPercent}
         onChange={onMargin}
-        max={255}
-        sliderMax={50}
+        min={catalog.minMarginPercent}
+        max={catalog.maxMarginPercent}
         unit="%"
       />
     </>

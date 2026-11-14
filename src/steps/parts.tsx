@@ -1,15 +1,27 @@
 import type { ReactNode } from 'react'
 import type { Selection } from '../state'
 
+// What a row needs to be dragged to another place in its list.
+export interface RowDrag {
+  // This row's part in the drag under way: the one dragged, or the one the
+  // dragged row would land above or below.
+  mark: '' | 'is-dragged' | 'is-drop-above' | 'is-drop-below'
+  onStart: () => void
+  onEnd: () => void
+  onOver: () => void
+  onDrop: () => void
+}
+
 // One line of a list, drawn as a nav button. Opens its
 // editor underneath when it is the selection; a check mark supplements the
-// selected colour.
+// selected colour. With `drag` it gets a grip to drag it by.
 export function Row({
   index,
   name,
   meta,
   open,
   onToggle,
+  drag,
   children,
 }: {
   index?: number
@@ -17,18 +29,49 @@ export function Row({
   meta: string
   open: boolean
   onToggle: () => void
+  drag?: RowDrag
   children: ReactNode
 }) {
+  const line = (
+    <button type="button" className="nav-button" aria-pressed={open} aria-expanded={open} onClick={onToggle}>
+      {index !== undefined && <span className="nav-button__meta">{String(index).padStart(2, '0')}</span>}
+      <span className="nav-button__label">{name}</span>
+      <span className="nav-button__meta">{meta}</span>
+      <span className="nav-button__arrow" aria-hidden="true">
+        {open ? '✓' : '→'}
+      </span>
+    </button>
+  )
   return (
-    <li className={`item${open ? ' is-open' : ''}`}>
-      <button type="button" className="nav-button" aria-pressed={open} aria-expanded={open} onClick={onToggle}>
-        {index !== undefined && <span className="nav-button__meta">{String(index).padStart(2, '0')}</span>}
-        <span className="nav-button__label">{name}</span>
-        <span className="nav-button__meta">{meta}</span>
-        <span className="nav-button__arrow" aria-hidden="true">
-          {open ? '✓' : '→'}
-        </span>
-      </button>
+    <li
+      className={`item${open ? ' is-open' : ''}${drag?.mark ? ` ${drag.mark}` : ''}`}
+      onDragOver={drag?.onOver}
+      onDrop={drag?.onDrop}
+    >
+      {drag ? (
+        <div className="item__line">
+          {/* Hidden from assistive technology: the Earlier and Later buttons do the same by keyboard. */}
+          <span
+            className="item__grip"
+            draggable
+            title="Drag to reorder"
+            aria-hidden="true"
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = 'move'
+              // Firefox starts a drag only when it carries data.
+              e.dataTransfer.setData('text/plain', name)
+              e.dataTransfer.setDragImage(e.currentTarget.parentElement!, 0, 0)
+              drag.onStart()
+            }}
+            onDragEnd={drag.onEnd}
+          >
+            ⋮⋮
+          </span>
+          {line}
+        </div>
+      ) : (
+        line
+      )}
       {open && <div className="item__body">{children}</div>}
     </li>
   )

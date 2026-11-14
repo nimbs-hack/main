@@ -38,7 +38,7 @@ summary {
 }
 
 /* :where keeps this reset weaker than any class rule below it. */
-.planner :where(h1, h2, p, ul, ol, dl, dd) {
+.planner :where(h1, h2, h3, p, ul, ol, dl, dd) {
   margin: 0;
   padding: 0;
 }
@@ -207,6 +207,62 @@ summary {
 .items {
   display: grid;
   gap: var(--button-gap);
+}
+
+/* A row that can be dragged has a grip to the left of its button. */
+.item {
+  position: relative;
+}
+
+.item__line {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.item__line .nav-button {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+.item__grip {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--space-6);
+  border: var(--border-width) solid var(--color-line);
+  background: var(--color-surface-raised);
+  color: var(--color-text-dim);
+  cursor: grab;
+  user-select: none;
+}
+
+.item__grip:hover {
+  border-color: var(--color-line-strong);
+  color: var(--color-text);
+}
+
+.item.is-dragged {
+  opacity: 0.4;
+}
+
+/* Where the dragged row will land: a line in the gap above or below. */
+.item.is-drop-above::before,
+.item.is-drop-below::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: var(--color-text);
+}
+
+.item.is-drop-above::before {
+  top: calc(var(--button-gap) / -2 - 1px);
+}
+
+.item.is-drop-below::after {
+  bottom: calc(var(--button-gap) / -2 - 1px);
 }
 
 .item__body {
@@ -548,6 +604,57 @@ select.input {
   white-space: nowrap;
 }
 
+/* One crew member on the review step. Closed, it is a row: name and kcal. */
+.crew-needs {
+  border-bottom: var(--border-width) solid var(--color-line);
+}
+
+.crew-needs summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 6px 0;
+  list-style: none;
+}
+
+.crew-needs summary::-webkit-details-marker {
+  display: none;
+}
+
+.crew-needs summary::before {
+  content: '+';
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.crew-needs[open] summary::before {
+  content: '-';
+}
+
+.crew-needs__name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-transform: uppercase;
+}
+
+.crew-needs__meta {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.crew-needs__body {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-2) 0 var(--space-4) var(--space-4);
+}
+
+.crew-needs__body > div {
+  display: grid;
+  gap: var(--space-2);
+}
+
 .tasks {
   display: grid;
   gap: var(--space-3);
@@ -697,7 +804,7 @@ select.input {
 
 /* Numbers from the last valid mission are struck through as well as dimmed. */
 .planbar.is-stale .readout__value,
-.step.is-stale :is(.readout__value, .facts dd, .table td) {
+.step.is-stale :is(.readout__value, .facts dd, .table td, .crew-needs__meta) {
   color: var(--color-text-muted);
   text-decoration: line-through;
 }
