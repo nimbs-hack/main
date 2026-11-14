@@ -1,0 +1,109 @@
+# AGENTS.md
+
+Instructions for coding agents (Claude Code, Codex) working in this repo. Read this first. Humans can read it too.
+
+## What we're building
+
+Team NIMBS (5 people) is building a web app for the NASA Space Apps 2026 challenge [Interplanetary Survival Guide: Martian Map](https://www.spaceappschallenge.org/2026/challenges/interplanetary-survival-guide-martian-map/?tab=details). The short version is Google Maps for Mars, aimed at one astronaut planning and walking one EVA.
+
+Judges will look for these things, so keep them in mind when deciding what to build next:
+
+- Hyperlocal over global. Mars Trek and the USGS maps already cover the whole planet. Our map is for a single site and a single route, at a zoom where boulders and slopes matter.
+- At least three kinds of data layered together. Optical, thermal, spectral, topographic, radiation, atmospheric and chemical all count. More is better, and the team wants as much real data as we can get.
+- Safety first. Route planning has to account for slope, rocks, suit mobility, radiation and space weather.
+- Science goals. The route exists to reach something worth studying, like the boxwork formations Curiosity found on Mount Sharp.
+- Ground truth. Rover images from the surface show the astronaut what a spot looks like before they get there.
+
+Product decisions (site, science objective, form factor, layer list) live in Notion, not here. See [Context](#context).
+
+## Context
+
+Product context, research notes, decisions and task assignments live in Notion:
+
+- Notion workspace: `TODO: add link`
+
+If a Notion MCP server is connected, read the relevant pages before starting a feature. If it isn't, ask the human for the page rather than guessing at product decisions. If Notion and this file disagree, Notion wins for product questions and this file wins for code conventions. Point out the conflict so someone fixes it.
+
+## Stack
+
+- [Bun](https://bun.sh) for runtime, package manager, test runner and scripts. Don't use npm, pnpm, yarn or node.
+- [Vite](https://vite.dev) for the frontend dev server and build.
+- [Hono](https://hono.dev) for the API server, running on Bun.
+- TypeScript everywhere, in strict mode.
+
+Commands (fill these in once `package.json` exists):
+
+```sh
+bun install
+bun run dev      # TODO
+bun run build    # TODO
+bun test         # TODO
+bun run lint     # TODO
+```
+
+Before you say a task is done, run typecheck, lint and tests. Report a failure as a failure, with the output. Don't say "should work".
+
+## Repo layout
+
+This is the planned layout. Update it when the real one diverges.
+
+```
+apps/web/        Vite frontend (the map UI). Design tokens in src/styles/tokens.css
+apps/api/        Hono server: tile/data proxy, caching, route planning
+packages/shared/ Types and constants shared by web and api (coordinates, layer ids, units)
+scripts/data/    Scripts that download and preprocess datasets
+docs/            Visual language and other team docs
+data/            Local raw and processed data. Gitignored. Never commit large files.
+.agents/skills/  Agent skills (shared by Claude Code and Codex)
+```
+
+## Design
+
+Read [docs/visual-language.md](docs/visual-language.md) before building UI. Tokens are in `apps/web/src/styles/tokens.css`. Use them instead of hardcoded values. If one is missing, add it and mention it in the PR.
+
+Don't add labels, headers, badges or status indicators that carry no information. If the view is obviously the overview, it doesn't need an OVERVIEW title. The visual language doc has the full list of what to leave out.
+
+## Mars data
+
+The more real NASA data we can layer, the stronger the submission. Every dataset we use gets an entry in `data/SOURCES.md` (TODO: create it) with name, mission and instrument, URL, resolution, license or terms, and the script that fetches it.
+
+Starting points from the challenge resources page:
+
+- [JPL Mars Trek](https://trek.nasa.gov/mars/). Basemaps and layers over web tile services. Probably our main tile source.
+- [USGS-NASA Planetary Geologic Mapping](https://astrogeology-usgs.hub.arcgis.com/pages/interactive-maps-mars). Geologic maps.
+- [Curiosity's proposed path up Mount Sharp](https://science.nasa.gov/resource/curiositys-proposed-path-up-mount-sharp/). Reference for what a route map looks like.
+- [Perseverance raw images](https://mars.nasa.gov/mars2020/multimedia/raw-images/). Over a million surface photos for point-of-view imagery.
+- [NASA Worldview](https://worldview.earthdata.nasa.gov/). Earth only. Use it for UI ideas, not data.
+
+Other sources worth checking: PDS Geosciences Node (MOLA, HiRISE and CTX DTMs, CRISM), HiRISE, THEMIS thermal inertia, Curiosity RAD and Perseverance MEDA for radiation and weather, MAVEN for space weather. Confirm an endpoint works before building against it. Don't write code against a URL you haven't fetched.
+
+Rules that bite on Mars data:
+
+- Coordinates. State the system every time you handle lon/lat. Datasets mix planetocentric and planetographic latitude, and mix 0 to 360 east-positive with -180 to 180 longitude. Normalize at ingest into one convention defined in `packages/shared` and convert nowhere else.
+- Units. Store SI units (meters, kelvin, sieverts or grays per day). Convert only for display.
+- Big files. HiRISE DTMs and images run to gigabytes. Download them in scripts, cache them under `data/`, and serve tiles or crops. Don't fetch raw products from the browser.
+- Upstream APIs are slow and rate limited. Proxy and cache through the Hono server instead of calling them from the browser.
+- Mark fake data as fake. If a layer uses simulated or predicted values, label it in the UI and in code.
+
+## Working in parallel
+
+Up to five people, each possibly running agents, share this repo.
+
+- One branch per task, named `<name>/<short-topic>`. Use a git worktree when an agent works alongside a human or another agent. Never commit straight to `main`.
+- Keep PRs small and focused on one feature or layer. Merge often so branches don't drift.
+- Shared files cause conflicts: `packages/shared`, the design tokens, root config and `bun.lock`. Touch them only when the task needs it, and mention it in the PR description.
+- If `bun.lock` conflicts, take `main`'s version and rerun `bun install`. Don't hand-merge it.
+- Don't reformat or refactor code outside your task.
+- Don't add a dependency without saying why in the PR. Prefer what's already installed.
+
+## Skills
+
+Skills live in `.agents/skills/`.
+
+- `unslop` applies to everything an agent writes: code comments, commit messages, PR descriptions, UI copy, docs and the final project writeup. No exceptions.
+- `file-pr` covers opening a PR.
+- `babysit-pr` covers watching a PR through review and CI.
+
+## Writing
+
+Apply `unslop` to all of it. In short: plain words, short sentences, sentence-case headings, no em dashes, no hype. UI copy is read by an astronaut in a suit, so labels are short and specific: "SLOPE 18°" beats "Moderate terrain difficulty".
