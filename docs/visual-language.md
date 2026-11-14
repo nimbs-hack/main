@@ -53,6 +53,8 @@ The 80px grid on the canvas is a placeholder. The map replaces it. A faint grid 
 
 Red is rare on purpose. If two things on screen are red, one of them is wrong. Hazard colors on the map (slope, radiation) need their own scale, defined when we build those layers. Don't reuse the accent for danger.
 
+Use `--color-warning` for missing map data or fallback imagery, with an explanation in text. It does not indicate a measured terrain hazard. `--text-section` is the smaller task heading in the site panel.
+
 ## Type
 
 Two families. Sans for titles and buttons, mono for labels and numbers. The export outlined the text, so the font names are guesses until someone checks Figma: Inter for sans, JetBrains Mono for mono.
@@ -85,6 +87,19 @@ Readout. Value label on top, mono number below. Units go in the number line ("18
 ## Writing in the UI
 
 Uppercase for value labels, sentence case for the sidebar description. Short readouts: "SLOPE 18°", not "Moderate terrain difficulty". No full sentences on the map. The `unslop` skill applies here too.
+
+## Site inspection walkthrough
+
+The interaction rules in [AGENTS.md](../AGENTS.md#human-interaction-principles) apply alongside this visual language. The site inspector opens with the site list visible. Selecting a site retains that selection; recentering and returning to the global view are separate actions. A check mark supplements the selected color. The footer grows to fit data failures and their retry action.
+
+For this iteration, walk through these tasks with someone outside the implementation team:
+
+- Select Curiosity, find its last recorded sol and position, and explain whether its track is a planned expedition. Repeat with a site without a track.
+- Select the same site again, move the camera, recenter, and return to the globe. Check whether each action matches the user's expectation.
+- Interrupt imagery or terrain loading. Identify what is missing, retry, and verify the selected site and camera view survive. Repeat with the older CTX mosaic selected automatically.
+- Switch elevation scale to 3×. Ask what changed and whether the shaded terrain proves a slope is traversable.
+
+Record completion, wrong interpretations, hesitation, and needed explanations. Check the collapsed panel, keyboard navigation, and a narrow display. These are evaluation scenarios, not evidence that astronaut usability has already been validated.
 
 ## References
 
