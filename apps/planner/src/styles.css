@@ -1,0 +1,780 @@
+/* Mission planner. The map app's stylesheet (src/styles.css in the repo root)
+   is loaded first and supplies the tokens, the top bar, the map stage with
+   its readouts and camera buttons, the nav buttons and the status bar. This
+   file adds only what an editor needs on top of that. */
+
+/* Layout: the editor on the left, the globe beside it, the plan under the globe. */
+
+.console--planner {
+  grid-template:
+    'top top' var(--topbar-height)
+    'side map' minmax(0, 1fr)
+    'side plan' auto
+    'foot foot' auto
+    / min(var(--sidebar-width), 40vw) minmax(0, 1fr);
+}
+
+.console--planner > .topbar {
+  grid-area: top;
+}
+
+.console--planner > .stage {
+  grid-area: map;
+}
+
+.console--planner > .statusbar {
+  grid-area: foot;
+}
+
+input,
+select {
+  font: inherit;
+  color: inherit;
+  border-radius: var(--radius);
+}
+
+select,
+summary {
+  cursor: pointer;
+}
+
+/* :where keeps this reset weaker than any class rule below it. */
+.planner :where(h1, h2, p, ul, ol, dl, dd) {
+  margin: 0;
+  padding: 0;
+}
+
+.planner :is(ul, ol) {
+  list-style: none;
+}
+
+/* Top bar actions, in the bar's own type. */
+
+.topbar__action {
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--color-line);
+  background: none;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.topbar__action:hover:not(:disabled) {
+  border-color: var(--color-line-strong);
+  color: var(--color-text);
+}
+
+.topbar__meta {
+  gap: var(--space-2);
+}
+
+/* The editor panel: same surface and padding as the map app's site panel. */
+
+.planner {
+  grid-area: side;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  border-right: var(--border-width) solid var(--color-line);
+  background: var(--color-surface);
+}
+
+/* Steps, in the order a mission is made. The current one is underlined and
+   lighter, and carries aria-current, so colour is not the only cue. */
+
+.stepper {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-bottom: var(--border-width) solid var(--color-line);
+}
+
+.stepper li + li {
+  border-left: var(--border-width) solid var(--color-line);
+}
+
+.stepper button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  min-height: 44px;
+  padding: var(--space-2) var(--space-1);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  place-content: center;
+  text-align: center;
+}
+
+.stepper button:hover {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.stepper button[aria-current='step'] {
+  border-bottom-color: var(--color-text);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.stepper__flag {
+  color: var(--color-warning);
+  font-weight: 400;
+}
+
+.step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--button-gap);
+  min-height: 0;
+  padding: var(--space-8);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.step > * {
+  flex: none;
+}
+
+.step section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.step__nav {
+  display: flex;
+  gap: var(--button-gap);
+  padding: var(--space-4) var(--space-8);
+  border-top: var(--border-width) solid var(--color-line);
+}
+
+.step__nav .button {
+  min-height: var(--button-height);
+}
+
+.step__nav .nav-button {
+  flex: 1;
+  width: auto;
+}
+
+/* Next is a plain nav button in full-strength text. Save, the one primary
+   action, takes the accent the way a selected nav button does. */
+.nav-button--next {
+  border-color: var(--color-line-strong);
+  color: var(--color-text);
+}
+
+.nav-button--primary:not(:disabled) {
+  border-color: var(--color-accent);
+  background: var(--gradient-accent);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - var(--chamfer)), calc(100% - var(--chamfer)) 100%, 0 100%);
+  color: var(--color-text);
+}
+
+.nav-button--primary:not(:disabled) .nav-button__arrow {
+  border-left-color: var(--color-line-strong);
+  background: var(--color-accent-shade);
+  color: var(--color-text);
+}
+
+/* Lists whose selected line opens an editor underneath. The line itself is
+   the map app's nav button. */
+
+.items {
+  display: grid;
+  gap: var(--button-gap);
+}
+
+.item__body {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+  padding: var(--space-4);
+  border: var(--border-width) solid var(--color-line-strong);
+}
+
+/* Buttons inside the editor: the same look as "Recenter" in the site panel. */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--control-height);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.button:hover:not(:disabled),
+.button[aria-pressed='true'] {
+  border-color: var(--color-text);
+}
+
+.button--quiet {
+  border-color: transparent;
+  background: none;
+  color: var(--color-text-muted);
+}
+
+.button--quiet:hover:not(:disabled) {
+  border-color: var(--color-line-strong);
+  color: var(--color-text);
+}
+
+/* Controls that take something away have a dashed edge and say what they
+   remove. An armed one, waiting for its second press, turns to the warning
+   colour and changes its word. */
+.button--remove {
+  border-style: dashed;
+}
+
+.button.is-armed {
+  border-style: dashed;
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.actions .button {
+  flex: 1 1 auto;
+}
+
+/* Form fields */
+
+.label {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.note {
+  color: var(--color-text-muted);
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  align-content: start;
+}
+
+.fields {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.fields--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.fields--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.input {
+  width: 100%;
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-surface-raised);
+  font-family: var(--font-mono);
+}
+
+.input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.input:hover,
+.input:focus-within {
+  border-color: var(--color-text);
+}
+
+.input--number {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+}
+
+.input--number input {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text);
+  outline: none;
+}
+
+.input--number:focus-within {
+  outline: 2px solid var(--color-text);
+  outline-offset: 2px;
+}
+
+input[type='number'] {
+  appearance: textfield;
+}
+
+input[type='number']::-webkit-inner-spin-button {
+  appearance: none;
+}
+
+select.input {
+  appearance: none;
+  padding-right: var(--space-8);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--color-text-muted) 50%),
+    linear-gradient(135deg, var(--color-text-muted) 50%, transparent 50%);
+  background-position:
+    right 17px center,
+    right 12px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  text-overflow: ellipsis;
+}
+
+.segmented {
+  display: flex;
+  min-height: var(--control-height);
+}
+
+.segmented button {
+  flex: 1;
+  padding: 0 var(--space-2);
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-surface-raised);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.segmented button + button {
+  border-left: 0;
+}
+
+/* The chosen option is inverted: light on dark becomes dark on light. */
+.segmented button[aria-pressed='true'] {
+  background: var(--color-text);
+  color: var(--color-bg);
+}
+
+/* Slider, as the visual language draws it: label left, value right, a 3 px
+   track with a red fill up to a white thumb with a red ring. */
+
+.slider {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.slider__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.slider__value {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.slider__value input {
+  width: 7ch;
+  padding: 0;
+  border: 0;
+  border-bottom: var(--border-width) solid var(--color-line-strong);
+  background: none;
+  color: var(--color-text);
+  text-align: right;
+}
+
+.slider__value input:hover,
+.slider__value input:focus {
+  border-bottom-color: var(--color-text);
+}
+
+.slider input[type='range'] {
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  background: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.slider input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  background: linear-gradient(90deg, var(--color-accent) var(--fill), var(--color-line-strong) var(--fill));
+}
+
+.slider input[type='range']::-moz-range-track {
+  height: 3px;
+  background: linear-gradient(90deg, var(--color-accent) var(--fill), var(--color-line-strong) var(--fill));
+}
+
+.slider input[type='range']::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border: 3px solid var(--color-accent);
+  border-radius: 50%;
+  background: var(--color-text);
+  appearance: none;
+}
+
+.slider input[type='range']::-moz-range-thumb {
+  width: 6px;
+  height: 6px;
+  border: 3px solid var(--color-accent);
+  border-radius: 50%;
+  background: var(--color-text);
+}
+
+/* Marks a parameter that differs from the phase preset. Click to go back. */
+.preset {
+  display: block;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-warning);
+  letter-spacing: 0;
+  text-align: left;
+  text-transform: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Roster, details, fact lists, tasks */
+
+.roster {
+  border: var(--border-width) solid var(--color-line-strong);
+}
+
+.roster li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+}
+
+.roster li + li {
+  border-top: var(--border-width) solid var(--color-line);
+}
+
+.roster__who {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.roster__who span {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.details summary {
+  color: var(--color-text-muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.details[open] summary {
+  margin-bottom: var(--space-2);
+}
+
+/* Name on the left, value with its unit on the right. */
+.facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.facts dt,
+.facts dd {
+  padding: 6px 0;
+  border-bottom: var(--border-width) solid var(--color-line);
+}
+
+.facts dt {
+  color: var(--color-text-muted);
+}
+
+.facts dd {
+  padding-left: var(--space-4);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.tasks {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.tasks:empty {
+  display: none;
+}
+
+.task {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--color-line);
+}
+
+/* Messages. Each starts with a word saying what it is, and the ones that
+   need action offer the action. Most urgent first: cannot plan, caution, done.
+   The warning colour means missing or inconsistent data, as in the map app. */
+
+.problem,
+.notice,
+.cautions li {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-width) solid var(--color-warning);
+}
+
+.notice {
+  border-color: var(--color-line-strong);
+}
+
+.problem b,
+.notice b,
+.cautions b {
+  color: var(--color-warning);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.notice b {
+  color: var(--color-text-muted);
+}
+
+.problem button,
+.notice button {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.cautions {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/* Figures: the map's readout type, laid out in the flow of the page. */
+
+.figure {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.review__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.review__grid .readout__value {
+  font-size: var(--text-section);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.table th,
+.table td {
+  padding: 6px 0 6px var(--space-3);
+  border-bottom: var(--border-width) solid var(--color-line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.table thead th {
+  color: var(--color-text-muted);
+  font-size: var(--text-label);
+  font-weight: 400;
+}
+
+.table th:first-child {
+  padding-left: 0;
+  text-align: left;
+}
+
+.table tbody th {
+  font-family: var(--font-sans);
+  font-weight: 400;
+  text-transform: uppercase;
+}
+
+/* The plan, always in view under the globe. */
+
+.planbar {
+  grid-area: plan;
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-8);
+  border-top: var(--border-width) solid var(--color-line);
+  background: var(--color-surface);
+}
+
+.planbar h2 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+  font-weight: 400;
+}
+
+.planbar__stale {
+  color: var(--color-warning);
+}
+
+.planbar__grid {
+  display: grid;
+  grid-template-columns: repeat(6, auto);
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-6);
+}
+
+.planbar .readout__value {
+  font-size: clamp(var(--text-body), 1.45vw, var(--text-readout));
+}
+
+/* Numbers from the last valid mission are struck through as well as dimmed. */
+.planbar.is-stale .readout__value,
+.step.is-stale :is(.readout__value, .facts dd, .table td) {
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+}
+
+/* The globe is narrower here than in the map app, so the view buttons sit in
+   the free bottom-left corner instead of the centre, clear of the altitude
+   readout. */
+.console--planner .zoom {
+  left: 30px;
+  translate: none;
+}
+
+/* Placing a site */
+
+.stage.is-placing .stage__map canvas {
+  cursor: crosshair;
+}
+
+.stage__hint {
+  position: absolute;
+  top: 30px;
+  left: 50%;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--color-text);
+  background: var(--color-surface);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  translate: -50% 0;
+}
+
+/* Narrow screens: the editor first, the globe and plan under it, one page scroll. */
+
+@media (max-width: 1000px) {
+  .console--planner {
+    grid-template:
+      'top' auto
+      'side' auto
+      'map' 70dvh
+      'plan' auto
+      'foot' auto
+      / minmax(0, 1fr);
+    height: auto;
+    min-height: 100dvh;
+  }
+
+  .console--planner > .topbar {
+    flex-wrap: wrap;
+    padding-block: var(--space-2);
+    white-space: normal;
+  }
+
+  .topbar__meta {
+    flex-wrap: wrap;
+    margin-left: 0;
+  }
+
+  .planner {
+    display: block;
+    border-right: 0;
+    border-bottom: var(--border-width) solid var(--color-line);
+  }
+
+  .step {
+    padding: var(--space-4);
+    overflow: visible;
+  }
+
+  .step__nav {
+    padding: var(--space-4);
+  }
+
+  .planbar {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .planbar__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stage__hint {
+    top: 70px;
+  }
+}
+
+/* Shown in place of the editor while the planner service is being reached. */
+.startup {
+  grid-area: side / side / plan / map;
+  display: grid;
+  place-content: center;
+  padding: var(--space-8);
+  max-width: 60ch;
+  margin-inline: auto;
+  color: var(--color-text-muted);
+}

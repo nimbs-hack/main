@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"mars-console/api/internal/planner"
 	"mars-console/api/internal/tiles"
 )
 
@@ -23,6 +24,7 @@ func handler(cacheDir, staticDir string, client *http.Client) (http.Handler, fun
 	mux := http.NewServeMux()
 	flushCTX := tiles.RegisterCTX(mux, filepath.Join(cacheDir, "ctx-v01"), client)
 	flushTerrain := tiles.RegisterTerrain(mux, filepath.Join(cacheDir, "mars-v14-v2"), client)
+	planner.Register(mux)
 	// An unknown API route must not return the SPA's HTML.
 	mux.HandleFunc("/api/", http.NotFound)
 	mux.HandleFunc("/api", http.NotFound)

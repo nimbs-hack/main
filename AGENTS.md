@@ -50,7 +50,8 @@ Before you say a task is done, run typecheck, lint and tests. Report a failure a
 
 ```
 src/            React frontend, map data and CSS tokens in src/styles.css
-apps/api/       Go server, tile proxy and disk cache
+apps/api/       Go server: tile proxy and disk cache, mission planner, hr-planner CLI
+apps/planner/   Vite editor for planning missions, on the Go planner API
 scripts/        Tile download and precache scripts, Go process launcher
 docs/           Visual language and other team docs
 data/           Local raw and processed data. Gitignored. Never commit large files.

@@ -34,6 +34,7 @@
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
 
   --text-label: 11px;  /* value labels: uppercase, mono, wide tracking, dim */
+  --text-data: 13px;   /* mono numbers in tables and form fields */
   --text-body: 15px;
   --text-section: 22px; /* task title in the site panel */
   --text-button: 16px;   /* uppercase, sans, bold */
@@ -56,6 +57,7 @@
   --button-height: 56px;
   --button-gap: 12px;
   --button-icon-width: 64px;
+  --control-height: 40px; /* form fields, list rows, compact buttons */
 
   /* Shape. Square corners everywhere. The only "radius" is the clipped
      bottom-right corner on nav buttons. */
