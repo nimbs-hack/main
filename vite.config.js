@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { viteStaticCopy } from 'vite-plugin-static-copy'
-import { mapTileProxy } from './apps/api/src/vite.ts'
+import { mapTileProxy } from './scripts/api-server.js'
 
 // Cesium loads its web workers, shaders and widget assets at runtime from
 // CESIUM_BASE_URL, so they are copied next to the app instead of bundled.

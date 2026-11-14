@@ -26,40 +26,39 @@ If a Notion MCP server is connected, read the relevant pages before starting a f
 
 ## Stack
 
-- [Bun](https://bun.sh) for runtime, package manager, test runner and scripts. Don't use npm, pnpm, yarn or node.
+- [Bun](https://bun.sh) for frontend tooling, package management, JavaScript tests and scripts. Don't use npm, pnpm, yarn or node.
 - [Vite](https://vite.dev) for the frontend dev server and build.
-- [Hono](https://hono.dev) for the API server, running on Bun.
-- TypeScript everywhere, in strict mode.
+- Go 1.24 or newer for the API server, using the standard library.
+- The frontend uses JavaScript, JSX and TypeScript modules. Keep new TypeScript strict.
 
-Commands (fill these in once `package.json` exists):
+Commands:
 
 ```sh
 bun install
-bun run dev      # TODO
-bun run build    # TODO
-bun test         # TODO
-bun run lint     # TODO
+bun run dev       # Vite starts a private Go API process
+bun run build     # Frontend in dist/, API binary in bin/mars-api
+bun run typecheck # Compile all Go packages
+bun run lint      # go vet and gofmt checks
+bun run test      # JavaScript tests and Go tests with the race detector
 ```
 
 Before you say a task is done, run typecheck, lint and tests. Report a failure as a failure, with the output. Don't say "should work".
 
 ## Repo layout
 
-This is the planned layout. Update it when the real one diverges.
-
 ```
-apps/web/        Vite frontend (the map UI). Design tokens in src/styles/tokens.css
-apps/api/        Hono server: tile/data proxy, caching, route planning
-packages/shared/ Types and constants shared by web and api (coordinates, layer ids, units)
-scripts/data/    Scripts that download and preprocess datasets
-docs/            Visual language and other team docs
-data/            Local raw and processed data. Gitignored. Never commit large files.
-.agents/skills/  Agent skills (shared by Claude Code and Codex)
+src/            React frontend, map data and CSS tokens in src/styles.css
+apps/api/       Go server, tile proxy and disk cache
+scripts/        Tile download and precache scripts, Go process launcher
+docs/           Visual language and other team docs
+data/           Local raw and processed data. Gitignored. Never commit large files.
+public/         Static assets and low-zoom imagery
+.agents/skills/ Agent skills shared by Claude Code and Codex
 ```
 
 ## Design
 
-Read [docs/visual-language.md](docs/visual-language.md) before building UI. Tokens are in `apps/web/src/styles/tokens.css`. Use them instead of hardcoded values. If one is missing, add it and mention it in the PR.
+Read [docs/visual-language.md](docs/visual-language.md) before building UI. Tokens are in `src/styles.css`. Use them instead of hardcoded values. If one is missing, add it and mention it in the PR.
 
 Don't add labels, headers, badges or status indicators that carry no information. If the view is obviously the overview, it doesn't need an OVERVIEW title. The visual language doc has the full list of what to leave out.
 
@@ -82,7 +81,7 @@ Rules that bite on Mars data:
 - Coordinates. State the system every time you handle lon/lat. Datasets mix planetocentric and planetographic latitude, and mix 0 to 360 east-positive with -180 to 180 longitude. Normalize at ingest into one convention defined in `packages/shared` and convert nowhere else.
 - Units. Store SI units (meters, kelvin, sieverts or grays per day). Convert only for display.
 - Big files. HiRISE DTMs and images run to gigabytes. Download them in scripts, cache them under `data/`, and serve tiles or crops. Don't fetch raw products from the browser.
-- Upstream APIs are slow and rate limited. Proxy and cache through the Hono server instead of calling them from the browser.
+- Upstream APIs are slow and rate limited. Proxy and cache through the Go server instead of calling them from the browser.
 - Mark fake data as fake. If a layer uses simulated or predicted values, label it in the UI and in code.
 
 ## Working in parallel
