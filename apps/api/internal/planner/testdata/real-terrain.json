@@ -1,0 +1,153 @@
+{
+  "rows": 1001,
+  "cols": 1001,
+  "a": {
+    "lat": 18.798964838864926,
+    "lon": 77.30205457840225
+  },
+  "b": {
+    "lat": 18.52903516113508,
+    "lon": 77.58696738233948
+  },
+  "queries": [
+    {
+      "maxSlope": 30,
+      "expected": {
+        "status": "ok",
+        "maxSlopeDeg": 30,
+        "passableEdgeRatio": 1,
+        "snappedA": {
+          "lat": 18.798964838864926,
+          "lon": 77.30205457840225,
+          "elevationM": -1963.08
+        },
+        "snappedB": {
+          "lat": 18.52903516113508,
+          "lon": 77.58696738233948,
+          "elevationM": -2552.59
+        },
+        "routes": [
+          {
+            "id": "route-shortest",
+            "label": "SHORTEST SAFE",
+            "strategy": "shortest",
+            "totalDistanceM": 22627.4,
+            "elevationGainM": 412.8,
+            "elevationLossM": 1002.4,
+            "maxSlopeDeg": 18.6,
+            "meanSlopeDeg": 3.56,
+            "points": []
+          },
+          {
+            "id": "route-gentlest",
+            "label": "LOWEST SLOPE",
+            "strategy": "gentlest",
+            "totalDistanceM": 22967.2,
+            "elevationGainM": 273.6,
+            "elevationLossM": 863.1,
+            "maxSlopeDeg": 13.29,
+            "meanSlopeDeg": 2.82,
+            "points": []
+          },
+          {
+            "id": "route-alternate",
+            "label": "ALT CORRIDOR",
+            "strategy": "alternate",
+            "totalDistanceM": 23267.4,
+            "elevationGainM": 408.3,
+            "elevationLossM": 997.8,
+            "maxSlopeDeg": 15.32,
+            "meanSlopeDeg": 3.44,
+            "points": []
+          }
+        ]
+      },
+      "routePointHashes": [
+        "a370b971b441502aebbd714b683473a1c7d6cc2f2e453eeee6b99609a163dd50",
+        "0da561e2e36d1b22d9d8aeb0e93e2fdeb38d41fb082075c5757ecdb5cc082691",
+        "b958477e7a5f2829f30dd1bba036c1b0fd3d4f843eec9ad5840eddc534e18735"
+      ]
+    },
+    {
+      "maxSlope": 0.5,
+      "expected": {
+        "status": "unreachable",
+        "blockedReason": "slope",
+        "message": "No graph route under 0.5 deg. Minimum required slope: 4.5 deg.",
+        "maxSlopeDeg": 0.5,
+        "minRequiredSlopeDeg": 4.5,
+        "passableEdgeRatio": 0.077,
+        "snappedA": {
+          "lat": 18.798964838864926,
+          "lon": 77.30205457840225,
+          "elevationM": -1963.08
+        },
+        "snappedB": {
+          "lat": 18.52903516113508,
+          "lon": 77.58696738233948,
+          "elevationM": -2552.59
+        },
+        "routes": []
+      },
+      "routePointHashes": []
+    },
+    {
+      "maxSlope": 4.5,
+      "expected": {
+        "status": "ok",
+        "maxSlopeDeg": 4.5,
+        "passableEdgeRatio": 0.705,
+        "snappedA": {
+          "lat": 18.798964838864926,
+          "lon": 77.30205457840225,
+          "elevationM": -1963.08
+        },
+        "snappedB": {
+          "lat": 18.52903516113508,
+          "lon": 77.58696738233948,
+          "elevationM": -2552.59
+        },
+        "routes": [
+          {
+            "id": "route-shortest",
+            "label": "SHORTEST SAFE",
+            "strategy": "shortest",
+            "totalDistanceM": 34265.8,
+            "elevationGainM": 308.6,
+            "elevationLossM": 898.1,
+            "maxSlopeDeg": 4.49,
+            "meanSlopeDeg": 2.02,
+            "points": []
+          },
+          {
+            "id": "route-gentlest",
+            "label": "LOWEST SLOPE",
+            "strategy": "gentlest",
+            "totalDistanceM": 39912.8,
+            "elevationGainM": 165.7,
+            "elevationLossM": 755.2,
+            "maxSlopeDeg": 4.46,
+            "meanSlopeDeg": 1.32,
+            "points": []
+          },
+          {
+            "id": "route-alternate",
+            "label": "ALT CORRIDOR",
+            "strategy": "alternate",
+            "totalDistanceM": 37303.8,
+            "elevationGainM": 356.4,
+            "elevationLossM": 945.9,
+            "maxSlopeDeg": 4.49,
+            "meanSlopeDeg": 2,
+            "points": []
+          }
+        ]
+      },
+      "routePointHashes": [
+        "1e36dc3d02611266a7a38fbdd07e6f9d154bfff2bbf647f72f5041ede776890f",
+        "36614cf90ae77edc4afcbc6da5a0a6dc97264acc8a4db3aedd2dc6deb39102c8",
+        "596c5a5bfb60694830adb0884e4606ece1b214c1256a5504a797dcc3b1c3ed90"
+      ]
+    }
+  ]
+}

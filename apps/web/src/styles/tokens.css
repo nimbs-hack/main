@@ -28,6 +28,10 @@
   /* Status */
   --color-ok: #3fb68b;           /* real, healthy status only */
 
+  /* Terrain hazard scale. Never the accent: red means selection, not danger. */
+  --color-caution: #e8c547;      /* slope 15 to 20° */
+  --color-hazard: #ff7a2f;       /* slope over 20° */
+
   /* Type. Fonts are outlined in the SVG export. These are best guesses, confirm in Figma. */
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;

@@ -1,0 +1,174 @@
+/* Route profile strip along the bottom of the map, and the point readout. */
+.profile {
+  position: absolute;
+  left: 44px;
+  right: 386px;
+  bottom: 30px;
+  border: 1px solid var(--color-line-strong);
+  background: var(--color-surface);
+  font-size: var(--text-label);
+  pointer-events: auto;
+}
+.hud:has(.layers:not(.is-open)) .profile { right: 30px; }
+.profile button { font: inherit; color: inherit; border-radius: var(--radius); }
+.profile p,
+.profile dl,
+.profile dd { margin: 0; }
+
+.profile__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-6);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-line);
+}
+.profile__segment { display: flex; border: 1px solid var(--color-line); }
+.profile__segment button,
+.profile__actions button {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+.profile__segment button + button { border-left: 1px solid var(--color-line); }
+.profile__segment button[aria-pressed='true'] { background: var(--color-surface-raised); color: var(--color-text); box-shadow: inset 0 -2px 0 var(--color-accent); }
+
+.profile__stats { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-6); }
+.profile__stats div { display: flex; flex-direction: column; }
+.profile__stats dt,
+.probe dt,
+.probe__label {
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+.profile__stats dd { font: var(--text-body)/1.3 var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.profile__actions { display: flex; gap: var(--space-2); margin-left: auto; }
+.profile__suit { border: 1px solid var(--color-line-strong) !important; color: var(--color-text) !important; }
+.profile__suit:hover:not(:disabled) { background: var(--color-surface-raised) !important; }
+.profile__suit:disabled { opacity: 0.4; cursor: default; }
+.profile__close { width: 36px; padding: 0 !important; font-size: var(--text-button) !important; }
+
+.profile__note { padding: var(--space-3); color: var(--color-text-muted); }
+.profile__note button { margin-left: var(--space-2); min-height: 32px; padding: 0 var(--space-3); border: 1px solid var(--color-line-strong); background: var(--color-surface-raised); }
+
+.profile__body { display: grid; grid-template-columns: 112px minmax(0, 1fr); column-gap: var(--space-2); padding: var(--space-2) var(--space-3) 0 var(--space-3); }
+.profile__labels,
+.profile__chart { display: grid; grid-auto-rows: auto; row-gap: 3px; }
+.profile__label { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); font-family: var(--font-mono); white-space: nowrap; }
+.profile__label span { color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
+.profile__label b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.profile__label--elev { height: 56px; flex-direction: column; align-items: flex-start; justify-content: space-between; }
+.profile__label--elev small { color: var(--color-text-dim); font-size: inherit; }
+.profile__label--slope { height: 28px; }
+.profile__label--raster,
+.profile__lane--raster { height: 12px; }
+.profile__lane--elev { height: 56px; }
+.profile__lane--slope { height: 28px; }
+.profile__lane svg { display: block; width: 100%; height: 100%; }
+.profile__lane--raster { background: var(--color-bg); }
+
+.profile__chart { position: relative; cursor: crosshair; touch-action: none; }
+.profile__chart:focus-visible { outline: 2px solid var(--color-text); outline-offset: 2px; }
+.profile__area { fill: var(--color-line); }
+.profile__line { fill: none; stroke: var(--color-text); stroke-width: 1.5; }
+.profile__limit { stroke: var(--color-hazard); stroke-width: 1; stroke-dasharray: 4 3; }
+.profile__slope.is-ok { fill: var(--color-text-dim); }
+.profile__slope.is-caution { fill: var(--color-caution); }
+.profile__slope.is-hazard { fill: var(--color-hazard); }
+.profile__cursor { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid var(--color-text); pointer-events: none; }
+.profile__cursor span {
+  position: absolute;
+  top: -4px;
+  left: 6px;
+  padding: 0 var(--space-1);
+  background: var(--color-bg);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.profile__foot { grid-column: 1 / -1; padding: var(--space-2) 0; color: var(--color-text-dim); line-height: 1.45; }
+
+.is-caution { color: var(--color-caution); }
+.is-hazard { color: var(--color-hazard); }
+
+/* The zoom bar moves to the top while the profile holds the bottom. */
+.hud--profile .zoom { top: 30px; bottom: auto; }
+.hud--profile .readout--br { display: none; }
+
+/* Point readout */
+.probe {
+  position: absolute;
+  top: 120px;
+  left: 44px;
+  width: 300px;
+  max-height: calc(100% - 420px);
+  min-height: 120px;
+  overflow-y: auto;
+  border: 1px solid var(--color-line-strong);
+  background: var(--color-surface);
+  font-size: var(--text-label);
+  pointer-events: auto;
+}
+.hud:not(.hud--profile) .probe { max-height: calc(100% - 200px); }
+.probe dl,
+.probe dd,
+.probe p { margin: 0; }
+.probe__head { display: flex; align-items: center; justify-content: space-between; padding-left: var(--space-3); border-bottom: 1px solid var(--color-line); }
+.probe__where { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.probe__close { width: 40px; height: 40px; border: 0; border-left: 1px solid var(--color-line); background: transparent; color: inherit; font-size: var(--text-button); }
+.probe__main { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); padding: var(--space-3); }
+.probe__main dd { font: 24px/1.1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.probe__layers { display: grid; gap: var(--space-2); padding: 0 var(--space-3) var(--space-3); }
+.probe__layers > div { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: center; gap: var(--space-2); }
+.probe__layers dd { display: grid; grid-template-columns: minmax(0, 1fr) 3ch; align-items: center; gap: var(--space-2); }
+.probe__meter { position: relative; height: 6px; background: var(--color-line); }
+.probe__meter::after { content: ''; position: absolute; top: -3px; left: calc(var(--at) - 3px); width: 6px; height: 12px; background: var(--swatch); outline: 1px solid var(--color-text); }
+.probe__value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.probe__none { grid-column: 1 / -1; color: var(--color-text-dim); }
+.probe__readings { padding: var(--space-3); border-top: 1px solid var(--color-line); }
+.probe__readings dl { display: grid; gap: var(--space-1); margin-top: var(--space-2); }
+.probe__readings dl > div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: var(--space-2); }
+.probe__readings dd { font-family: var(--font-mono); }
+.probe__readings small { color: var(--color-text-dim); font-size: inherit; }
+.probe__note { padding: 0 var(--space-3) var(--space-3); color: var(--color-text-dim); }
+.probe__note:first-of-type:not(:last-child) { padding-top: var(--space-3); }
+
+@media (max-width: 1100px) {
+  .profile__body { grid-template-columns: 88px minmax(0, 1fr); }
+  .profile__foot { display: none; }
+}
+
+@media (max-width: 700px) {
+  .profile { left: 22px; right: 22px !important; bottom: 22px; }
+  .profile__stats { order: 3; width: 100%; gap: var(--space-1) var(--space-4); }
+  .profile__stats dd { font-size: var(--text-label); }
+  .profile__label--raster,
+  .profile__lane--raster { height: 8px; }
+  .profile__label--raster b { display: none; }
+  .hud--profile .zoom { top: auto; bottom: auto; display: none; }
+  .probe { top: 76px; left: 22px; right: 22px; width: auto; max-height: 45%; }
+}
+
+@media (max-height: 700px) and (min-width: 701px) {
+  .profile__label--raster,
+  .profile__lane--raster { height: 8px; }
+  .profile__foot { display: none; }
+}
+
+/* Stay clear of the open landing sites drawer. */
+@media (min-width: 701px) {
+  .hud:has(.sites.is-open) .profile { left: calc(min(var(--sidebar-width), 40vw) + 44px); }
+  .hud:has(.sites.is-open) .probe { left: calc(min(var(--sidebar-width), 40vw) + 44px); }
+}
+
+@media (max-width: 700px) {
+  .hud--profile .nav { top: 36%; }
+}

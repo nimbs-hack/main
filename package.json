@@ -9,6 +9,8 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.3.0",
+    "geotiff": "2.1.3",
+    "typescript": "5.7.3",
     "vite": "^8.3.8",
     "vite-plugin-static-copy": "^4.1.1"
   },
@@ -17,14 +19,15 @@
     "dev": "bun --bun vite",
     "build": "bun run build:web && bun run build:api",
     "preview": "bun --bun vite preview",
-    "start": "go -C apps/api run ./cmd/server -cache-dir ../../data/cache -static-dir ../../dist",
+    "start": "go -C apps/api run ./cmd/server -cache-dir ../../data/cache -static-dir ../../dist -data-dir ../../data",
     "tiles": "bun scripts/fetch-tiles.js",
     "precache": "bun scripts/precache-map.ts",
     "build:web": "bun --bun vite build",
     "build:api": "go -C apps/api build -o ../../bin/mars-api ./cmd/server",
-    "typecheck": "go -C apps/api build ./...",
+    "typecheck": "go -C apps/api build ./... && tsc -p tsconfig.planner.json",
     "lint": "go -C apps/api vet ./... && bun scripts/check-go-format.js",
-    "test": "bun test src scripts && go -C apps/api test -race ./..."
+    "test": "bun test src scripts && go -C apps/api test -race ./...",
+    "fetch-site": "bun run scripts/data/fetch-site.ts"
   },
   "type": "module"
 }

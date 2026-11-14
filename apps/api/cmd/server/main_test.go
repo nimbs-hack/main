@@ -15,7 +15,7 @@ func TestStaticAndAPIRouting(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	app, flush := handler(t.TempDir(), dir, http.DefaultClient)
+	app, flush := handler(t.TempDir(), dir, t.TempDir(), http.DefaultClient)
 	defer flush()
 	for _, test := range []struct {
 		method, path string

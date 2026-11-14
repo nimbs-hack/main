@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BoundingSphere,
   Cartesian2,
@@ -30,9 +30,32 @@ import { pickGround, setupControls } from './camera'
 import { warmSiteImagery } from '../cache/map-cache'
 import { addCtxLayer } from '../data/ctx-layer.ts'
 import { addRouteOverlay } from './route-overlay.ts'
+import { SAMPLED_RASTERS, SCIENCE_LAYERS, SCIENCE_RASTERS } from '../data/science-layers'
+import { addScienceOverlay } from '../data/science-overlay'
+import { tail } from '../data/geo'
+import { buildProfile, summarize } from '../data/route-profile'
+import { sampleRaster } from '../data/raster-sample'
+import { sampleSurface } from '../data/terrain-sample'
+import SciencePanel from './SciencePanel'
+import RouteProfile from './RouteProfile'
+import PointReadout from './PointReadout'
+import SuitView from './SuitView'
+import usePlanner from '../planner/usePlanner'
+import PlannerPanel from '../planner/PlannerPanel'
+import PlannerMap from '../planner/PlannerMap'
+import { ROUTE_LABELS } from '../planner/api'
 
 const MARS = MARS_SPHERE
 const ROVERS = SITES.filter((s) => s.traverse)
+const OBSERVATIONS = SCIENCE_LAYERS.filter((layer) => layer.kind === 'observation')
+const RADIATION = OBSERVATIONS.find((record) => record.category === 'radiation')
+// Finer layers draw above coarser ones.
+const RANK = ['tes-albedo', 'mola-roughness', 'mola-color', 'themis-day', 'themis-night']
+const DEFAULT_OVERLAYS = Object.fromEntries(SCIENCE_RASTERS.map((layer) => [layer.id, {
+  on: layer.id === 'mola-color' || layer.id === 'themis-night',
+  opacity: layer.id === 'mola-color' ? 0.45 : 0.6,
+}]))
+const EVA_LENGTH = 2000 // meters, a single-EVA walking segment
 
 // Opening view looks at Tharsis and Valles Marineris, where the relief is
 // easiest to see.
@@ -97,6 +120,20 @@ function aimLight(scene) {
 
 function flyHome(viewer) {
   viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(HOME.lon, HOME.lat, HOME.height, MARS) })
+}
+
+// Frames a route segment from above. Sampled elevations, when given, put the
+// camera target on the real ground instead of whatever terrain has loaded.
+function flyToPath(viewer, path, samples) {
+  const points = samples
+    ? samples.filter((s) => s.elevation !== null).map((s) => Cartographic.toCartesian(
+      Cartographic.fromDegrees(s.point[1], s.point[0], exaggerate(viewer.scene, s.elevation + DATUM_OFFSET)), MARS))
+    : surfacePoints(viewer, path.filter((_, i) => i % 5 === 0).concat([path.at(-1)]))
+  if (points.length === 0) return
+  const sphere = BoundingSphere.fromPoints(points)
+  viewer.camera.flyToBoundingSphere(sphere, {
+    offset: new HeadingPitchRange(0, CesiumMath.toRadians(-60), Math.max(sphere.radius * 7, 6500)),
+  })
 }
 
 function flyToSite(viewer, site) {
@@ -249,6 +286,62 @@ function addSites(viewer) {
   return labels
 }
 
+// One science overlay on the globe. Renders nothing itself.
+function ScienceOverlay({ viewer, source, opacity, attempt, onStatus }) {
+  const overlay = useRef(null)
+  useEffect(() => {
+    const created = addScienceOverlay(viewer, source, (status) => onStatus(source.id, status), RANK.indexOf(source.id))
+    overlay.current = created
+    return () => {
+      overlay.current = null
+      created.destroy()
+      onStatus(source.id, 'idle')
+    }
+  }, [viewer, source, attempt, onStatus])
+  useEffect(() => {
+    overlay.current?.setOpacity(opacity)
+  }, [opacity, attempt])
+  return null
+}
+
+function addMarker(viewer) {
+  const text = cssColor('--color-text')
+  return viewer.entities.add({
+    show: false,
+    position: Cartesian3.ZERO,
+    point: {
+      pixelSize: 14,
+      color: cssColor('--color-accent'),
+      outlineColor: text,
+      outlineWidth: 2,
+      heightReference: HeightReference.CLAMP_TO_GROUND,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    },
+  })
+}
+
+function placeMarker(viewer, marker, point) {
+  if (!viewer || !marker) return
+  marker.show = Boolean(point)
+  if (point) {
+    const location = Cartographic.fromDegrees(point[1], point[0], DATUM_OFFSET)
+    location.height = viewer.scene.globe.getHeight(location) ?? exaggerate(viewer.scene, DATUM_OFFSET)
+    marker.position = Cartographic.toCartesian(location, MARS)
+  }
+  viewer.scene.requestRender()
+}
+
+// Camera behind the walker, looking along the heading.
+function followWalker(viewer, point, heading) {
+  const location = Cartographic.fromDegrees(point[1], point[0], DATUM_OFFSET)
+  location.height = viewer.scene.globe.getHeight(location) ?? exaggerate(viewer.scene, DATUM_OFFSET)
+  const target = Cartographic.toCartesian(location, MARS)
+  viewer.camera.flyToBoundingSphere(new BoundingSphere(target, 1), {
+    offset: new HeadingPitchRange(CesiumMath.toRadians(heading ?? 0), CesiumMath.toRadians(-22), 900),
+    duration: 0.6,
+  })
+}
+
 // Own component so pointer movement re-renders only this readout.
 function CursorReadout({ viewer }) {
   const [cursor, setCursor] = useState(null)
@@ -303,12 +396,34 @@ function AltitudeReadout({ viewer }) {
   )
 }
 
-export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
+export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onScienceSource }) {
+  const planner = usePlanner()
+  const plannerPick = useRef(planner.pick)
+  plannerPick.current = planner.pick
+  const [overlayError, setOverlayError] = useState('')
   const container = useRef(null)
   const [viewer, setViewer] = useState(null)
   const labels = useRef(null)
   const [relief, setRelief] = useState(RELIEF_STEPS[0])
   const [imagerySource, setImagerySource] = useState('v01')
+  const [overlays, setOverlays] = useState(DEFAULT_OVERLAYS)
+  const [statuses, setStatuses] = useState({})
+  const [attempts, setAttempts] = useState({})
+  const [probe, setProbe] = useState(null)
+  const [segment, setSegment] = useState('eva')
+  const [profile, setProfile] = useState({ status: 'idle', samples: null })
+  const [profileAttempt, setProfileAttempt] = useState(0)
+  const [profileOpen, setProfileOpen] = useState(true)
+  const [hoverIndex, setHoverIndex] = useState(null)
+  const [suit, setSuit] = useState(null)
+  const marker = useRef(null)
+  const [terrainProvider, setTerrainProvider] = useState(null)
+  const roverRoute = site?.traverse ? site : null
+  const planned = planner.selected
+  const route = planned ? { id: planned.id, name: ROUTE_LABELS[planned.strategy] } : roverRoute
+  const onLayerStatus = useCallback((id, status) => setStatuses((current) => (current[id] === status ? current : { ...current, [id]: status })), [])
+  const onProbeRef = useRef(null)
+  onProbeRef.current = (point) => setProbe({ point, status: 'loading' })
 
   // Event handlers registered once read the latest props through refs.
   const onSiteRef = useRef(onSite)
@@ -332,6 +447,11 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
       onError: markFailed,
     })
     labels.current = addSites(viewer)
+    marker.current = addMarker(viewer)
+    // Sampling must wait for the real terrain. Until then the viewer holds a
+    // flat placeholder that would report every point at the datum.
+    if (terrain.ready) setTerrainProvider(terrain.provider)
+    const removeTerrainReady = terrain.readyEvent.addEventListener((provider) => setTerrainProvider(provider))
     const stopRoutes = addRouteOverlay(viewer, ROVERS.map((s) => s.traverse.path),
       cssColor('--color-text').toCssColorString(), cssColor('--color-bg').toCssColorString())
     const removeImageryError = imagery.errorEvent.addEventListener(markFailed)
@@ -348,8 +468,17 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
     const handler = new ScreenSpaceEventHandler(viewer.scene.canvas)
     const siteAt = (position) => viewer.scene.pick(position)?.id?.siteId ?? null
     handler.setInputAction(({ position }) => {
+      const ground = pickGround(viewer, position)
+      if (ground) {
+        const coordinate = MARS.cartesianToCartographic(ground)
+        if (plannerPick.current([CesiumMath.toDegrees(coordinate.latitude), CesiumMath.toDegrees(coordinate.longitude)])) return
+      }
       const id = siteAt(position)
-      if (id) onSiteRef.current(id)
+      if (id) return onSiteRef.current(id)
+      const hit = pickGround(viewer, position)
+      if (!hit) return
+      const c = MARS.cartesianToCartographic(hit)
+      onProbeRef.current([CesiumMath.toDegrees(c.latitude), CesiumMath.toDegrees(c.longitude)])
     }, ScreenSpaceEventType.LEFT_CLICK)
     handler.setInputAction(({ endPosition }) => {
       const id = siteAt(endPosition)
@@ -368,6 +497,8 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
       removeImageryError()
       stopCtx()
       removeTerrainError()
+      removeTerrainReady()
+      setTerrainProvider(null)
       removeProgress()
       stopRefinement()
       stopControls()
@@ -398,13 +529,142 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
     viewer.scene.requestRender()
   }, [viewer, relief])
 
+  const activeRasters = useMemo(() => SCIENCE_RASTERS.filter((layer) => overlays[layer.id]?.on), [overlays])
+
+  useEffect(() => {
+    onScienceSource?.([...new Set(activeRasters.map((layer) => layer.credit))].join(' · '))
+  }, [activeRasters, onScienceSource])
+
+  // Route profile for the selected rover traverse. Samples every layer, not
+  // only the visible ones, so the strip always shows the full stack.
+  const routePath = useMemo(() => {
+    if (planned) return planned.points.map((point) => [point.lat, point.lon])
+    if (!roverRoute) return null
+    const path = roverRoute.traverse.path.concat([roverRoute.traverse.position])
+    return segment === 'eva' ? tail(path, EVA_LENGTH) : path
+  }, [planned, roverRoute, segment])
+
+  useEffect(() => {
+    if (viewer && routePath) flyToPath(viewer, routePath)
+  }, [viewer, routePath])
+
+  // Reframe once, when the samples for this segment arrive.
+  const framed = useRef(null)
+  useEffect(() => {
+    if (!viewer || profile.status !== 'ready' || framed.current === profile.samples) return
+    framed.current = profile.samples
+    flyToPath(viewer, routePath, profile.samples)
+  }, [viewer, routePath, profile])
+
+  useEffect(() => {
+    setHoverIndex(null)
+    if (planner.samples) {
+      setProfile({ status: 'ready', samples: planner.samples })
+      return
+    }
+    if (!terrainProvider || !routePath) {
+      setProfile({ status: routePath ? 'loading' : 'idle', samples: null })
+      return
+    }
+    let cancelled = false
+    setProfile({ status: 'loading', samples: null })
+    buildProfile(routePath, {
+      provider: terrainProvider,
+      rasters: SAMPLED_RASTERS,
+      count: segment === 'eva' ? 160 : 240,
+      level: segment === 'eva' ? 15 : 12,
+    }).then((samples) => {
+      if (cancelled) return
+      const known = samples.some((s) => s.elevation !== null)
+      setProfile({ status: known ? 'ready' : 'error', samples })
+    }, () => {
+      if (!cancelled) setProfile({ status: 'error', samples: null })
+    })
+    return () => { cancelled = true }
+  }, [terrainProvider, routePath, segment, profileAttempt, planner.samples])
+
+  useEffect(() => {
+    setProfileOpen(true)
+  }, [route?.id])
+
+  const summary = useMemo(() => (profile.samples ? summarize(profile.samples, planned ? planner.slope : undefined) : null), [profile.samples, planned, planner.slope])
+
+  // Point readout: terrain plus every layer at one spot.
+  const probePoint = probe?.point
+  useEffect(() => {
+    if (!terrainProvider || !probePoint) return
+    let cancelled = false
+    Promise.all([
+      sampleSurface(terrainProvider, [probePoint], 16),
+      ...SAMPLED_RASTERS.map((source) => sampleRaster(source, [probePoint])),
+    ]).then(([[surface], ...values]) => {
+      if (cancelled) return
+      setProbe({
+        point: probePoint,
+        status: surface.elevation === null ? 'error' : 'ready',
+        elevation: surface.elevation,
+        slope: surface.slope,
+        layers: Object.fromEntries(SAMPLED_RASTERS.map((source, i) => [source.id, values[i][0]])),
+      })
+    }, () => {
+      if (!cancelled) setProbe({ point: probePoint, status: 'error' })
+    })
+    return () => { cancelled = true }
+  }, [terrainProvider, probePoint])
+
+  // One marker: the suit position, else the profile hover, else the probe.
+  const suitSample = suit && profile.samples ? profile.samples.reduce((best, s) => (Math.abs(s.d - suit.position) < Math.abs(best.d - suit.position) ? s : best)) : null
+  const markerPoint = suitSample?.point ?? (hoverIndex !== null ? profile.samples?.[hoverIndex]?.point : null) ?? probePoint ?? null
+  useEffect(() => {
+    placeMarker(viewer, marker.current, markerPoint)
+  }, [viewer, markerPoint])
+
+  // Leaving the route ends the suit view.
+  useEffect(() => {
+    if (!route || profile.status !== 'ready') setSuit(null)
+  }, [route, profile.status])
+
+  const suitPosition = suit?.position
+  useEffect(() => {
+    if (!viewer || suitPosition === undefined || !profile.samples) return
+    const samples = profile.samples
+    const here = samples.reduce((best, s) => (Math.abs(s.d - suitPosition) < Math.abs(best.d - suitPosition) ? s : best))
+    const ahead = samples.find((s) => s.d > suitPosition + 80) ?? samples.at(-1)
+    const dLon = (ahead.point[1] - here.point[1]) * Math.cos(here.point[0] * Math.PI / 180)
+    const heading = (Math.atan2(dLon, ahead.point[0] - here.point[0]) * 180) / Math.PI
+    followWalker(viewer, here.point, heading)
+  }, [viewer, suitPosition, profile.samples])
+
+  const exitSuit = () => {
+    setSuit(null)
+    if (viewer && routePath) flyToPath(viewer, routePath, profile.samples)
+  }
+
+  const dose = RADIATION && {
+    site: SITES.find((entry) => entry.id === RADIATION.siteIds[0])?.name ?? '',
+    when: RADIATION.epoch.match(/\d{4}/g)?.join('–') ?? '',
+    measurement: RADIATION.measurements[0],
+  }
+
+  const focusPlanningArea = useCallback(() => {
+    if (!viewer || !planner.site.meta) return
+    const [w, s, e, n] = planner.site.meta.bbox
+    flyToPath(viewer, [[s, w], [n, w], [n, e], [s, e], [s, w]])
+  }, [viewer, planner.site.meta])
+  const focusedPlanner = useRef(false)
+  useEffect(() => {
+    if (!viewer || !planner.site.meta || focusedPlanner.current) return
+    focusedPlanner.current = true
+    focusPlanningArea()
+  }, [viewer, planner.site.meta, focusPlanningArea])
+
   const nextRelief = RELIEF_STEPS[(RELIEF_STEPS.indexOf(relief) + 1) % RELIEF_STEPS.length]
 
   return (
     <main className="stage">
       <div ref={container} className="stage__map" />
 
-      <div className="hud">
+      <div className={`hud${suit ? ' hud--suit' : ''}${route && profileOpen ? ' hud--profile' : ''}`}>
         <span className="hud__corner hud__corner--tl" aria-hidden="true" />
         <span className="hud__corner hud__corner--tr" aria-hidden="true" />
         <span className="hud__corner hud__corner--bl" aria-hidden="true" />
@@ -413,7 +673,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
         <CursorReadout viewer={viewer} />
         <div className="readout readout--tr">
           <span className="readout__label">Target</span>
-          <span className="readout__value">{site ? site.name : 'Global'}</span>
+          <span className="readout__value">{planner.open && planner.site.meta ? planner.site.meta.name : site ? site.name : 'Global'}</span>
         </div>
         <AltitudeReadout viewer={viewer} />
         <NavControls viewer={viewer} />
@@ -434,9 +694,75 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
           >
             Global
           </button>
+          {route && !profileOpen && (
+            <button type="button" className="zoom__reset" onClick={() => setProfileOpen(true)}>
+              Route profile
+            </button>
+          )}
         </div>
 
         <SitesPanel site={site} onSite={onSite} />
+        <PlannerPanel planner={planner} onFocus={focusPlanningArea} onFocusPoint={point => { if (viewer) flyToPath(viewer, [[point.lat - 0.002, point.lon - 0.002], [point.lat + 0.002, point.lon + 0.002]]) }} />
+        <PlannerMap viewer={viewer} planner={planner} onOverlayError={setOverlayError} />
+        {overlayError && <p className="planner-map-error" role="alert">{overlayError}</p>}
+        <SciencePanel
+          layers={SCIENCE_LAYERS}
+          overlays={overlays}
+          statuses={statuses}
+          onToggle={(id) => setOverlays((current) => ({ ...current, [id]: { ...current[id], on: !current[id].on } }))}
+          onOpacity={(id, opacity) => setOverlays((current) => ({ ...current, [id]: { ...current[id], opacity } }))}
+          onAll={(on) => setOverlays((current) => Object.fromEntries(Object.entries(current).map(([id, state]) => [id, { ...state, on }])))}
+          onRetry={(id) => setAttempts((current) => ({ ...current, [id]: (current[id] ?? 0) + 1 }))}
+          siteId={site?.id}
+          onSite={(id) => { if (id !== site?.id) onSite(id) }}
+        />
+
+        {probe && !suit && (
+          <PointReadout probe={probe} rasters={SAMPLED_RASTERS} observations={OBSERVATIONS} onClose={() => setProbe(null)} />
+        )}
+
+        {route && profileOpen && !suit && (
+          <RouteProfile
+            samples={profile.samples}
+            summary={summary}
+            rasters={planned ? [] : SAMPLED_RASTERS}
+            status={profile.status}
+            segment={segment}
+            onSegment={setSegment}
+            routeName={planned ? `${route.name} · planned` : `${route.name} traverse`}
+            planned={Boolean(planned)}
+            slopeLimit={planned ? planner.slope : undefined}
+            hoverIndex={hoverIndex}
+            onHover={setHoverIndex}
+            onPick={(index) => setProbe({ point: profile.samples[index].point, status: 'loading' })}
+            onSuit={() => setSuit({ position: 0 })}
+            onClose={() => setProfileOpen(false)}
+            onRetry={() => setProfileAttempt((attempt) => attempt + 1)}
+          />
+        )}
+
+        {suit && profile.samples && (
+          <SuitView
+            samples={profile.samples}
+            routeName={planned ? `${route.name} · planned` : `${route.name} traverse`}
+            slopeLimit={planned ? planner.slope : undefined}
+            position={suit.position}
+            onPosition={(position) => setSuit({ position })}
+            dose={dose}
+            onExit={exitSuit}
+          />
+        )}
+
+        {viewer && activeRasters.map((source) => (
+          <ScienceOverlay
+            key={source.id}
+            viewer={viewer}
+            source={source}
+            opacity={overlays[source.id].opacity}
+            attempt={attempts[source.id] ?? 0}
+            onStatus={onLayerStatus}
+          />
+        ))}
       </div>
     </main>
   )

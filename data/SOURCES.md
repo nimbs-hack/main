@@ -40,6 +40,8 @@ Viking stays below CTX and at the poles. CTX starts at terrain level 6. Missing 
 - Fetch/cache implementation: `apps/api/internal/tiles/terrain.go`. Original mesh bytes are cached under `data/cache/mars-v14-v2/`, capped at 8,192 tiles of at most 2 MiB each, plus a 16 MiB memory cache. Metadata is pinned to version 2.0 and served with local relative tile paths. Clear the directory and restart the API to refresh it.
 - Data limitation: the source blends elevation models with visible offsets. Caching preserves those source bytes and does not repair vertical registration. The existing client seam-smoothing heuristic is unchanged and should not be used as a corrected scientific elevation product.
 
+The client rebuilds terrain bounding spheres and horizon-culling points from decoded vertices on the Mars sphere before Cesium creates each mesh. Source header spheres failed to enclose sampled meshes near Perseverance, Curiosity and Pathfinder. At Perseverance, level-13 vertices extended about 11.6 km outside the reported sphere. Cesium uses these bounds for both visibility and camera-depth ranges, so incorrect bounds can clip otherwise valid terrain. Source horizon points also arrived in meter-scale coordinates, while the [quantized-mesh specification](https://github.com/CesiumGS/quantized-mesh#quantized-mesh-10-terrain-format) requires ellipsoid-scaled coordinates. This client repair changes rendering metadata, adds no network requests, and preserves the cached source files and existing height processing.
+
 Rover paths use `src/components/route-overlay.ts` to project their coordinates onto loaded terrain and draw above the map. Cesium's ground-polyline geometry uses an Earth-specific approximate-height table, which can exclude Mars terrain and hide the route. The overlay updates when terrain refines or elevation exaggeration changes, keeps a fixed screen width and outline, and clips points hidden by the planet. It intentionally draws over local hills. While terrain is unavailable, route projection uses the datum height; it does not wait on extra terrain downloads.
 
 ## Precaching site views
@@ -49,3 +51,173 @@ Run `bun run precache` to cache CTX V01 and terrain around Curiosity, Perseveran
 During camera movement, the globe temporarily uses a larger screen-space error tolerance to avoid loading fine tiles at every intermediate position. It returns to the original full-detail tolerance 150 ms after movement ends. Site framing uses loaded terrain, or an approximate datum height, so flights start without waiting for remote elevation sampling. That approximation changes only camera framing, not elevation readouts or terrain.
 
 The camera's minimum clearance depends on viewport height and field of view, allowing up to two screen pixels per CTX source pixel in a top-down view. This prevents extreme magnification of 5 m imagery at roughly 100 m altitude. Wheel, pinch, button, double-click and tilt controls share the limit. Ground-level detail requires a finer imagery source.
+
+
+## Historical science observations
+
+These are manually transcribed site references in `src/data/science-observations.ts`, verified against the linked sources on November 14, 2026. There is no ingestion script or runtime upstream request. Source publication dates differ from observation dates.
+
+`siteIds` join the mission IDs in `src/data/sites.js`. They do not place an observation at the landing coordinate, along every point of a rover traverse, or at a quake epicenter. These records contain no coordinates. Coverage outside the stated measurement sites is unavailable. Do not interpolate them into map imagery, route exposure, present conditions, or forecasts. Empty legend colors mean there is no quantitative color scale.
+
+Values use SI units, with `Sv/day` following the repository's daily-dose convention. A day is an Earth day, not a Martian sol. Fractions use `mol/mol`. Preserve small nonzero values when formatting; rounding the methane or velocity readings to zero loses the measurement.
+
+### Curiosity RAD
+
+Mission and instrument: Mars Science Laboratory, Curiosity Radiation Assessment Detector.
+
+[NASA's December 9, 2013 report](https://www.nasa.gov/news-release/nasa-rover-results-include-first-age-measurement-on-mars-and-help-for-human-exploration/) gives a Gale surface average of 0.67 mSv/day for August 2012 through June 2013. Store `0.00067 Sv/day`. This is dose equivalent, not absorbed dose in Gy. The report provides month-level coverage, not exact sample boundaries or uncertainty.
+
+The [RAD measurement figure](https://science.nasa.gov/resource/radiation-measurements-on-mars/) documents the rover's time series. It supplies no spatial radiation field. The card is a historical rover average, not a suit-specific exposure estimate. Credit NASA, JPL-Caltech, SwRI and the RAD team.
+
+### Perseverance MEDA
+
+Mission and instrument: Mars 2020 Perseverance, Mars Environmental Dynamics Analyzer pressure sensor.
+
+[JPL's April 6, 2021 report](https://www.jpl.nasa.gov/news/nasas-first-weather-report-from-jezero-crater-on-mars/) reports `718 Pa` during the first weather session on February 19, 2021. No conversion is needed. The session lasted 30 minutes. The published article does not specify the individual pressure timestamp, averaging interval or uncertainty. Its Earth receipt time is not a measurement timestamp.
+
+Coverage is the Jezero landing area. The article's 705 to 735 Pa range is a model prediction and is deliberately excluded. Credit NASA, JPL-Caltech, CAB and the MEDA team.
+
+The same JPL report gives a high of -22 °C and a low of -83 °C across sols 43 and 44, April 3 to 4, 2021. The thermal reference stores 251.15 K and 190.15 K. The article does not identify the particular temperature sensor or sampling height. These are reported extremes over those two sols, not current readings or a spatial temperature product.
+
+### Curiosity SAM methane
+
+Mission and instrument: Mars Science Laboratory, Sample Analysis at Mars Tunable Laser Spectrometer.
+
+[JPL's June 23, 2019 report, updated June 24](https://www.jpl.nasa.gov/news/curiositys-mars-methane-mystery-continues/), gives approximately 21 ppbv methane. Store `21e-9 mol/mol`, the gas volume fraction expressed as mole fraction. [ESA's mission report](https://www.esa.int/articles/esa-s-mars-orbiters-did-not-see-latest-curiosity-methane-burst) confirms June 19, 2019 as the observation date. This is atmospheric chemistry sampled at Curiosity, not rock composition.
+
+The rounded announcement supplies no uncertainty. Follow-up was below 1 ppbv, an upper bound that is not stored as an exact reading. The gas source and origin remain unidentified. Credit NASA, JPL-Caltech and the SAM team; ESA confirms the date.
+
+### InSight SEIS
+
+Mission and instrument: InSight, Seismic Experiment for Interior Structure.
+
+[Kawamura et al., 2023, Table 1](https://agupubs.onlinelibrary.wiley.com/doi/full/10.1029/2022GL101543) reports S1222a peak velocities of `1.3e-5 m/s` vertical, `2.8e-5 m/s` north and `2.8e-5 m/s` east. Event origin was May 4, 2022 at 23:23:07 UTC, with 4.8 s uncertainty, on sol 1222. Arrival at the station was later. These are separate component peaks, not a simultaneous vector. No conversion or waveform reprocessing was performed.
+
+The record belongs to the receiver at InSight, not the epicenter. It supplies no regional hazard or recurrence estimate. Credit Kawamura and coauthors, NASA, CNES, IPGP, ETH Zurich and the SEIS team. The [PDS InSight archive index](https://pds-geosciences.wustl.edu/missions/insight/index.htm) links the underlying SEIS archive; the card uses the published table, not a fresh analysis of archived waveforms.
+
+### Terms and reuse
+
+The cards restate numerical facts and provide attribution. They copy no source images, figures, logos or article text. [NASA's media guidelines](https://www.nasa.gov/nasa-brand-center/images-and-media/) allow factual use without implying endorsement. [JPL's image-use policy](https://www.jpl.nasa.gov/jpl-image-use-policy/) distinguishes JPL material from third-party rights. The ESA report and the SEIS paper retain their publishers' terms; no blanket public-domain license is asserted for those publications. Consult those terms before redistributing their prose, figures or raw products. The SEIS article is marked open access, but this transcription does not assume a particular Creative Commons license.
+
+
+## Scientific raster sources
+
+Verified on 2026-11-14 by fetching official capabilities documents and decoding live tiles before implementing the proxy. These are archived observations and derived visualizations. None is a live weather, radiation or EVA safety forecast.
+
+### Integration contract
+
+`src/data/science-rasters.json` exports five records. Its IDs, tile sizes and maximum levels match the fixed allowlist in `apps/api/internal/tiles/science.go`. A Go test checks that contract.
+
+- Request `GET /api/science/{id}/{z}/{y}/{x}.png`.
+- Use Cesium `GeographicTilingScheme`, two level-zero columns and one row, with the application's Mars ellipsoid. All sources share this scheme.
+- Coordinates are planetocentric latitude, east-positive longitude from -180° to +180°. The origin is -180°, +90°. Rows increase southward and columns eastward. There is no TMS row flip, longitude shift or Mercator transform.
+- At level `z`, valid columns are `0 <= x < 2^(z+1)` and rows are `0 <= y < 2^z`. Levels are inclusive from zero through each source's `maxLevel`.
+- Every response image is 256×256 PNG. MOLA color arrives as JPEG and is encoded as PNG. Other products retain their original PNG bytes and alpha.
+- Set Cesium `maximumLevel` to the catalog value. TES albedo and MOLA roughness end at level 1, so zooming closer only enlarges coarse imagery.
+- Display `credit`, `epoch`, `coverage`, `limitation` and the qualitative legend. Empty `legend.colors` means the service has no calibrated grayscale ramp. Do not substitute temperature, concentration or elevation values. The roughness legend describes brightness only, not its RGB channels.
+- Unknown IDs return 404, invalid coordinates return 400, and missing, corrupt or failed upstream tiles return 502 with `Cache-Control: no-store`. Show unavailable data on tile errors. Transparent pixels mean no data, never a zero measurement. Partial gaps do not generate an HTTP error.
+- Successful responses carry `X-Science-Source` and a 30-day browser cache lifetime. The Go cache coalesces requests, holds at most 32 MiB in memory and 2,048 tiles on disk under `science-v1`. Shutdown flushes it. Downloads have the existing `Fetch` 20-second deadline and a 2 MiB limit. Redirects are refused.
+
+The [NASA Trek WMTS documentation](https://trek.nasa.gov/tiles/apidoc/trekAPI.html?body=mars) describes the 2×1 geographic grid and missing tiles. Each fetched capabilities document specifies `urn:ogc:def:crs:EPSG::104905`, top-left `-180.0 90.0`, 256-pixel tiles, style `default`, and matrix set `default028mm`.
+
+### Products
+
+| ID | Mission and instrument | Source resolution | Service levels | Epoch |
+| --- | --- | --- | --- | --- |
+| `themis-day` | Mars Odyssey THEMIS | 100 m/pixel | 0–9 | October 2018 controlled mosaic, v2 |
+| `themis-night` | Mars Odyssey THEMIS | 100 m/pixel | 0–9 | October 2018 controlled mosaic, v2 |
+| `mola-color` | Mars Global Surveyor MOLA | 463 m/pixel, 128 pixels/degree | 0–7 | Observations from 1999–2001 |
+| `tes-albedo` | Mars Global Surveyor TES visible/NIR detector | About 7,410 m/pixel, 8 pixels/degree | 0–1 | Mission archive; exact interval unspecified |
+| `mola-roughness` | Mars Global Surveyor MOLA | About 7,500 m/pixel, 8 pixels/degree | 0–1 | Kreslavsky and Head 2000 product cited by Trek |
+
+Resolution describes the source product, not the tile pixels. Level 1 has only 1,024 pixels around the equator, about 20.8 km/pixel. Level 9 is about 81 m/pixel. Resampling does not improve the instrument's resolution.
+
+THEMIS [day metadata](https://trek.nasa.gov/mars/TrekWS/rest/cat/metadata/fgdc/html?label=THEMIS_DayIR_ControlledMosaics_100m_v2_oct2018) and [night metadata](https://trek.nasa.gov/mars/TrekWS/rest/cat/metadata/fgdc/html?label=THEMIS_NightIR_ControlledMosaics_100m_v2_oct2018) describe controlled mosaics tied to Viking MDIM 2.1. Their tiles show grayscale infrared brightness. Daytime contrast includes illumination; nighttime contrast reflects differences in cooling. Neither tile product provides calibrated temperature or thermal inertia values.
+
+[MOLA color relief](https://mars.asu.edu/data/mola_color/) combines elevation colors with shaded relief. The source description lists populated observations between 88°S and 88°N. The global JPEG tile grid cannot distinguish polar fill with alpha. The legend is qualitative. Its five swatches are RGB samples from the verified western level-zero tile at pixel positions `220,45`, `208,75`, `195,110`, `126,170`, and `61,102`. They illustrate lowlands through highlands without claiming a calibrated elevation ramp. Hillshade changes the displayed color at a given elevation.
+
+[TES albedo](https://mars.asu.edu/data/tes_albedo/) is broadband visible/NIR reflectivity, so its category is spectral. It is not a mineral identification map. The service's grayscale stretch has no published numeric mapping in the fetched capabilities. Transparent pixels remain transparent. The underlying reference is Christensen et al., 2001, JGR 106, 23,823–23,871.
+
+[MOLA roughness](https://mars.asu.edu/data/mola_roughness/) is a regional geophysical visualization. Trek's product description assigns blue, green and red to roughness at 600 m, 2,400 m and 9,200 m baselines. Brighter pixels indicate greater general roughness. Its black-to-white legend is only a brightness key. The ASU summary lists the baseline order differently, so the catalog follows the specific Trek product description and does not infer a numerical RGB conversion. These scales cannot resolve individual rocks or astronaut footpaths.
+
+The official [Trek product catalog](https://trek.nasa.gov/mars/TrekServices/ws/index/eq/searchItems?start=0&rows=10000&facetKeys=itemType%7CserviceTypes&facetValues=product%7CMosaic) supplied descriptions and product IDs. Its generic `Resolution: 0` values and placeholder FGDC dates were not treated as measurements or observation dates.
+
+### Verified endpoints
+
+All endpoints use this fixed prefix:
+
+```text
+https://trek.nasa.gov/tiles/Mars/EQ/
+```
+
+Append the product label below and `/1.0.0/WMTSCapabilities.xml` for capabilities. Tile suffixes are `/1.0.0/default/default028mm/{z}/{y}/{x}.{extension}`. Some capabilities templates contain a duplicated slash; the single-slash forms below were fetched successfully without redirects.
+
+| ID | Product label | Extension |
+| --- | --- | --- |
+| `themis-day` | `THEMIS_DayIR_ControlledMosaics_100m_v2_oct2018` | png |
+| `themis-night` | `THEMIS_NightIR_ControlledMosaics_100m_v2_oct2018` | png |
+| `mola-color` | `Mars_MGS_MOLA_ClrShade_merge_global_463m` | jpg |
+| `tes-albedo` | `Mars_MGS_TES_Albedo_mosaic_global_7410m` | png |
+| `mola-roughness` | `mola_roughness` | png |
+
+Every product returned HTTP 200 for both level-zero hemispheres, an intermediate tile and the maximum-level tile below. Every sample decoded to 256×256 pixels. PNG samples retained alpha; MOLA color samples were RGB JPEG. Maximum-level sample coordinates cover the Gale crater region in the planetocentric, east-positive -180° to +180° convention.
+
+| ID | Native tile z/y/x | Bytes | SHA-256 |
+| --- | --- | --- | --- |
+| `themis-day` | `9/268/903` | 39,270 | `467a0684b3b727f026eee054457e0e0a7cfc7e5876a21119962dfdd2187228d8` |
+| `themis-night` | `9/268/903` | 45,961 | `d9d7cf6c6350333035371133ebbc1c05261cb53b34cb0a0002ac0505705503d4` |
+| `mola-color` | `7/67/225` | 57,427 | `7a50b0d4c3fcfc52af71229a3d01bdbf44c91b8b54ff8adafbcacc375dd072b7` |
+| `tes-albedo` | `1/1/3` | 47,914 | `2c8ac51a0781c6822167e439104e465927e7fa8e95a725fa7df04caf29dc583c` |
+| `mola-roughness` | `1/1/3` | 174,731 | `5d211eefd7166185c1c268efe35caecfc8b115b78cf8b8ae7ce71111c8b4e198` |
+
+Repeat a verification without writing a raster file:
+
+```sh
+curl --fail --silent --show-error 'https://trek.nasa.gov/tiles/Mars/EQ/THEMIS_DayIR_ControlledMosaics_100m_v2_oct2018/1.0.0/WMTSCapabilities.xml'
+curl --fail --silent --show-error 'https://trek.nasa.gov/tiles/Mars/EQ/THEMIS_DayIR_ControlledMosaics_100m_v2_oct2018/1.0.0/default/default028mm/9/268/903.png' | shasum -a 256
+```
+
+The runtime fetcher is `RegisterScience` in `apps/api/internal/tiles/science.go`, using the existing `Cache` and `Fetch`. No raw scientific products or downloaded tile files are included in the repository.
+
+### Terms and unavailable products
+
+Retain each catalog credit and source link. [NASA media guidelines](https://www.nasa.gov/nasa-brand-center/images-and-media/) permit factual educational and informational use of NASA material with attribution, subject to third-party rights and the stated restrictions. No endorsement is implied. The [JPL image policy](https://www.jpl.nasa.gov/jpl-image-use-policy/) explains JPL credit requirements and third-party exceptions.
+
+The public Trek capabilities do not supply a product-specific license. Several generated FGDC pages contain `TBD` use constraints, `PRIVATE` access constraints and 1970 placeholder dates despite these being publicly listed tile services. We record that inconsistency rather than declaring CC0 or an unrestricted license for every derived product. ASU source pages provide provenance and citations, not a separate license grant.
+
+The catalog search also found TES mineral/dust products and CRISM/OMEGA detection products. TES Dust capabilities and representative tiles worked, but its numeric color key was not verified, so it is not in this allowlist. No calibrated chemical abundance raster or suitable spatial radiation layer was verified. No chemical or radiation overlay is fabricated. MOLA roughness supplies regional geophysical context; it does not substitute for magnetic, gravity or radiation data.
+
+## Derived route profiles and point readouts
+
+These are computed in the browser from the sources above. Nothing new is downloaded.
+
+- Elevation and slope come from the Mars Trek terrain tiles through Cesium `sampleTerrain` (`src/data/terrain-sample.ts`). Elevation is meters above the MOLA areoid (tile height minus `DATUM_OFFSET`). Slope is the steepest slope in degrees, from a centered difference between points 60 m north, south, east and west, so it smooths features smaller than about 120 m. Route profiles sample at level 15 for the last 2 km and level 12 for a full traverse, falling back to coarser levels where tiles are missing. Resolution depends on whether Trek has a HiRISE or HRSC model at that spot.
+- Slope thresholds in `src/data/route-profile.ts` are planning assumptions, not suit limits: caution from 15°, hazard above 20°. The 20° value comes from lunar walking-traverse studies. No Mars suit slope limit is published.
+- Layer lanes and point readouts read pixels from the same science tiles at each source's `maxLevel` (`src/data/raster-sample.ts`). A value is the pixel's position on the layer legend, 0 to 100. It is not a calibrated temperature, albedo or roughness. MOLA color relief is excluded because its hillshade turns sunlit slopes white.
+- Routes are the public rover traverses in `src/data/traverses/`, resampled every 1/160 of the segment. "Last 2 km" is the final 2,000 m of the drive, used as a stand-in for a single EVA route.
+- The suit view position is simulated with step controls. Its dose readout is the historical Curiosity RAD mean from 2012 to 2013, not a live value.
+
+## USGS Astrogeology STAC: MRO CTX Controlled DTM (20x20 km local planning site)
+
+- **Name:** `mro_ctx_controlled_usgs_dtms` (Jezero Crater `K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W` / Gale Crater `T01_000881_1752_XI_04S223W__P02_001752_1753_XI_04S222W`)
+- **Mission / Instrument:** Mars Reconnaissance Orbiter (MRO) Context Camera (CTX)
+- **Catalog URL:** `https://stac.astrogeology.usgs.gov/api/collections/mro_ctx_controlled_usgs_dtms`
+- **Asset URL (active Jezero DTM):** `https://astrogeo-ard.s3-us-west-2.amazonaws.com/mars/mro/ctx/controlled/usgs/K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W/K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W_dtm.tif`
+- **Asset URL (active Jezero hillshade):** `https://astrogeo-ard.s3-us-west-2.amazonaws.com/mars/mro/ctx/controlled/usgs/K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W/K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W_hillshade.tif`
+- **Resolution:** ~20.39 m/px native COG (~34 x 44 km swath), cropped and resampled to a 20x20 km planning grid (20 m spacing, 1001x1001 = 1,002,001 nodes)
+- **Projection:** Mars (2015) Sphere / Ocentric / Equirectangular (`R = 3396190 m`, `clon = 0`)
+- **License:** CC0-1.0 / Public domain
+- **Fetch script:** `scripts/data/fetch-site.ts` (reads COG byte ranges via HTTP Range requests)
+
+
+The Go planner reads the processed grid from `data/site-terrain.json`. Missing
+nodes remain blocked. The frontend uses Mars Trek for display terrain and does
+not replace the planning elevations with that smoothed mesh. The source endpoint
+and Jezero crop were fetched successfully on November 14, 2026.
+
+## Planner weather scenarios
+
+`apps/api/internal/weather` generates labeled scenarios from the reviewed
+prototype's Mars climatology equations. These are modeled values, not new rover
+measurements or operational forecasts. They do not replace the historical
+observations listed above. Temperature is stored in kelvin and pressure in pascals.

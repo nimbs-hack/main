@@ -16,13 +16,16 @@ import (
 	"syscall"
 	"time"
 
+	"mars-console/api/internal/planningapi"
 	"mars-console/api/internal/tiles"
 )
 
-func handler(cacheDir, staticDir string, client *http.Client) (http.Handler, func()) {
+func handler(cacheDir, staticDir, dataDir string, client *http.Client) (http.Handler, func()) {
 	mux := http.NewServeMux()
+	planningapi.Register(mux, dataDir)
 	flushCTX := tiles.RegisterCTX(mux, filepath.Join(cacheDir, "ctx-v01"), client)
 	flushTerrain := tiles.RegisterTerrain(mux, filepath.Join(cacheDir, "mars-v14-v2"), client)
+	flushScience := tiles.RegisterScience(mux, filepath.Join(cacheDir, "science-v1"), client)
 	// An unknown API route must not return the SPA's HTML.
 	mux.HandleFunc("/api/", http.NotFound)
 	mux.HandleFunc("/api", http.NotFound)
@@ -40,7 +43,7 @@ func handler(cacheDir, staticDir string, client *http.Client) (http.Handler, fun
 		}
 		http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
 	})
-	return mux, func() { flushCTX(); flushTerrain() }
+	return mux, func() { flushCTX(); flushTerrain(); flushScience() }
 }
 
 func run() error {
@@ -51,8 +54,9 @@ func run() error {
 	addr := flag.String("addr", ":"+port, "HTTP listen address")
 	cacheDir := flag.String("cache-dir", "data/cache", "Tile cache directory")
 	staticDir := flag.String("static-dir", "dist", "Built frontend directory")
+	dataDir := flag.String("data-dir", "data", "Planning DEM directory")
 	flag.Parse()
-	app, flush := handler(*cacheDir, *staticDir, &http.Client{})
+	app, flush := handler(*cacheDir, *staticDir, *dataDir, &http.Client{})
 	defer flush()
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
