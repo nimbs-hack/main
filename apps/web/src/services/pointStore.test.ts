@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
+  MIL2525C_BY_ID,
+  MIL2525C_SYMBOLS,
+  MIL2525C_THEMES,
+  resolveLegacyFgdcIcon,
+} from "../assets/milStd2525c";
+import {
   DEFAULT_POINT_CLASSES,
   createCustomPointClass,
   createMapPoint,
   filterVisiblePoints,
+  isValidPointIconKey,
   parsePointState,
   setAllClassesVisible,
   toggleClassVisibility,
@@ -114,13 +121,37 @@ describe("pointStore classification and filtering", () => {
     expect(missingClass.hiddenClassIds).toEqual(["hazard"]);
   });
 
-  test("preserves valid FGDC geologic point icons and strips unknown icons", () => {
-    const fgdcPoint = createMapPoint(
+  test("validates MIL-STD-2525C catalog, 15-char SIDCs, and default classes", () => {
+    expect(MIL2525C_SYMBOLS.length).toBeGreaterThanOrEqual(28);
+    expect(MIL2525C_THEMES).toHaveLength(5);
+
+    for (const theme of MIL2525C_THEMES) {
+      const count = MIL2525C_SYMBOLS.filter((s) => s.theme === theme.id).length;
+      expect(count).toBeGreaterThanOrEqual(5);
+    }
+
+    for (const symbol of MIL2525C_SYMBOLS) {
+      expect(symbol.id.startsWith("mil2525c-")).toBe(true);
+      expect(symbol.sidc).toHaveLength(15);
+      expect(MIL2525C_BY_ID[symbol.id]).toBe(symbol);
+      expect(isValidPointIconKey(symbol.id)).toBe(true);
+    }
+
+    for (const cls of DEFAULT_POINT_CLASSES) {
+      expect(isValidPointIconKey(cls.icon)).toBe(true);
+    }
+
+    expect(isValidPointIconKey("mil2525c-nonexistent")).toBe(false);
+    expect(isValidPointIconKey("fgdc-06-002")).toBe(false);
+  });
+
+  test("preserves valid MIL-STD-2525C icons, migrates legacy FGDC icons, and strips unknown icons", () => {
+    const milPoint = createMapPoint(
       {
-        name: "Marias Pass Dip",
+        name: "Rover Recon Ridge",
         classId: "science",
-        icon: "fgdc-06-002",
-        description: "Dipping sedimentary bedding.",
+        icon: "mil2525c-rover",
+        description: "Scout traverse waypoint.",
         coord: { lat: 18.68, lon: 77.46 },
       },
       [],
@@ -128,9 +159,26 @@ describe("pointStore classification and filtering", () => {
 
     const restored = parsePointState(
       JSON.stringify({
-        classes: DEFAULT_POINT_CLASSES,
+        classes: [
+          ...DEFAULT_POINT_CLASSES,
+          {
+            id: "legacy-geology",
+            name: "Legacy Geo",
+            shortCode: "GEO",
+            color: "#38bdf8",
+            icon: "fgdc-25-094",
+          },
+        ],
         points: [
-          fgdcPoint,
+          milPoint,
+          {
+            id: "pt-legacy-fgdc",
+            name: "Marias Pass Dip",
+            classId: "science",
+            icon: "fgdc-06-002",
+            description: "Dipping sedimentary bedding.",
+            coord: { lat: 18.685, lon: 77.465 },
+          },
           {
             id: "pt-bad-icon",
             name: "Bad Icon Spot",
@@ -144,7 +192,14 @@ describe("pointStore classification and filtering", () => {
       }),
     );
 
-    expect(restored.points[0]?.icon).toBe("fgdc-06-002");
-    expect(restored.points[1]?.icon).toBeUndefined();
+    const migratedClass = restored.classes.find((c) => c.id === "legacy-geology");
+    expect(migratedClass?.icon).toBe("mil2525c-crater");
+    expect(migratedClass?.icon && isValidPointIconKey(migratedClass.icon)).toBe(true);
+
+    expect(restored.points[0]?.icon).toBe("mil2525c-rover");
+    expect(restored.points[1]?.icon).toBe("mil2525c-sensor");
+    expect(restored.points[2]?.icon).toBeUndefined();
+    expect(resolveLegacyFgdcIcon("fgdc-99-999")).toBe("mil2525c-sample");
+    expect(resolveLegacyFgdcIcon("not-fgdc")).toBeUndefined();
   });
 });

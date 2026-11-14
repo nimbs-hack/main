@@ -10,10 +10,10 @@ import {
 } from "@nimbs/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ContextMenu } from "./components/ContextMenu";
-import { ElevationProfile } from "./components/ElevationProfile";
 import { MapView } from "./components/MapView";
 import { MaxSlopeControl } from "./components/MaxSlopeControl";
 import { PointsPanel } from "./components/PointsPanel";
+import { RoutePlannerPanel } from "./components/RoutePlannerPanel";
 import {
   TimeSimulationControl,
   clampSimLmstHour,
@@ -29,7 +29,6 @@ import {
   type EvaWeatherEvaluation,
   type EvaWeatherLimits,
   type MarsWeatherSnapshot,
-  type RouteBlockedReason,
   type SiteEnvironmentSummary,
   type TraversePointSample,
   type WeatherScenario,
@@ -60,10 +59,6 @@ function formatLon(lonDeg: number, fmt: LonFormat): string {
 }
 
 const DEFAULT_THERMAL_WEIGHT = 0.35;
-
-function formatDistance(meters: number): string {
-  return meters >= 1000 ? `${(meters / 1000).toFixed(2)} km` : `${Math.round(meters)} m`;
-}
 
 function isAbortError(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
@@ -99,14 +94,6 @@ function sampleRoutePoints(points: RoutePoint[], maxSamples = 80): TraversePoint
     });
   }
   return sampled;
-}
-
-function formatBlockedReason(reason: RouteBlockedReason): string {
-  if (reason === "slope") return "SLOPE LIMIT";
-  if (reason === "temperature") return "AIR TEMP LIMIT";
-  if (reason === "pressure") return "PRESSURE LIMIT";
-  if (reason === "combined") return "SLOPE + WEATHER LIMITS";
-  return "NO TERRAIN DATA";
 }
 
 export function App() {
@@ -591,254 +578,40 @@ export function App() {
       title: "Route Planner",
       order: 1,
       render: () => (
-        <>
-          <div className="panel-header">
-            <h1 className="panel-title">Route Planner</h1>
-            <p className="panel-desc">
-              Right-click the map to place A and B inside the {siteLabels.sizeCompact} km terrain
-              graph.
-            </p>
-            <div className="panel-rule" />
-          </div>
-
-          <MaxSlopeControl valueDeg={maxSlopeDeg} onChange={setMaxSlopeDeg} />
-
-          <div className="rte-weather-block">
-            <button
-              type="button"
-              className="toggle-row"
-              onClick={() => setWeatherRoutingEnabled((v) => !v)}
-            >
-              <span className="value-label" style={{ color: "var(--color-text)" }}>
-                WEATHER ROUTING
-              </span>
-              <span className={`toggle-state ${weatherRoutingEnabled ? "is-on" : ""}`}>
-                {weatherRoutingEnabled ? "ON" : "OFF"}
-              </span>
-            </button>
-            <div className="rte-weather-strip">
-              <span className="readout-sub">
-                {weatherRoutingEnabled
-                  ? `T >= ${weatherLimits.minAirTempC.toFixed(0)} °C · P >= ${weatherLimits.minPressurePa.toFixed(0)} Pa · ${simClockLabel} LMST`
-                  : `SLOPE ONLY · ${simClockLabel} LMST`}
-              </span>
-              <button
-                type="button"
-                className="compact-btn"
-                onClick={() => {
-                  setActiveToolId("weather");
-                  setPanelOpen(true);
-                }}
-              >
-                WXR
-              </button>
-            </div>
-          </div>
-
-          <div className="readout-grid">
-            <div className="readout-card">
-              <span className="value-label">WAYPOINT A</span>
-              <span className="mono-value">
-                {waypointA
-                  ? `${waypointA.lat.toFixed(4)}°, ${formatLon(waypointA.lon, lonFormat)}`
-                  : "UNSET"}
-              </span>
-              <span className="readout-sub">
-                {routePlan?.snappedA
-                  ? `${routePlan.snappedA.elevationM.toFixed(1)} m`
-                  : "Right-click map"}
-              </span>
-            </div>
-            <div className="readout-card">
-              <span className="value-label">WAYPOINT B</span>
-              <span className="mono-value">
-                {waypointB
-                  ? `${waypointB.lat.toFixed(4)}°, ${formatLon(waypointB.lon, lonFormat)}`
-                  : "UNSET"}
-              </span>
-              <span className="readout-sub">
-                {routePlan?.snappedB
-                  ? `${routePlan.snappedB.elevationM.toFixed(1)} m`
-                  : "Right-click map"}
-              </span>
-            </div>
-          </div>
-
-          {siteError && <div className="alert-box">{siteError}</div>}
-
-          {routePlan && routePlan.status !== "ok" && (
-            <div className="alert-box">
-              <div>{routePlan.message ?? "No passable route found."}</div>
-              {routePlan.status === "unreachable" && (
-                <div className="rte-unreachable-meta">
-                  {routePlan.blockedReason && (
-                    <span>BLOCKED: {formatBlockedReason(routePlan.blockedReason)}</span>
-                  )}
-                  {routePlan.minRequiredSlopeDeg !== undefined && (
-                    <span>MIN SLOPE NEEDED {routePlan.minRequiredSlopeDeg.toFixed(1)}°</span>
-                  )}
-                  {routePlan.maxFeasibleMinTempC !== undefined && (
-                    <span>MAX FEASIBLE TEMP {routePlan.maxFeasibleMinTempC.toFixed(1)} °C</span>
-                  )}
-                  {routePlan.maxFeasibleMinPressurePa !== undefined && (
-                    <span>
-                      MAX FEASIBLE PRESS {routePlan.maxFeasibleMinPressurePa.toFixed(0)} Pa
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    className="compact-btn"
-                    onClick={() => {
-                      setActiveToolId("weather");
-                      setPanelOpen(true);
-                    }}
-                  >
-                    OPEN BEST WINDOWS (WXR)
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {routingBusy && <span className="value-label">COMPUTING GRAPH PATHS...</span>}
-
-          {routePlan && routePlan.routes.length > 0 && (
-            <>
-              <div className="nav-button-list">
-                {routePlan.routes.map((rt) => {
-                  const isPrimary = rt.id === selectedRoute?.id;
-                  const hasTemp = rt.minTempC !== undefined && rt.maxTempC !== undefined;
-                  const hasPress = rt.minPressurePa !== undefined;
-                  return (
-                    <button
-                      key={rt.id}
-                      type="button"
-                      className={`chamfer-btn ${isPrimary ? "is-primary" : ""}`}
-                      onClick={() => setSelectedRouteId(rt.id)}
-                    >
-                      <span className="chamfer-btn-body">
-                        <span className="chamfer-btn-label">{rt.label}</span>
-                        <span className="chamfer-btn-meta-stack">
-                          <span className="chamfer-btn-meta">
-                            {formatDistance(rt.totalDistanceM)} · {rt.maxSlopeDeg.toFixed(1)}°
-                          </span>
-                          {(hasTemp || hasPress) && (
-                            <span className="chamfer-btn-submeta">
-                              {hasTemp
-                                ? `${rt.minTempC?.toFixed(0)}..${rt.maxTempC?.toFixed(0)} °C`
-                                : ""}
-                              {hasTemp && hasPress ? " · " : ""}
-                              {hasPress ? `${rt.minPressurePa?.toFixed(0)} Pa` : ""}
-                            </span>
-                          )}
-                        </span>
-                      </span>
-                      <span className="chamfer-btn-arrow">→</span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {selectedRoute && (
-                <>
-                  <div className="readout-grid">
-                    <div className="readout-card">
-                      <span className="value-label">LENGTH</span>
-                      <span className="readout-number">
-                        {formatDistance(selectedRoute.totalDistanceM)}
-                      </span>
-                    </div>
-                    <div className="readout-card">
-                      <span className="value-label">PEAK SLOPE</span>
-                      <span className="readout-number">
-                        {selectedRoute.maxSlopeDeg.toFixed(1)}°
-                      </span>
-                    </div>
-                    <div className="readout-card">
-                      <span className="value-label">ELEV GAIN</span>
-                      <span className="readout-number">
-                        +{selectedRoute.elevationGainM.toFixed(0)} m
-                      </span>
-                    </div>
-                    <div className="readout-card">
-                      <span className="value-label">ELEV LOSS</span>
-                      <span className="readout-number">
-                        -{selectedRoute.elevationLossM.toFixed(0)} m
-                      </span>
-                    </div>
-                    {selectedRoute.minTempC !== undefined &&
-                      selectedRoute.maxTempC !== undefined && (
-                        <div className="readout-card">
-                          <span className="value-label">ROUTE TEMP</span>
-                          <span className="mono-value">
-                            {selectedRoute.minTempC.toFixed(1)}..
-                            {selectedRoute.maxTempC.toFixed(1)} °C
-                          </span>
-                        </div>
-                      )}
-                    {selectedRoute.minPressurePa !== undefined && (
-                      <div className="readout-card">
-                        <span className="value-label">MIN PRESSURE</span>
-                        <span className="mono-value">
-                          {selectedRoute.minPressurePa.toFixed(0)} Pa
-                        </span>
-                        {selectedRoute.maxPressurePa !== undefined && (
-                          <span className="readout-sub">
-                            MAX {selectedRoute.maxPressurePa.toFixed(0)} Pa
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <ElevationProfile
-                    route={selectedRoute}
-                    maxSlopeDeg={maxSlopeDeg}
-                    onHoverPoint={setHoveredProfilePoint}
-                  />
-
-                  {weatherEval && (
-                    <div className={`wx-verdict-card ${evaStatusClass(weatherEval.status)}`}>
-                      <div className="wx-verdict-top">
-                        <span className="value-label">ROUTE WEATHER</span>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <span className={`wx-status-tag ${evaStatusClass(weatherEval.status)}`}>
-                            {weatherEval.status}
-                          </span>
-                          <button
-                            type="button"
-                            className="compact-btn"
-                            onClick={() => {
-                              setActiveToolId("weather");
-                              setPanelOpen(true);
-                            }}
-                          >
-                            WXR
-                          </button>
-                        </div>
-                      </div>
-                      <span className="readout-sub">{weatherEval.summary}</span>
-                    </div>
-                  )}
-                </>
-              )}
-            </>
-          )}
-
-          {(waypointA || waypointB) && (
-            <button
-              type="button"
-              className="compact-btn"
-              onClick={() => {
-                setWaypointA(null);
-                setWaypointB(null);
-                setHoveredProfilePoint(null);
-              }}
-            >
-              CLEAR WAYPOINTS
-            </button>
-          )}
-        </>
+        <RoutePlannerPanel
+          siteCompactLabel={siteLabels.sizeCompact}
+          maxSlopeDeg={maxSlopeDeg}
+          onChangeMaxSlopeDeg={setMaxSlopeDeg}
+          weatherRoutingEnabled={weatherRoutingEnabled}
+          onToggleWeatherRouting={() => setWeatherRoutingEnabled((v) => !v)}
+          weatherLimits={weatherLimits}
+          simClockLabel={simClockLabel}
+          waypointA={waypointA}
+          waypointB={waypointB}
+          onSwapWaypoints={() => {
+            if (!waypointA || !waypointB) return;
+            setWaypointA(waypointB);
+            setWaypointB(waypointA);
+            setHoveredProfilePoint(null);
+          }}
+          onClearWaypoints={() => {
+            setWaypointA(null);
+            setWaypointB(null);
+            setHoveredProfilePoint(null);
+          }}
+          lonFormat={lonFormat}
+          routePlan={routePlan}
+          selectedRoute={selectedRoute}
+          onSelectRoute={setSelectedRouteId}
+          routingBusy={routingBusy}
+          siteError={siteError}
+          onHoverProfilePoint={setHoveredProfilePoint}
+          weatherEval={weatherEval}
+          onOpenWeatherPanel={() => {
+            setActiveToolId("weather");
+            setPanelOpen(true);
+          }}
+        />
       ),
     });
 
@@ -1286,6 +1059,7 @@ export function App() {
           onScaleUpdate={(label, widthPx, zoom) => setScaleHud({ label, widthPx, zoom })}
           onOpenContextMenu={(x, y, coord) => setContextMenu({ x, y, coord })}
           onCloseContextMenu={() => setContextMenu(null)}
+          onSelectRoute={setSelectedRouteId}
           onPickPointCoord={openPointComposerAtCoord}
           onSelectPoint={(id) => setSelectedPointId(id)}
           onPointSetA={(c) => {

@@ -1,11 +1,12 @@
 import { type ReactNode, createElement } from "react";
-import { FGDC_SYMBOL_BY_ID } from "../assets/fgdcSymbols";
+import { MIL2525C_BY_ID, type Mil2525cSymbol, resolveLegacyFgdcIcon } from "../assets/milStd2525c";
 import type { CorePointIconKey, PointIconKey } from "../services/pointStore";
 
 interface PointClassIconProps {
   icon: PointIconKey;
   color?: string;
   size?: number;
+  className?: string;
 }
 
 interface ParsedSvgNode {
@@ -14,21 +15,42 @@ interface ParsedSvgNode {
   children: ParsedSvgNode[];
 }
 
-const CORE_ICON_MARKUP: Record<CorePointIconKey, string> = {
-  science:
-    '<polygon points="8,1 14.5,8 8,15 1.5,8" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="6.5" y="6.5" width="3" height="3" fill="currentColor"/>',
-  sample:
-    '<rect x="3" y="3" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="3" y1="8" x2="13" y2="8" stroke="currentColor" stroke-width="1.4"/><line x1="8" y1="3" x2="8" y2="13" stroke="currentColor" stroke-width="1.4"/>',
-  habitat:
-    '<polygon points="2,8 8,2 14,8 14,14 2,14" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="6.5" y="9" width="3" height="5" fill="currentColor"/>',
-  supply: '<polygon points="9.5,1 4,9 8,9 6.5,15 12,7 8,7" fill="currentColor"/>',
-  hazard:
-    '<polygon points="8,2 14.5,14 1.5,14" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="8" y1="6" x2="8" y2="10" stroke="currentColor" stroke-width="1.6"/><rect x="7.2" y="11.2" width="1.6" height="1.6" fill="currentColor"/>',
-  beacon:
-    '<line x1="8" y1="4" x2="8" y2="14" stroke="currentColor" stroke-width="1.6"/><polygon points="8,1.5 10.5,4.5 5.5,4.5" fill="currentColor"/><line x1="4" y1="14" x2="12" y2="14" stroke="currentColor" stroke-width="1.6"/>',
-  marker:
-    '<rect x="3.5" y="3.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="6.5" y="6.5" width="3" height="3" fill="currentColor"/>',
+const DEFAULT_TRP_MARKUP =
+  '<line x1="12" y1="3.5" x2="12" y2="9" stroke="currentColor" stroke-width="1.6"/><line x1="12" y1="15" x2="12" y2="20.5" stroke="currentColor" stroke-width="1.6"/><line x1="3.5" y1="12" x2="9" y2="12" stroke="currentColor" stroke-width="1.6"/><line x1="15" y1="12" x2="20.5" y2="12" stroke="currentColor" stroke-width="1.6"/><rect x="10.5" y="10.5" width="3" height="3" fill="currentColor"/>';
+
+export const CORE_TO_MIL2525C_ID: Readonly<Record<CorePointIconKey, Mil2525cSymbol["id"]>> = {
+  science: "mil2525c-sensor",
+  sample: "mil2525c-sample",
+  habitat: "mil2525c-habitat",
+  supply: "mil2525c-supply",
+  hazard: "mil2525c-hazard",
+  beacon: "mil2525c-relay",
+  marker: "mil2525c-trp",
 };
+
+const CORE_ICON_MARKUP: Record<CorePointIconKey, string> = {
+  science: MIL2525C_BY_ID[CORE_TO_MIL2525C_ID.science]?.svgInner ?? DEFAULT_TRP_MARKUP,
+  sample: MIL2525C_BY_ID[CORE_TO_MIL2525C_ID.sample]?.svgInner ?? DEFAULT_TRP_MARKUP,
+  habitat: MIL2525C_BY_ID[CORE_TO_MIL2525C_ID.habitat]?.svgInner ?? DEFAULT_TRP_MARKUP,
+  supply: MIL2525C_BY_ID[CORE_TO_MIL2525C_ID.supply]?.svgInner ?? DEFAULT_TRP_MARKUP,
+  hazard: MIL2525C_BY_ID[CORE_TO_MIL2525C_ID.hazard]?.svgInner ?? DEFAULT_TRP_MARKUP,
+  beacon: MIL2525C_BY_ID[CORE_TO_MIL2525C_ID.beacon]?.svgInner ?? DEFAULT_TRP_MARKUP,
+  marker: MIL2525C_BY_ID[CORE_TO_MIL2525C_ID.marker]?.svgInner ?? DEFAULT_TRP_MARKUP,
+};
+
+/** Returns MIL-STD-2525C symbol metadata for any core, mil2525c-*, or legacy fgdc-* key. */
+export function resolvePointSymbolMeta(icon: PointIconKey): Mil2525cSymbol | undefined {
+  const direct = MIL2525C_BY_ID[icon];
+  if (direct) return direct;
+
+  const coreMapped = CORE_TO_MIL2525C_ID[icon as CorePointIconKey];
+  if (coreMapped) return MIL2525C_BY_ID[coreMapped];
+
+  const legacyMapped = resolveLegacyFgdcIcon(icon);
+  if (legacyMapped) return MIL2525C_BY_ID[legacyMapped];
+
+  return MIL2525C_BY_ID[CORE_TO_MIL2525C_ID.marker];
+}
 
 const SVG_ATTR_TO_REACT: Record<string, string> = {
   "stroke-width": "strokeWidth",
@@ -97,12 +119,16 @@ function getIconSpec(icon: PointIconKey): { viewBox: string; nodes: ParsedSvgNod
   const cached = ICON_SPEC_CACHE.get(icon);
   if (cached) return cached;
 
-  const fgdc = FGDC_SYMBOL_BY_ID[icon];
-  const viewBox = fgdc ? "0 0 24 24" : "0 0 16 16";
+  const direct = MIL2525C_BY_ID[icon];
+  const legacyId = !direct ? resolveLegacyFgdcIcon(icon) : undefined;
+  const legacySymbol = legacyId ? MIL2525C_BY_ID[legacyId] : undefined;
   const markup =
-    fgdc?.innerSvg ?? CORE_ICON_MARKUP[icon as CorePointIconKey] ?? CORE_ICON_MARKUP.marker;
+    direct?.svgInner ??
+    legacySymbol?.svgInner ??
+    CORE_ICON_MARKUP[icon as CorePointIconKey] ??
+    CORE_ICON_MARKUP.marker;
 
-  const spec = { viewBox, nodes: parseStaticSvgNodes(markup) };
+  const spec = { viewBox: "0 0 24 24", nodes: parseStaticSvgNodes(markup) };
   ICON_SPEC_CACHE.set(icon, spec);
   return spec;
 }
@@ -154,13 +180,19 @@ export function createPointIconSvgElement(
   return svg;
 }
 
-export function PointClassIcon({ icon, color = "currentColor", size = 14 }: PointClassIconProps) {
+export function PointClassIcon({
+  icon,
+  color = "currentColor",
+  size = 14,
+  className,
+}: PointClassIconProps) {
   const { viewBox, nodes } = getIconSpec(icon);
   return (
     <svg
       viewBox={viewBox}
       width={size}
       height={size}
+      className={className}
       style={{ color, flexShrink: 0 }}
       aria-hidden="true"
     >

@@ -63,11 +63,11 @@ export function TraverseWindowsPanel({
       {slots.length > 0 && (
         <div className="wx-slots-card">
           <div className="field-label-row" style={{ marginBottom: 6 }}>
-            <span className="value-label">48H TRAVERSE TIMELINE</span>
+            <span className="value-label">48H TRAVERSE</span>
             <span className="wx-meta-mono">
               {sol0Number !== null && sol1Number !== null
-                ? `SOL ${sol0Number} .. SOL ${sol1Number}`
-                : "SOL +0 .. SOL +1"}
+                ? `SOL ${sol0Number}–${sol1Number}`
+                : "48H WINDOW"}
             </span>
           </div>
 
@@ -78,7 +78,7 @@ export function TraverseWindowsPanel({
             <div className="wx-slots-cursor" style={{ left: `${cursorPct}%` }} aria-hidden="true" />
             {slots.map((slot) => {
               const scorePct = normalizeScore(slot.score, maxSlotScore);
-              const barHeightPct = Math.max(20, Math.min(100, scorePct));
+              const barHeightPct = Math.max(18, Math.min(100, scorePct));
               const isSelected = closestSlot?.offsetHours === slot.offsetHours;
               const isSolBoundary = sol1Slot?.offsetHours === slot.offsetHours;
               const title = [
@@ -118,16 +118,16 @@ export function TraverseWindowsPanel({
           </div>
 
           {closestSlot && (
-            <div className="wx-slot-detail">
+            <div className="wx-slot-detail" title={closestSlot.reason}>
               <span className={`wx-status-tag ${evaStatusClass(closestSlot.status)}`}>
                 {closestSlot.status}
               </span>
-              <span>
-                {closestSlot.startLmstLabel}..{closestSlot.endLmstLabel} LMST ·{" "}
+              <span className="wx-slot-detail-text">
+                {closestSlot.startLmstLabel}..{closestSlot.endLmstLabel} ·{" "}
                 {closestSlot.minEncounteredTempC.toFixed(0)}..
-                {closestSlot.maxEncounteredTempC.toFixed(0)} °C ·{" "}
-                {closestSlot.minEncounteredPressurePa.toFixed(0)} Pa ·{" "}
-                {closestSlot.maxEncounteredWindMps.toFixed(1)} m/s
+                {closestSlot.maxEncounteredTempC.toFixed(0)}°C ·{" "}
+                {closestSlot.minEncounteredPressurePa.toFixed(0)}Pa ·{" "}
+                {closestSlot.maxEncounteredWindMps.toFixed(1)}m/s
               </span>
             </div>
           )}
@@ -137,60 +137,88 @@ export function TraverseWindowsPanel({
       {windows !== undefined && (
         <div className="wx-window-list">
           <div className="field-label-row" style={{ marginBottom: 0 }}>
-            <span className="value-label">RECOMMENDED WINDOWS</span>
+            <span className="value-label">BEST WINDOWS</span>
             <span className="wx-meta-mono">{windows.length} FOUND</span>
           </div>
 
           {windows.length === 0 ? (
-            <div className="alert-box">
-              No traverse window meets current suit limits across the 48h window.
-            </div>
+            <div className="alert-box">No window satisfies current suit limits.</div>
           ) : (
             windows.slice(0, 4).map((win: TraverseWindowRecommendation) => {
               const scoreVal = normalizeScore(win.score, maxWinScore);
               const isSelected = Math.abs(activeLmstHour - win.bestDepartureOffsetHours) < 0.25;
-              const rankTag = win.rank === 1 ? "BEST #1" : `#${win.rank}`;
+              const rankTag = win.rank === 1 ? "#1" : `#${win.rank}`;
+              const spanStartPct = Math.max(0, Math.min(98, (win.startOffsetHours / 48) * 100));
+              const spanWidthPct = Math.max(
+                4,
+                Math.min(
+                  100 - spanStartPct,
+                  ((win.endOffsetHours - win.startOffsetHours) / 48) * 100,
+                ),
+              );
+              const departPct = Math.max(
+                1,
+                Math.min(99, (win.bestDepartureOffsetHours / 48) * 100),
+              );
 
               return (
                 <div
                   key={win.id}
                   className={`wx-window-card ${evaStatusClass(win.status)} ${isSelected ? "is-active-window" : ""}`}
+                  title={win.summary}
                 >
                   <div className="wx-window-head">
-                    <div className="wx-verdict-badge-wrap">
+                    <div className="wx-window-badges">
                       <span className="wx-rank-tag">{rankTag}</span>
                       <span className={`wx-status-pill ${evaStatusClass(win.status)}`}>
                         {win.status}
                       </span>
-                      <span className="wx-meta-mono">SCORE {scoreVal}</span>
+                      <div className="wx-score-meter" title={`Score ${scoreVal}/100`}>
+                        <div className="wx-score-track">
+                          <div
+                            className={`wx-score-fill ${evaStatusClass(win.status)}`}
+                            style={{ width: `${scoreVal}%` }}
+                          />
+                        </div>
+                        <span className="wx-meta-mono">{scoreVal}</span>
+                      </div>
                     </div>
+
                     <button
                       type="button"
                       className={`compact-btn wx-use-window-btn ${isSelected ? "is-active" : ""}`}
                       onClick={() => onSelectDepartureHour(win.bestDepartureOffsetHours)}
                     >
-                      {isSelected ? "ACTIVE" : "USE WINDOW"}
+                      {isSelected ? "ACTIVE" : "SET"}
                     </button>
+                  </div>
+
+                  {/* Visual 48h span timeline */}
+                  <div className="wx-win-span" aria-hidden="true">
+                    <span className="wx-win-span-mid" />
+                    <span
+                      className={`wx-win-span-fill ${evaStatusClass(win.status)}`}
+                      style={{ left: `${spanStartPct}%`, width: `${spanWidthPct}%` }}
+                    />
+                    <span className="wx-win-span-dep" style={{ left: `${departPct}%` }} />
                   </div>
 
                   <div className="wx-window-schedule">
                     <span>
-                      SOL {win.sol} · {win.windowStartLmst}..{win.windowEndLmst} LMST
+                      SOL {win.sol} · {win.windowStartLmst}..{win.windowEndLmst}
                     </span>
                     <span>
-                      DEPART {win.bestDepartureLmst} · {win.estimatedDurationHours.toFixed(1)} h
+                      DEP {win.bestDepartureLmst} · {win.estimatedDurationHours.toFixed(1)}h
                     </span>
                   </div>
 
                   <div className="wx-window-metrics">
                     <span>
-                      {win.minTempC.toFixed(0)}..{win.maxTempC.toFixed(0)} °C
+                      {win.minTempC.toFixed(0)}..{win.maxTempC.toFixed(0)}°C
                     </span>
                     <span>{win.minPressurePa.toFixed(0)} Pa MIN</span>
                     <span>{win.maxWindMps.toFixed(1)} m/s MAX</span>
                   </div>
-
-                  <p className="wx-window-summary">{win.summary}</p>
                 </div>
               );
             })

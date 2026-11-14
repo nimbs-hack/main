@@ -214,12 +214,14 @@ When `panelOpen` is true, the `64px` `.tool-rail` plus `416px` `.side-panel` equ
 - Right-clicking the map prevents the browser context menu, normalizes longitude with `normalizeLon180`, and opens `apps/web/src/components/ContextMenu.tsx` clamped within `window.innerWidth - 230` and `window.innerHeight - 150`. Selecting Set A Waypoint or Set B Waypoint updates coordinates, switches to the `route` tool, and opens the side panel.
 - Moving the pointer inside `site.bbox` triggers a `45 ms` debounced `GET /api/terrain/elevation` lookup for the top-right `ELEVATION` HUD readout.
 
-### Reactive slope filtering and elevation profile
+### Reactive slope filtering, comparison UI, and telemetry profile
 
 - `apps/web/src/components/MaxSlopeControl.tsx` binds a `1..45°` slider with `0.5°` steps to a `0.5..60°` numeric input with `0.5°` steps.
+- `apps/web/src/components/RoutePlannerPanel.tsx` and `apps/web/src/components/routeVisuals.ts` replace multi-box waypoint/metric text readouts with a unified `A <-> B` corridor strip (with inline swap and clear controls), a compact constraint + graph passability bar, graphical blocked-threshold comparison bars when `status !== "ok"`, and candidate route cards carrying inline elevation sparklines, strategy glyphs, relative distance/slope bars, and weather chips.
 - Any change to `waypointA`, `waypointB`, `maxSlopeDeg`, the weather routing toggle, scenario, `simLmstHour`, or the temperature/pressure limits triggers a `120 ms` debounced `POST /api/graph/routes` call with cancellation on superseded requests, while `MapView` debounces `/api/site/passability.png?maxSlopeDeg=...` `setUrl` updates by `150 ms`.
-- Candidate polylines sort so the active `selectedRouteId` renders last on top in `#de233d` with weight `3.5` and opacity `0.96`; unselected candidates render as dashed `#fff8f3` lines with weight `2` and opacity `0.45`.
-- `apps/web/src/components/ElevationProfile.tsx` renders a `328 x 128` SVG elevation profile, highlights steep segments where incoming `pt.slopeDeg > maxSlopeDeg * 0.8` in `#f59e0b`, and maps horizontal pointer position to the nearest `RoutePoint` by `distanceM` to place `.profile-hover-dot` on the map.
+- Candidate polylines in `MapView` sort so the active `selectedRouteId` renders on top in `#de233d` (`3.5 px` over a `#050709` `6.5 px` contrast halo). Unselected alternatives render interactively in strategy-coded dashed strokes (`#e5e0dc` fastest, `#38bdf8` flattest, `#eab308` detour, `#3fb68b` thermal) with sticky hover tooltips and click-to-select behavior.
+- `apps/web/src/components/ElevationProfile.tsx` renders a `384 x 148` multi-layer SVG chart pairing the filled elevation profile with a baseline slope hazard ribbon (`#3fb68b`, `#eab308`, `#de233d`), toggleable `ALL`/`SLP`/`T°`/`Pa` route temperature and pressure curves with suit threshold lines, live hover crosshair telemetry, and `.profile-hover-dot` map tracking.
+- Point, class, and picker icons in `apps/web/src/assets/milStd2525c.ts` and `apps/web/src/components/PointClassIcon.tsx` use 30 vector MIL-STD-2525C tactical symbols (`24x24` `currentColor` frames with 15-character SIDC codes) grouped across `UNITS`, `BASE`, `HZD`, `TAC`, and `METOC` themes, preserving automatic migration for legacy `fgdc-*` IDs in local storage.
 
 ### Time simulation and weather layers
 

@@ -6,7 +6,7 @@ import {
   POINT_CLASS_SWATCHES,
   type PointIconKey,
 } from "../services/pointStore";
-import { PointClassIcon } from "./PointClassIcon";
+import { PointClassIcon, resolvePointSymbolMeta } from "./PointClassIcon";
 import { ThemedIconPicker } from "./ThemedIconPicker";
 
 interface PointsPanelProps {
@@ -180,8 +180,8 @@ export function PointsPanel({
       <div className="panel-header">
         <h1 className="panel-title">Points</h1>
         <p className="panel-desc">
-          Right-click the map to add classified markers with notes, or toggle point classes on and
-          off.
+          Right-click the map to drop MIL-STD-2525C tactical markers with notes, or toggle point
+          classes.
         </p>
         <div className="panel-rule" />
       </div>
@@ -209,6 +209,7 @@ export function PointsPanel({
             <div className="poi-class-picker">
               {classes.map((cls) => {
                 const selected = cls.id === draftClassId;
+                const clsSymbol = resolvePointSymbolMeta(cls.icon);
                 return (
                   <button
                     key={cls.id}
@@ -218,6 +219,7 @@ export function PointsPanel({
                       borderColor: selected ? cls.color : undefined,
                       color: selected ? "var(--color-text)" : undefined,
                     }}
+                    title={clsSymbol ? `${cls.name} | SIDC ${clsSymbol.sidc}` : cls.name}
                     onClick={() => setDraftClassId(cls.id)}
                   >
                     <PointClassIcon icon={cls.icon} color={cls.color} size={13} />
@@ -229,7 +231,7 @@ export function PointsPanel({
           </div>
 
           <div className="poi-field">
-            <span className="value-label">SYMBOL</span>
+            <span className="value-label">2525C SYMBOL</span>
             <ThemedIconPicker
               value={draftIcon}
               color={classMap.get(draftClassId)?.color ?? "#38bdf8"}
@@ -246,7 +248,7 @@ export function PointsPanel({
               type="text"
               className="text-input"
               maxLength={64}
-              placeholder="e.g. Boxwork Outcrop"
+              placeholder="Boxwork Outcrop"
               value={draftName}
               onChange={(e) => setDraftName(e.target.value)}
             />
@@ -327,7 +329,7 @@ export function PointsPanel({
                 type="text"
                 className="text-input"
                 maxLength={28}
-                placeholder="Class name (e.g. Rover Relays)"
+                placeholder="Class name, e.g. Rover Relays"
                 value={newClassName}
                 onChange={(e) => setNewClassName(e.target.value)}
               />
@@ -358,6 +360,7 @@ export function PointsPanel({
             <ThemedIconPicker
               value={newClassIcon}
               color={newClassColor}
+              inheritLabel={newClassCode.trim().toUpperCase() || "NEW"}
               collapsible={false}
               onChange={(next) => setNewClassIcon(next ?? "marker")}
             />
@@ -440,6 +443,8 @@ export function PointsPanel({
             {filteredPoints.map((pt) => {
               const cls = classMap.get(pt.classId);
               const color = cls?.color ?? "#38bdf8";
+              const effectiveIcon = pt.icon ?? cls?.icon ?? "marker";
+              const symbolMeta = resolvePointSymbolMeta(effectiveIcon);
               const isHidden = hiddenClassIds.includes(pt.classId);
               const isSelected = pt.id === selectedPointId;
 
@@ -452,13 +457,13 @@ export function PointsPanel({
                     <span
                       className="poi-badge"
                       style={{ borderColor: color, color }}
-                      title={cls?.name ?? pt.classId}
+                      title={
+                        symbolMeta
+                          ? `${cls?.name ?? pt.classId} | ${symbolMeta.name} (${symbolMeta.sidc})`
+                          : (cls?.name ?? pt.classId)
+                      }
                     >
-                      <PointClassIcon
-                        icon={pt.icon ?? cls?.icon ?? "marker"}
-                        color={color}
-                        size={12}
-                      />
+                      <PointClassIcon icon={effectiveIcon} color={color} size={12} />
                       <span>{cls?.shortCode ?? "POI"}</span>
                     </span>
                     <strong className="poi-card-title">{pt.name}</strong>

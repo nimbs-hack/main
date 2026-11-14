@@ -1,5 +1,5 @@
 import type { MarsCoord } from "@nimbs/shared";
-import { FGDC_SYMBOL_BY_ID } from "../assets/fgdcSymbols";
+import { MIL2525C_BY_ID, resolveLegacyFgdcIcon } from "../assets/milStd2525c";
 
 export type CorePointIconKey =
   | "science"
@@ -10,7 +10,7 @@ export type CorePointIconKey =
   | "beacon"
   | "marker";
 
-export type PointIconKey = CorePointIconKey | `fgdc-${string}`;
+export type PointIconKey = CorePointIconKey | `mil2525c-${string}`;
 
 const CORE_ICON_SET = new Set<string>([
   "science",
@@ -23,7 +23,13 @@ const CORE_ICON_SET = new Set<string>([
 ]);
 
 export function isValidPointIconKey(value: string): value is PointIconKey {
-  return CORE_ICON_SET.has(value) || Boolean(FGDC_SYMBOL_BY_ID[value]);
+  return CORE_ICON_SET.has(value) || Boolean(MIL2525C_BY_ID[value]);
+}
+
+function normalizeStoredIconKey(value: unknown): PointIconKey | undefined {
+  if (typeof value !== "string") return undefined;
+  if (isValidPointIconKey(value)) return value;
+  return resolveLegacyFgdcIcon(value);
 }
 
 export interface MapPointClass {
@@ -150,8 +156,7 @@ export function parsePointState(raw: string | null): PersistedPointState {
             : name.toUpperCase().slice(0, 3);
         const color =
           typeof item.color === "string" && item.color.startsWith("#") ? item.color : "#38bdf8";
-        const icon: PointIconKey =
-          typeof item.icon === "string" && isValidPointIconKey(item.icon) ? item.icon : "marker";
+        const icon: PointIconKey = normalizeStoredIconKey(item.icon) ?? "marker";
 
         parsedClasses.push({
           id,
@@ -180,8 +185,7 @@ export function parsePointState(raw: string | null): PersistedPointState {
           typeof item.classId === "string" && seenIds.has(item.classId)
             ? item.classId
             : fallbackClassId;
-        const pointIcon =
-          typeof item.icon === "string" && isValidPointIconKey(item.icon) ? item.icon : undefined;
+        const pointIcon = normalizeStoredIconKey(item.icon);
         const description = typeof item.description === "string" ? item.description : "";
         const elevationM = typeof item.elevationM === "number" ? item.elevationM : null;
         const now = new Date().toISOString();

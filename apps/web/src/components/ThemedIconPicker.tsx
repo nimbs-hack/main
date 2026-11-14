@@ -1,50 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  FGDC_SYMBOLS,
-  FGDC_SYMBOL_BY_ID,
-  FGDC_THEMES,
-  type FgdcThemeId,
-} from "../assets/fgdcSymbols";
+  MIL2525C_BY_ID,
+  MIL2525C_SYMBOLS,
+  MIL2525C_THEMES,
+  type Mil2525cSymbol,
+  type Mil2525cThemeId,
+} from "../assets/milStd2525c";
 import type { CorePointIconKey, PointIconKey } from "../services/pointStore";
-import { PointClassIcon } from "./PointClassIcon";
+import { CORE_TO_MIL2525C_ID, PointClassIcon, resolvePointSymbolMeta } from "./PointClassIcon";
 
-interface IconOption {
-  key: PointIconKey;
-  label: string;
-  code?: string;
-  title?: string;
-  theme: FgdcThemeId;
+function resolveSymbolId(icon: PointIconKey | undefined): Mil2525cSymbol["id"] | undefined {
+  if (!icon) return undefined;
+  if (MIL2525C_BY_ID[icon]) return icon as Mil2525cSymbol["id"];
+  return CORE_TO_MIL2525C_ID[icon as CorePointIconKey];
 }
 
-const CORE_ICON_OPTIONS: readonly IconOption[] = [
-  { key: "science", label: "Prism", theme: "eva" },
-  { key: "sample", label: "Cache", theme: "eva" },
-  { key: "habitat", label: "Base", theme: "eva" },
-  { key: "supply", label: "Power", theme: "eva" },
-  { key: "hazard", label: "Alert", theme: "eva" },
-  { key: "beacon", label: "Beacon", theme: "eva" },
-  { key: "marker", label: "Pin", theme: "eva" },
-];
-
-const ALL_ICON_OPTIONS: readonly IconOption[] = [
-  ...CORE_ICON_OPTIONS,
-  ...FGDC_SYMBOLS.map((symbol) => ({
-    key: symbol.id as PointIconKey,
-    label: symbol.label,
-    code: symbol.fgdcCode,
-    title: symbol.sourceName,
-    theme: symbol.theme,
-  })),
-];
-
-function formatSelectedLabel(value: PointIconKey | undefined, inheritLabel?: string): string {
+function formatSelectedLabel(
+  value: PointIconKey | undefined,
+  resolvedMeta: Mil2525cSymbol | undefined,
+  inheritLabel?: string,
+): string {
   if (!value) {
-    return inheritLabel ? `Default (${inheritLabel})` : "Default icon";
+    return inheritLabel ? `Default (${inheritLabel})` : "Default symbol";
   }
-  const fgdc = FGDC_SYMBOL_BY_ID[value];
-  if (fgdc) return `FGDC ${fgdc.fgdcCode} · ${fgdc.label}`;
-  const core = CORE_ICON_OPTIONS.find((opt) => opt.key === value);
-  return core ? core.label : value;
+  return resolvedMeta ? resolvedMeta.name : value;
 }
 
 interface ThemedIconPickerProps {
@@ -57,7 +36,7 @@ interface ThemedIconPickerProps {
 }
 
 /**
- * Classifies geologic FGDC and EVA symbols by theme so only one theme is shown at a time.
+ * Groups MIL-STD-2525C tactical symbols into five operational themes so one category renders at a time.
  */
 export function ThemedIconPicker({
   value,
@@ -67,40 +46,51 @@ export function ThemedIconPicker({
   collapsible = false,
   onChange,
 }: ThemedIconPickerProps) {
-  const initialTheme: FgdcThemeId = useMemo(() => {
-    if (value && FGDC_SYMBOL_BY_ID[value]) {
-      return FGDC_SYMBOL_BY_ID[value].theme;
-    }
-    return value ? "eva" : "tectonics";
-  }, [value]);
+  const effectiveIcon = value ?? inheritIcon;
+  const resolvedMeta = useMemo(() => resolvePointSymbolMeta(effectiveIcon), [effectiveIcon]);
+
+  const initialTheme: Mil2525cThemeId = useMemo(
+    () => resolvedMeta?.theme ?? "tactical",
+    [resolvedMeta],
+  );
 
   const [expanded, setExpanded] = useState(!collapsible);
-  const [activeTheme, setActiveTheme] = useState<FgdcThemeId>(initialTheme);
+  const [activeTheme, setActiveTheme] = useState<Mil2525cThemeId>(initialTheme);
 
   useEffect(() => {
-    if (value && FGDC_SYMBOL_BY_ID[value]) {
-      setActiveTheme(FGDC_SYMBOL_BY_ID[value].theme);
+    if (value) {
+      const targetMeta = resolvePointSymbolMeta(value);
+      if (targetMeta) {
+        setActiveTheme(targetMeta.theme);
+      }
     }
   }, [value]);
 
-  const visibleIcons = useMemo(
-    () => ALL_ICON_OPTIONS.filter((opt) => opt.theme === activeTheme),
+  const visibleSymbols = useMemo(
+    () => MIL2525C_SYMBOLS.filter((symbol) => symbol.theme === activeTheme),
     [activeTheme],
   );
-  const activeThemeMeta = FGDC_THEMES.find((theme) => theme.id === activeTheme);
-  const effectiveIcon = value ?? inheritIcon;
+  const activeThemeMeta = MIL2525C_THEMES.find((theme) => theme.id === activeTheme);
+  const selectedId = resolveSymbolId(value ?? (collapsible ? undefined : inheritIcon));
+  const summaryLabel = formatSelectedLabel(value, resolvedMeta, inheritLabel);
 
   return (
     <div className="poi-icon-picker-wrap">
-      {collapsible && (
-        <div className="poi-icon-summary-bar">
-          <div className="poi-icon-preview">
-            <PointClassIcon icon={effectiveIcon} color={color} size={15} />
-            <span className="poi-icon-summary-text">
-              {formatSelectedLabel(value, inheritLabel)}
+      <div className="poi-icon-summary-bar">
+        <div
+          className="poi-icon-preview"
+          title={resolvedMeta ? `${resolvedMeta.name} | SIDC ${resolvedMeta.sidc}` : undefined}
+        >
+          <PointClassIcon icon={effectiveIcon} color={color} size={15} />
+          <span className="poi-icon-summary-text">{summaryLabel}</span>
+          {resolvedMeta && (
+            <span className="poi-icon-tile-code" style={{ flexShrink: 0 }}>
+              {resolvedMeta.sidc}
             </span>
-          </div>
-          <div style={{ display: "flex", gap: "4px" }}>
+          )}
+        </div>
+        {collapsible && (
+          <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
             {value && (
               <button type="button" className="compact-btn" onClick={() => onChange(undefined)}>
                 RESET
@@ -114,13 +104,13 @@ export function ThemedIconPicker({
               {expanded ? "HIDE" : "SYMBOLS"}
             </button>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {expanded && (
         <div className="poi-icon-drawer">
-          <div className="poi-theme-tabs" role="tablist" aria-label="Symbol themes">
-            {FGDC_THEMES.map((theme) => {
+          <div className="poi-theme-tabs" role="tablist" aria-label="MIL-STD-2525C symbol themes">
+            {MIL2525C_THEMES.map((theme) => {
               const selected = theme.id === activeTheme;
               return (
                 <button
@@ -140,24 +130,24 @@ export function ThemedIconPicker({
 
           <div className="poi-theme-caption">
             <span>{activeThemeMeta?.label ?? ""}</span>
-            <span>{visibleIcons.length} ICONS</span>
+            <span>{visibleSymbols.length} SYMBOLS</span>
           </div>
 
           <div className="poi-icon-grid">
-            {visibleIcons.map((opt) => {
-              const isSelected = (value ?? (collapsible ? undefined : inheritIcon)) === opt.key;
+            {visibleSymbols.map((symbol) => {
+              const isSelected = selectedId === symbol.id;
               return (
                 <button
-                  key={opt.key}
+                  key={symbol.id}
                   type="button"
                   className={`poi-icon-tile ${isSelected ? "is-selected" : ""}`}
                   style={{ borderColor: isSelected ? color : undefined }}
-                  title={opt.title ?? opt.label}
-                  onClick={() => onChange(opt.key)}
+                  title={`${symbol.name} | SIDC ${symbol.sidc}`}
+                  onClick={() => onChange(symbol.id)}
                 >
-                  <PointClassIcon icon={opt.key} color={color} size={16} />
-                  <span className="poi-icon-tile-label">{opt.label}</span>
-                  {opt.code && <span className="poi-icon-tile-code">{opt.code}</span>}
+                  <PointClassIcon icon={symbol.id} color={color} size={16} />
+                  <span className="poi-icon-tile-label">{symbol.name}</span>
+                  <span className="poi-icon-tile-code">{symbol.sidc}</span>
                 </button>
               );
             })}

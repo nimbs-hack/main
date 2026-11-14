@@ -12,6 +12,7 @@ import L from "leaflet";
 import { type RefObject, useEffect, useMemo, useRef } from "react";
 import type { MapPoint, MapPointClass } from "../services/pointStore";
 import { createPointIconSvgElement } from "./PointClassIcon";
+import { formatRouteDistance, getRouteStrategyVisual } from "./routeVisuals";
 
 interface MapViewProps {
   site: SiteMetadata | null;
@@ -44,6 +45,7 @@ interface MapViewProps {
   onScaleUpdate: (label: string, widthPx: number, zoom: number) => void;
   onOpenContextMenu: (x: number, y: number, coord: MarsCoord) => void;
   onCloseContextMenu: () => void;
+  onSelectRoute?: (routeId: string) => void;
   onPickPointCoord: (coord: MarsCoord) => void;
   onSelectPoint: (pointId: string) => void;
   onPointSetA: (coord: MarsCoord) => void;
@@ -234,6 +236,7 @@ export function MapView({
   onScaleUpdate,
   onOpenContextMenu,
   onCloseContextMenu,
+  onSelectRoute,
   onPickPointCoord,
   onSelectPoint,
   onPointSetA,
@@ -260,6 +263,7 @@ export function MapView({
     onScaleUpdate,
     onOpenContextMenu,
     onCloseContextMenu,
+    onSelectRoute,
     onPickPointCoord,
     onSelectPoint,
     onPointSetA,
@@ -272,6 +276,7 @@ export function MapView({
     onScaleUpdate,
     onOpenContextMenu,
     onCloseContextMenu,
+    onSelectRoute,
     onPickPointCoord,
     onSelectPoint,
     onPointSetA,
@@ -508,7 +513,7 @@ export function MapView({
     debounceMs: 150,
   });
 
-  // Render routes
+  // Render candidate and selected routes with visual contrast halo + click selection
   useEffect(() => {
     const group = routesGroupRef.current;
     if (!group) return;
@@ -521,13 +526,42 @@ export function MapView({
     for (const route of ordered) {
       const isSelected = route.id === selectedRouteId;
       const latlngs = route.points.map((p): [number, number] => [p.lat, p.lon]);
-      L.polyline(latlngs, {
-        color: isSelected ? "#de233d" : "#fff8f3",
-        weight: isSelected ? 3.5 : 2,
-        opacity: isSelected ? 0.96 : 0.45,
-        dashArray: isSelected ? undefined : "5 5",
-        interactive: false,
-      }).addTo(group);
+      const visual = getRouteStrategyVisual(route.strategy);
+      const strokeColor = isSelected ? visual.selectedColor : visual.color;
+
+      if (isSelected) {
+        L.polyline(latlngs, {
+          color: "#050709",
+          weight: 6.5,
+          opacity: 0.72,
+          interactive: false,
+        }).addTo(group);
+      }
+
+      const line = L.polyline(latlngs, {
+        color: strokeColor,
+        weight: isSelected ? 3.5 : 2.3,
+        opacity: isSelected ? 0.98 : 0.78,
+        dashArray: isSelected ? undefined : "6 5",
+        interactive: true,
+      });
+
+      line.bindTooltip(
+        `${visual.shortLabel} · ${formatRouteDistance(route.totalDistanceM)} · ${route.maxSlopeDeg.toFixed(1)}°`,
+        {
+          sticky: true,
+          className: "route-map-tooltip",
+          direction: "top",
+          offset: [0, -6],
+        },
+      );
+
+      line.on("click", (ev) => {
+        L.DomEvent.stopPropagation(ev);
+        callbacksRef.current.onSelectRoute?.(route.id);
+      });
+
+      line.addTo(group);
     }
   }, [routes, selectedRouteId]);
 

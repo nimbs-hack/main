@@ -33,6 +33,7 @@ interface WeatherSliderSpec {
   id: WeatherCheckId;
   key: keyof EvaWeatherLimits;
   label: string;
+  shortTag: string;
   unit: string;
   min: number;
   max: number;
@@ -47,6 +48,7 @@ const SLIDER_SPECS: readonly WeatherSliderSpec[] = [
     id: "air_temp",
     key: "minAirTempC",
     label: "MIN AIR TEMP",
+    shortTag: "TEMP",
     unit: "°C",
     min: -130,
     max: 10,
@@ -58,7 +60,8 @@ const SLIDER_SPECS: readonly WeatherSliderSpec[] = [
   {
     id: "wind_speed",
     key: "maxWindSpeedMps",
-    label: "MAX WIND SPEED",
+    label: "MAX WIND",
+    shortTag: "WIND",
     unit: "m/s",
     min: 2,
     max: 35,
@@ -70,7 +73,8 @@ const SLIDER_SPECS: readonly WeatherSliderSpec[] = [
   {
     id: "pressure",
     key: "minPressurePa",
-    label: "MIN PRESSURE",
+    label: "MIN PRESS",
+    shortTag: "PA",
     unit: "Pa",
     min: 400,
     max: 950,
@@ -82,7 +86,8 @@ const SLIDER_SPECS: readonly WeatherSliderSpec[] = [
   {
     id: "pressure_swing",
     key: "maxPressureSwingPa",
-    label: "MAX BARO SWING",
+    label: "MAX SWING",
+    shortTag: "SWG",
     unit: "Pa",
     min: 5,
     max: 100,
@@ -94,7 +99,8 @@ const SLIDER_SPECS: readonly WeatherSliderSpec[] = [
   {
     id: "eva_duration",
     key: "maxEvaHours",
-    label: "MAX EVA DURATION",
+    label: "MAX EVA",
+    shortTag: "DUR",
     unit: "h",
     min: 0.5,
     max: 12,
@@ -108,8 +114,8 @@ const SLIDER_SPECS: readonly WeatherSliderSpec[] = [
 const SCENARIO_OPTIONS: readonly { id: WeatherScenario; label: string }[] = [
   { id: "auto", label: "AUTO" },
   { id: "nominal", label: "NOMINAL" },
-  { id: "dust-storm", label: "DUST STORM" },
-  { id: "cold-snap", label: "COLD SNAP" },
+  { id: "dust-storm", label: "DUST" },
+  { id: "cold-snap", label: "COLD" },
 ];
 
 function kelvinToC(kelvin: number): number {
@@ -149,20 +155,94 @@ export function WeatherPanel({
     });
   };
 
-  const minC = weather ? kelvinToC(weather.airTemp.minK) : null;
-  const maxC = weather ? kelvinToC(weather.airTemp.maxK) : null;
-  const avgC = weather ? kelvinToC(weather.airTemp.avgK) : null;
   const selectedHourWeather = evaluation?.selectedHourWeather;
   const activeHourInSol = Math.floor(((simLmstHour % 24) + 24) % 24);
   const activeSolOffset = simLmstHour >= 24 ? 24 : 0;
+
+  // Build normalized 24H temperature & wind SVG curve paths
+  const hourlyChart = (() => {
+    if (!weather || weather.hourly.length < 2) return null;
+    const W = 384;
+    const H = 92;
+    const padX = 6;
+    const padY = 8;
+    const innerW = W - padX * 2;
+    const innerH = H - padY * 2;
+    const temps = weather.hourly.map((h) => kelvinToC(h.tempK));
+    const winds = weather.hourly.map((h) => h.windSpeedMps);
+
+    const minT = Math.min(-100, limits.minAirTempC - 8, ...temps);
+    const maxT = Math.max(5, limits.minAirTempC + 10, ...temps);
+    const spanT = Math.max(10, maxT - minT);
+
+    const maxW = Math.max(15, limits.maxWindSpeedMps * 1.15, ...winds);
+    const toX = (idx: number) => padX + (idx / (weather.hourly.length - 1)) * innerW;
+    const toTY = (t: number) => padY + innerH - ((t - minT) / spanT) * innerH;
+    const toWY = (w: number) => padY + innerH - (w / maxW) * innerH;
+
+    const tempPath = weather.hourly
+      .map(
+        (h, i) =>
+          `${i === 0 ? "M" : "L"}${toX(i).toFixed(1)},${toTY(kelvinToC(h.tempK)).toFixed(1)}`,
+      )
+      .join(" ");
+    const windPath = weather.hourly
+      .map(
+        (h, i) => `${i === 0 ? "M" : "L"}${toX(i).toFixed(1)},${toWY(h.windSpeedMps).toFixed(1)}`,
+      )
+      .join(" ");
+
+    const tempLimitY = toTY(limits.minAirTempC);
+    const windLimitY = toWY(limits.maxWindSpeedMps);
+    const daylightLeft = padX + (6 / 23) * innerW;
+    const daylightWidth = ((18 - 6) / 23) * innerW;
+    const cursorX = toX(Math.min(23, Math.max(0, activeHourInSol)));
+
+    return {
+      W,
+      H,
+      padX,
+      padY,
+      innerH,
+      tempPath,
+      windPath,
+      tempLimitY,
+      windLimitY,
+      daylightLeft,
+      daylightWidth,
+      cursorX,
+      minT: Math.min(...temps),
+      maxT: Math.max(...temps),
+      maxW: Math.max(...winds),
+    };
+  })();
+
+  const sourceTag = weather
+    ? weather.sourceType === "simulated"
+      ? "SIM"
+      : weather.sourceType === "hybrid"
+        ? "HYBRID"
+        : "NASA"
+    : "";
+
+  const provenanceTip = weather
+    ? [
+        weather.sourceLabel,
+        weather.realChannels.length > 0 ? `REAL: ${weather.realChannels.join(", ")}` : null,
+        weather.simulatedChannels.length > 0
+          ? `SIM: ${weather.simulatedChannels.join(", ")}`
+          : null,
+        weather.disclaimer ?? null,
+      ]
+        .filter(Boolean)
+        .join(" | ")
+    : "";
 
   return (
     <>
       <div className="panel-header">
         <h1 className="panel-title">Weather &amp; EVA</h1>
-        <p className="panel-desc">
-          Compare Mars atmospheric telemetry or simulated conditions against EVA suit sliders.
-        </p>
+        <p className="panel-desc">Suit limits vs Mars telemetry.</p>
         <div className="panel-rule" />
       </div>
 
@@ -205,8 +285,12 @@ export function WeatherPanel({
 
       {error && <div className="alert-box">{error}</div>}
 
+      {/* Compact graphical verdict + 5-check strip + hour telemetry */}
       {evaluation && weather && (
-        <div className={`wx-verdict-card ${evaStatusClass(evaluation.status)}`}>
+        <div
+          className={`wx-verdict-card ${evaStatusClass(evaluation.status)}`}
+          title={`${evaluation.summary}${provenanceTip ? ` — ${provenanceTip}` : ""}`}
+        >
           <div className="wx-verdict-top">
             <div className="wx-verdict-badge-wrap">
               <span className={`wx-status-pill ${evaStatusClass(evaluation.status)}`}>
@@ -214,147 +298,137 @@ export function WeatherPanel({
               </span>
               <span className="mono-value">SOL {weather.sol}</span>
             </div>
-            <span className="wx-meta-mono">
-              Ls {weather.lsDeg.toFixed(0)}° · {weather.terrestrialDate}
-            </span>
+
+            <div className="wx-verdict-right">
+              {sourceTag && (
+                <span
+                  className={`wx-source-chip ${weather.isSimulated ? "is-sim" : ""}`}
+                  title={provenanceTip}
+                >
+                  {sourceTag}
+                  {weather.realChannels.length > 0 && weather.simulatedChannels.length > 0
+                    ? " · MEDA+SIM"
+                    : ""}
+                </span>
+              )}
+              <span className="wx-meta-mono">Ls {weather.lsDeg.toFixed(0)}°</span>
+            </div>
           </div>
 
-          <p className="wx-verdict-summary">{evaluation.summary}</p>
+          <div className="wx-checks-strip">
+            {SLIDER_SPECS.map((spec) => {
+              const chk = checksById.get(spec.id);
+              const cls = chk ? evaStatusClass(chk.status) : "is-go";
+              return (
+                <div key={spec.id} className={`wx-check-pip ${cls}`} title={chk?.reason}>
+                  <span className="wx-check-dot" />
+                  <span>{spec.shortTag}</span>
+                </div>
+              );
+            })}
+          </div>
 
           <div className="wx-verdict-meta">
             <span>
-              EVAL ELEV {evaluation.evaluationElevationM.toFixed(0)} m
-              {hasSelectedRoute ? " · ROUTE MAX" : " · SITE"}
+              {evaluation.safeWindow.startLmst && evaluation.safeWindow.endLmst
+                ? `SAFE ${evaluation.safeWindow.startLmst}..${evaluation.safeWindow.endLmst} (${evaluation.safeWindow.durationHours.toFixed(0)}h)`
+                : "NO SAFE WINDOW"}
             </span>
             <span>
-              SAFE WINDOW{" "}
-              {evaluation.safeWindow.startLmst && evaluation.safeWindow.endLmst
-                ? `${evaluation.safeWindow.startLmst}..${evaluation.safeWindow.endLmst} · ${evaluation.safeWindow.durationHours.toFixed(1)} h`
-                : "NONE"}
+              ELEV {evaluation.evaluationElevationM.toFixed(0)}m{hasSelectedRoute ? " RTE" : ""}
             </span>
             {evaluation.estimatedRouteHours !== null && (
-              <span>WALK EST {evaluation.estimatedRouteHours.toFixed(2)} h</span>
+              <span>WALK {evaluation.estimatedRouteHours.toFixed(1)}h</span>
             )}
           </div>
         </div>
       )}
 
-      {selectedHourWeather && evaluation && (
-        <div className="wx-hour-card">
-          <div className="field-label-row" style={{ marginBottom: 6 }}>
-            <span className="value-label">SELECTED HOUR TELEMETRY</span>
-            <span className="wx-meta-mono">
-              SOL {selectedHourWeather.sol} · {selectedHourWeather.lmstLabel} LMST ·{" "}
-              {selectedHourWeather.isDaylight ? "DAYLIGHT" : "NIGHT"}
-            </span>
+      {selectedHourWeather && evaluation && weather && (
+        <div className="wx-telemetry-strip">
+          <div className="wx-tel-cell">
+            <span className="wx-tel-k">FLOOR {evaluation.floorElevationM.toFixed(0)}m</span>
+            <span className="wx-tel-v">{selectedHourWeather.floorTempC.toFixed(0)}°C</span>
+            <span className="wx-tel-s">{selectedHourWeather.floorPressurePa.toFixed(0)}Pa</span>
           </div>
-          <div className="readout-grid">
-            <div className="readout-card">
-              <span className="value-label">FLOOR {evaluation.floorElevationM.toFixed(0)} m</span>
-              <span className="mono-value">{selectedHourWeather.floorTempC.toFixed(1)} °C</span>
-              <span className="readout-sub">
-                {selectedHourWeather.floorPressurePa.toFixed(0)} Pa
-              </span>
-            </div>
-            <div className="readout-card">
-              <span className="value-label">
-                RIM {evaluation.evaluationElevationM.toFixed(0)} m
-              </span>
-              <span className="mono-value">{selectedHourWeather.rimTempC.toFixed(1)} °C</span>
-              <span className="readout-sub">{selectedHourWeather.rimPressurePa.toFixed(0)} Pa</span>
-            </div>
-            <div className="readout-card">
-              <span className="value-label">HOUR WIND</span>
-              <span className="mono-value">{selectedHourWeather.windSpeedMps.toFixed(1)} m/s</span>
-            </div>
-            <div className="readout-card">
-              <span className="value-label">HOUR UV</span>
-              <span className="mono-value">UV {selectedHourWeather.uvIndex.toFixed(1)}</span>
-            </div>
+          <div className="wx-tel-cell">
+            <span className="wx-tel-k">RIM {evaluation.evaluationElevationM.toFixed(0)}m</span>
+            <span className="wx-tel-v">{selectedHourWeather.rimTempC.toFixed(0)}°C</span>
+            <span className="wx-tel-s">{selectedHourWeather.rimPressurePa.toFixed(0)}Pa</span>
+          </div>
+          <div className="wx-tel-cell">
+            <span className="wx-tel-k">WIND</span>
+            <span className="wx-tel-v">{selectedHourWeather.windSpeedMps.toFixed(1)}m/s</span>
+            <span className="wx-tel-s">{weather.wind.compassPoint}</span>
+          </div>
+          <div className="wx-tel-cell">
+            <span className="wx-tel-k">UV / τ</span>
+            <span className="wx-tel-v">UV {selectedHourWeather.uvIndex.toFixed(1)}</span>
+            <span className="wx-tel-s">τ {weather.dustOpacityTau.toFixed(2)}</span>
           </div>
         </div>
       )}
 
-      {weather && (
-        <div className={weather.isSimulated ? "alert-box" : "readout-card"}>
-          <div className="field-label-row" style={{ marginBottom: 4 }}>
-            <span className="value-label">
-              {weather.sourceType === "simulated"
-                ? "SIMULATED WEATHER DATA"
-                : weather.sourceType === "hybrid"
-                  ? "HYBRID TELEMETRY"
-                  : "REAL NASA TELEMETRY"}
-            </span>
-            <span className="wx-meta-mono">{weather.site.name.toUpperCase()}</span>
-          </div>
-          <span
-            className="readout-sub"
-            style={{ display: "block", color: "var(--color-text-muted)" }}
-          >
-            {weather.sourceLabel}
-          </span>
-          {weather.realChannels.length > 0 && (
-            <span className="readout-sub" style={{ display: "block", marginTop: 4 }}>
-              REAL: {weather.realChannels.join(", ")}
-            </span>
-          )}
-          {weather.simulatedChannels.length > 0 && (
-            <span className="readout-sub" style={{ display: "block", marginTop: 2 }}>
-              SIMULATED: {weather.simulatedChannels.join(", ")}
-            </span>
-          )}
-          {weather.disclaimer && (
-            <span className="readout-sub" style={{ display: "block", marginTop: 4 }}>
-              {weather.disclaimer}
-            </span>
-          )}
-        </div>
-      )}
-
-      {weather && evaluation && (
-        <div className="readout-grid">
-          <div className="readout-card">
-            <span className="value-label">AIR TEMP</span>
-            <span className="mono-value">
-              {minC?.toFixed(0)}..{maxC?.toFixed(0)} °C
-            </span>
-            <span className="readout-sub">
-              AVG {avgC?.toFixed(1)} °C · {weather.airTemp.avgK.toFixed(0)} K
-            </span>
-          </div>
-          <div className="readout-card">
-            <span className="value-label">WIND GUST</span>
-            <span className="mono-value">
-              {weather.wind.maxMps.toFixed(1)} m/s {weather.wind.compassPoint}
-            </span>
-            <span className="readout-sub">AVG {weather.wind.avgMps.toFixed(1)} m/s</span>
-          </div>
-          <div className="readout-card">
-            <span className="value-label">RIM PRESSURE</span>
-            <span className="mono-value">{evaluation.rimPressureMinPa.toFixed(0)} Pa MIN</span>
-            <span className="readout-sub">
-              SWING {weather.pressure.swingPa.toFixed(0)} Pa · REF{" "}
-              {weather.pressure.avgPa.toFixed(0)} Pa
-            </span>
-          </div>
-          <div className="readout-card">
-            <span className="value-label">DUST &amp; UV</span>
-            <span className="mono-value">TAU {weather.dustOpacityTau.toFixed(2)}</span>
-            <span className="readout-sub">
-              UV {weather.uvIndexMax.toFixed(1)} · {weather.solarIrradiancePeakWm2.toFixed(0)} W/m²
-            </span>
-          </div>
-        </div>
-      )}
-
-      {weather && (
+      {/* 24H Diurnal SVG Graph + Interactive Hour Selector */}
+      {weather && hourlyChart && (
         <div className="wx-hourly-card">
-          <div className="field-label-row" style={{ marginBottom: 6 }}>
-            <span className="value-label">SOL 24H WINDOW</span>
+          <div className="field-label-row" style={{ marginBottom: 4 }}>
+            <span className="value-label">24H DIURNAL</span>
             <span className="wx-meta-mono">
-              {weather.daylight.sunriseLmst}..{weather.daylight.sunsetLmst} LMST
+              <span style={{ color: "#38bdf8" }}>
+                {hourlyChart.minT.toFixed(0)}..{hourlyChart.maxT.toFixed(0)}°C
+              </span>
+              {" · "}
+              <span style={{ color: "#eab308" }}>MAX {hourlyChart.maxW.toFixed(1)}m/s</span>
             </span>
           </div>
+
+          <svg
+            viewBox={`0 0 ${hourlyChart.W} ${hourlyChart.H}`}
+            className="wx-hourly-svg"
+            role="img"
+            aria-label="24-hour temperature and wind curves"
+          >
+            <title>24-hour Mars diurnal temperature and wind chart</title>
+            <rect
+              x={hourlyChart.daylightLeft}
+              y={hourlyChart.padY}
+              width={hourlyChart.daylightWidth}
+              height={hourlyChart.innerH}
+              fill="rgba(255, 248, 243, 0.04)"
+            />
+            <line
+              x1={hourlyChart.padX}
+              y1={hourlyChart.tempLimitY}
+              x2={hourlyChart.W - hourlyChart.padX}
+              y2={hourlyChart.tempLimitY}
+              stroke="#38bdf8"
+              strokeOpacity="0.5"
+              strokeDasharray="3 3"
+              strokeWidth="1"
+            />
+            <line
+              x1={hourlyChart.padX}
+              y1={hourlyChart.windLimitY}
+              x2={hourlyChart.W - hourlyChart.padX}
+              y2={hourlyChart.windLimitY}
+              stroke="#eab308"
+              strokeOpacity="0.45"
+              strokeDasharray="2 3"
+              strokeWidth="1"
+            />
+            <path d={hourlyChart.windPath} fill="none" stroke="#eab308" strokeWidth="1.4" />
+            <path d={hourlyChart.tempPath} fill="none" stroke="#38bdf8" strokeWidth="1.7" />
+            <line
+              x1={hourlyChart.cursorX}
+              y1={hourlyChart.padY}
+              x2={hourlyChart.cursorX}
+              y2={hourlyChart.H - hourlyChart.padY}
+              stroke="#de233d"
+              strokeWidth="1.5"
+            />
+          </svg>
+
           <div className="wx-hourly-bars" role="img" aria-label="24-hour Martian sol EVA window">
             {weather.hourly.map((hour) => {
               const tempC = kelvinToC(hour.tempK);
@@ -362,7 +436,7 @@ export function WeatherPanel({
               const passWind = hour.windSpeedMps <= limits.maxWindSpeedMps;
               const barOk = hour.isDaylight && passTemp && passWind;
               const barWarn = hour.isDaylight && (!passTemp || !passWind);
-              const heightPct = Math.max(14, Math.min(100, ((tempC + 130) / 150) * 100));
+              const heightPct = Math.max(18, Math.min(100, ((tempC + 130) / 150) * 100));
               const stateCls = barOk ? "is-go" : barWarn ? "is-degraded" : "is-night";
               const isSelectedHour = hour.lmstHour === activeHourInSol;
 
@@ -381,11 +455,11 @@ export function WeatherPanel({
             })}
           </div>
           <div className="wx-hourly-axis">
-            <span>00</span>
-            <span>06</span>
-            <span>12</span>
-            <span>18</span>
-            <span>23 LMST</span>
+            <span>00:00</span>
+            <span>06:00</span>
+            <span>12:00</span>
+            <span>18:00</span>
+            <span>23:00</span>
           </div>
         </div>
       )}
@@ -400,7 +474,7 @@ export function WeatherPanel({
       <div className="divider" />
 
       <div className="wx-sliders-header">
-        <span className="value-label">EVA SUIT &amp; WEATHER LIMITS</span>
+        <span className="value-label">SUIT THRESHOLDS</span>
         <button type="button" className="compact-btn" onClick={onResetLimits}>
           RESET
         </button>
@@ -461,7 +535,9 @@ export function WeatherPanel({
               <div className="wx-slider-foot">
                 <span>{spec.minCaption}</span>
                 {check ? (
-                  <span className="wx-check-reason">{check.reason}</span>
+                  <span className="wx-check-reason" title={check.reason}>
+                    {check.reason}
+                  </span>
                 ) : (
                   <span>{spec.maxCaption}</span>
                 )}
