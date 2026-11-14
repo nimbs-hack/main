@@ -34,13 +34,14 @@ import { cumulative, distance } from '../data/geo'
 import { buildProfile, slopeLevel, summarize } from '../data/route-profile'
 import { DEFAULT_LIMITS, EMPTY_PLAN, assess, insertWaypoint, moveVertex, planPath, removeWaypoint } from '../data/plan'
 import { addPlanOverlay } from './plan-overlay'
-import { areaStats, buildGrid, gridSlopes, routeOptions, sameReason } from '../data/route-options'
+import { areaStats, buildGrid, routeOptions, sameReason } from '../data/route-options'
 import RouteOptions from './RouteOptions'
 import { formatDistance } from './RouteProfile'
 import LayerSwitcher from './LayerSwitcher'
 import MapTools, { ToolButtons } from './MapTools'
 import { sampleRaster } from '../data/raster-sample'
-import { sampleSurface } from '../data/terrain-sample'
+import { sampleElevations, sampleSurface } from '../data/terrain-sample'
+import { loadRouteField } from '../data/route-field'
 import SciencePanel from './SciencePanel'
 import RouteProfile from './RouteProfile'
 import PointReadout from './PointReadout'
@@ -691,37 +692,32 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       setRouteField({ status: 'idle' })
       return
     }
-    let cancelled = false
+    const controller = new AbortController()
     setRouteField({ status: 'loading' })
     const grid = buildGrid(routeStart, routeTarget)
+    const level = distance(routeStart, routeTarget) > 20_000 ? 12 : 14
     const night = SAMPLED_RASTERS.find((layer) => layer.id === 'themis-night')
-    Promise.all([
-      sampleSurface(terrainProvider, grid.points, distance(routeStart, routeTarget) > 20_000 ? 12 : 14),
-      night ? sampleRaster(night, grid.points) : grid.points.map(() => null),
-    ]).then(([surface, thermal]) => {
-      if (cancelled) return
-      const elevation = surface.map((s) => s.elevation)
-      if (!elevation.some((e) => e !== null)) return setRouteField({ status: 'error' })
-      const coarse = gridSlopes(grid, elevation)
-      setRouteField({
-        status: 'ready',
-        grid,
-        field: { elevation, slope: surface.map((s, i) => s.slope ?? coarse[i]), thermal },
-      })
-    }, () => {
-      if (!cancelled) setRouteField({ status: 'error' })
+    loadRouteField(grid, {
+      elevations: () => sampleElevations(terrainProvider, grid.points, level),
+      surface: () => sampleSurface(terrainProvider, grid.points, level),
+      thermal: () => night ? sampleRaster(night, grid.points) : Promise.resolve(grid.points.map(() => null)),
+    }, (result) => {
+      const known = result.field.elevation.some((elevation) => elevation !== null)
+      setRouteField(known ? { status: 'ready', ...result } : { status: 'error' })
+    }, controller.signal).catch(() => {
+      if (!controller.signal.aborted) setRouteField({ status: 'error' })
     })
-    return () => { cancelled = true }
+    return () => controller.abort()
   }, [terrainProvider, routeStart, routeTarget, routeAttempt])
 
   const routePlan = useMemo(
-    () => (routeField.status === 'ready' ? routeOptions(routeField.grid, routeField.field, limits) : null),
+    () => (routeField.status === 'ready' ? routeOptions(routeField.grid, routeField.field, limits, routeField.thermalPending) : null),
     [routeField, limits],
   )
   const options = routePlan?.options ?? []
   // Why every strategy found the same path, shown when they all agree.
   const allSame = options.length > 1 && options.slice(1).every((option) => option.sameAs)
-  const sameNote = allSame ? sameReason(areaStats(routeField.field)) ?? 'All four strategies agree here.' : null
+  const sameNote = allSame && !routeField.thermalPending && !routeField.slopesPending ? sameReason(areaStats(routeField.field)) ?? 'All four strategies agree here.' : null
   const chosenId = chosenRoute && chosenRoute.waypoints === plan.waypoints ? chosenRoute.id : null
   onLineRef.current = (hit) => {
     if (hit?.pick) {
@@ -969,6 +965,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
             <RouteOptions
               status={routePlan?.status === 'blocked' ? 'blocked' : routeField.status}
               needs={routePlan?.status === 'blocked' ? routePlan.needs : null}
+              thermalPending={routeField.thermalPending}
               onRaise={(slope) => setLimits((current) => ({ ...current, slope }))}
               options={options}
               chosen={chosenId}

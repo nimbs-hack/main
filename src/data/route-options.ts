@@ -407,7 +407,7 @@ function summarize(grid: Grid, field: Field, nodes: number[], limits: Limits, st
  * from both, then Detour through a corridor the others don't use. A route
  * that overlaps an earlier one too much comes back marked `sameAs`.
  */
-export function routeOptions(grid: Grid, field: Field, limits: Limits): RoutePlan {
+export function routeOptions(grid: Grid, field: Field, limits: Limits, thermalPending = false): RoutePlan {
   const limit = Math.max(0.5, Math.min(89, limits.slope))
   const meta = (id: Strategy) => STRATEGIES.find((s) => s.id === id)!
   const fastPath = findPath(grid, field, 'fast', limit)
@@ -430,6 +430,9 @@ export function routeOptions(grid: Grid, field: Field, limits: Limits): RoutePla
   }
 
   consider('flat', findPath(grid, field, 'flat', limit), KEEP_FLAT)
+  // Fast and Flat need no infrared image. Detour waits because its corridor
+  // penalty includes the Thermal route, when one exists.
+  if (thermalPending) return { status: 'ok', options }
   const risk = thermalRisk(field)
   if (risk) consider('thermal', findPath(grid, field, 'thermal', limit, { risk }), KEEP_THERMAL)
   const penalty = corridorPenalty(grid, found.map((f) => f.path))

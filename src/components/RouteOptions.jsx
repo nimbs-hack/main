@@ -8,7 +8,7 @@ import './route-options.css'
  * map. Hovering a row brightens its dashed line on the map. Picking one
  * turns its turn points into the plan's waypoints. Times are one way.
  */
-export default function RouteOptions({ status, options, chosen, hover, limit, note, needs, onHover, onChoose, onRaise, onRetry }) {
+export default function RouteOptions({ status, thermalPending, options, chosen, hover, limit, note, needs, onHover, onChoose, onRaise, onRetry }) {
   if (status === 'loading') return <p className="routes routes--note" role="status">Finding routes…</p>
   if (status === 'error') {
     return (
@@ -56,6 +56,7 @@ export default function RouteOptions({ status, options, chosen, hover, limit, no
           </button>
         </li>
       ))}
+      {thermalPending && <li className="routes__why" role="status">Loading night IR for Thermal and Detour…</li>}
       {note && <li className="routes__why">{note}</li>}
     </ul>
   )

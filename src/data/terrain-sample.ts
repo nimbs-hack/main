@@ -27,7 +27,9 @@ const samplers = new WeakMap<TerrainProvider, TerrainProvider>()
 export function samplingProvider(provider: TerrainProvider): TerrainProvider {
   const existing = samplers.get(provider)
   if (existing) return existing
-  const tiles = new Map<string, Promise<TerrainData>>()
+  const tiles = new Map<string, { data: TerrainData; bytes: number }>()
+  const pending = new Map<string, Promise<TerrainData>>()
+  let usedBytes = 0
   const sampler: TerrainProvider = Object.create(provider)
   sampler.requestTileGeometry = (x, y, level) => {
     // A single-layer Cesium provider still downloads tiles explicitly marked
@@ -40,18 +42,33 @@ export function samplingProvider(provider: TerrainProvider): TerrainProvider {
     if (hit) {
       tiles.delete(key)
       tiles.set(key, hit)
-      return hit
+      return Promise.resolve(hit.data)
     }
+    const active = pending.get(key)
+    if (active) return active
     const request = provider.requestTileGeometry(x, y, level)
     if (!request) return undefined
-    const pending = request.then(indexTerrainHeights).catch((error: unknown) => {
-      if (tiles.get(key) === pending) tiles.delete(key)
-      throw error
-    })
-    tiles.set(key, pending)
-    // Keep a bounded working set across the profile, tools and route edits.
-    if (tiles.size > 64) tiles.delete(tiles.keys().next().value!)
-    return pending
+    const job = request.then(indexTerrainHeights).then((data) => {
+      // Count each backing buffer once. Allow room for the triangle index and
+      // object overhead as well as the decoded mesh. A 10 km grid can use 300
+      // tiles, so a small tile-count limit discards data still in active use.
+      const buffers = new Set(Object.values(data).filter(ArrayBuffer.isView).map((view) => view.buffer))
+      const bytes = 4096 + [...buffers].reduce((sum, buffer) => sum + buffer.byteLength, 0) * 4
+      if (bytes <= 64 * 1024 * 1024) {
+        tiles.set(key, { data, bytes })
+        usedBytes += bytes
+        while (usedBytes > 64 * 1024 * 1024 || tiles.size > 2048) {
+          const oldest = tiles.keys().next().value!
+          usedBytes -= tiles.get(oldest)!.bytes
+          tiles.delete(oldest)
+        }
+      }
+      return data
+    }).finally(() => pending.delete(key))
+    // Pending requests have their own map. Evicting a completed tile must not
+    // duplicate a download that another route or the profile is still using.
+    pending.set(key, job)
+    return job
   }
   samplers.set(provider, sampler)
   return sampler
@@ -86,4 +103,21 @@ export async function sampleSurface(provider: TerrainProvider, points: LatLon[],
     samples = [...samples]
   }
   return samples
+}
+
+// The search uses elevation differences between grid nodes. Sample those
+// first; the surrounding slope probes only explain why alternatives agree.
+export async function sampleElevations(provider: TerrainProvider, points: LatLon[], level = 14) {
+  const elevations: (number | null)[] = points.map(() => null)
+  for (let current = level; current >= 8; current -= 2) {
+    const missing = elevations.flatMap((height, i) => height === null ? [i] : [])
+    if (!missing.length) break
+    const positions = missing.map((i) => Cartographic.fromDegrees(points[i][1], points[i][0]))
+    const sampled = await sampleTerrain(samplingProvider(provider), current, positions).catch(() => [])
+    missing.forEach((index, i) => {
+      const height = sampled[i]?.height
+      if (Number.isFinite(height)) elevations[index] = height - DATUM_OFFSET
+    })
+  }
+  return elevations
 }
