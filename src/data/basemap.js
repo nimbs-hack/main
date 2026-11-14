@@ -13,8 +13,3 @@ export const LOCAL_MAX_ZOOM = 3
 export const remoteTileUrl = (z, y, x) => `${TREK}/${z}/${y}/${x}.jpg`
 
 export const localTilePath = (z, y, x) => `tiles/viking/${z}/${y}/${x}.jpg`
-
-// Leaflet calls function-valued template keys with the tile coordinates, so
-// a layer with url "{src}" and this as its `src` option picks per tile.
-export const tileSource = ({ x, y, z }) =>
-  z <= LOCAL_MAX_ZOOM ? import.meta.env.BASE_URL + localTilePath(z, y, x) : remoteTileUrl(z, y, x)

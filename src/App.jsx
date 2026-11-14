@@ -1,17 +1,18 @@
 import { useState } from 'react'
 import { SITES } from './data/sites'
 import TopBar from './components/TopBar'
-import MarsMap from './components/MarsMap'
+import MarsGlobe from './components/MarsGlobe'
 
 const STATUS_TEXT = {
-  loading: { system: 'Acquiring', link: 'Link ok', state: 'Loading tiles' },
-  ready: { system: 'Nominal', link: 'Link ok', state: 'Ready' },
-  error: { system: 'Degraded', link: 'Link degraded', state: 'Some tiles failed to load' },
+  loading: 'Loading tiles',
+  ready: 'Tiles loaded',
+  error: 'Some tiles failed to load',
 }
 
 export default function App() {
   const [siteId, setSiteId] = useState(null)
   const [status, setStatus] = useState('loading')
+  const [imagerySource, setImagerySource] = useState('V01')
 
   const site = SITES.find((s) => s.id === siteId) ?? null
   const text = STATUS_TEXT[status]
@@ -21,14 +22,11 @@ export default function App() {
 
   return (
     <div className="console">
-      <TopBar system={text.system} status={status} />
-      <MarsMap site={site} onSite={toggleSite} onStatus={setStatus} />
+      <TopBar />
+      <MarsGlobe site={site} onSite={toggleSite} onStatus={setStatus} onImagerySource={setImagerySource} />
       <footer className="statusbar">
-        <span className={`dot dot--${status}`} aria-hidden="true" />
-        <span role="status">
-          {text.link} <span className="sep">|</span> {text.state}
-        </span>
-        <span className="statusbar__credit">Imagery NASA / JPL-Caltech / USGS</span>
+        <span role="status">{text}</span>
+        <span className="statusbar__credit">CTX {imagerySource} · NASA / JPL / USGS / MSSS / The Murray Lab / Esri · Terrain NASA Mars Trek</span>
       </footer>
     </div>
   )

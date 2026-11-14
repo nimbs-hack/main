@@ -5,10 +5,13 @@ export function formatLatLon(lat, lon) {
   return `${Math.abs(lat).toFixed(3)}°${hemisphere}  ${east.toFixed(3)}°E`
 }
 
-const KM_PER_DEGREE = (2 * Math.PI * 3389.5) / 360
-const DEGREES_PER_PIXEL_AT_ZOOM_0 = 360 / 512
+// Elevation relative to the MOLA areoid, which is Mars' "sea level".
+export function formatElevation(meters) {
+  const rounded = Math.round(meters)
+  return `${rounded > 0 ? '+' : rounded < 0 ? '−' : ''}${Math.abs(rounded).toLocaleString('en-US')} m`
+}
 
-export function formatScale(zoom) {
-  const km = (KM_PER_DEGREE * DEGREES_PER_PIXEL_AT_ZOOM_0) / 2 ** zoom
-  return km >= 1 ? `${km.toFixed(1)} km/px` : `${Math.round(km * 1000)} m/px`
+// Camera height above the surface reference.
+export function formatAltitude(meters) {
+  return meters >= 10_000 ? `${Math.round(meters / 1000).toLocaleString('en-US')} km` : `${Math.round(meters)} m`
 }

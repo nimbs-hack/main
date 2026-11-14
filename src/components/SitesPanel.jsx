@@ -10,7 +10,7 @@ export default function SitesPanel({ site, onSite }) {
     <div className={`sites${open ? ' is-open' : ''}`}>
       <div className="sites__panel" id="sites-panel" inert={!open}>
         <h2 className="sites__title">Landing sites</h2>
-        {SITES.map((s, i) => (
+        {SITES.map((s) => (
           <button
             key={s.id}
             type="button"
@@ -18,7 +18,6 @@ export default function SitesPanel({ site, onSite }) {
             aria-pressed={s.id === site?.id}
             onClick={() => onSite(s.id)}
           >
-            <span className="nav-button__index">{String(i + 1).padStart(2, '0')}</span>
             <span className="nav-button__label">{s.name}</span>
             <span className="nav-button__meta">{s.landed}</span>
             <span className="nav-button__arrow" aria-hidden="true">
