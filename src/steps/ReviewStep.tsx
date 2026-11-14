@@ -1,6 +1,6 @@
 import type { Catalog, MissionPlan, Planned } from '../api'
-import { kcal, kwh, num, range } from '../format'
-import { Button, Readout } from '../components/controls'
+import { kcal, kwh, num, range } from '../numbers'
+import { Readout } from '../components/controls'
 import { FactRow } from './parts'
 
 const SECONDS_PER_DAY = 86400
@@ -39,7 +39,9 @@ function CrewNeeds({
             <FactRow label="Oxygen used">{num(total.oxygenUsedKg, 1)} kg</FactRow>
             <FactRow label="Oxygen to supply after recycling">{num(total.oxygenSupplyKg, 1)} kg</FactRow>
             <FactRow label="Carbon dioxide to remove">{num(total.co2Kg, 1)} kg</FactRow>
-            <FactRow label="Body heat to reject, average">{num((total.heatMJ * 1e6) / (days * SECONDS_PER_DAY))} W</FactRow>
+            <FactRow label="Body heat to reject, average">
+              {num((total.heatMJ * 1e6) / (days * SECONDS_PER_DAY))} W
+            </FactRow>
             <FactRow label="Electricity, life support and equipment">{num(kwh(total.electricityMJ))} kWh</FactRow>
             <FactRow label="EVA">{num(total.evaHours, 1)} h</FactRow>
             <FactRow label="Tasks assigned, outside">{num(taskHours.eva, 1)} h</FactRow>
@@ -78,10 +80,16 @@ function CrewNeeds({
 export function ReviewStep({
   catalog,
   planned,
+  stale,
+  onSave,
   onExportJson,
 }: {
   catalog: Catalog
   planned: Planned
+  // The numbers are from the last mission the planner accepted.
+  stale: boolean
+  // Null while the mission cannot be saved.
+  onSave: (() => void) | null
   onExportJson: () => void
 }) {
   const { plan, cautions: warnings } = planned
@@ -91,121 +99,161 @@ export function ReviewStep({
 
   return (
     <>
-      {warnings.length > 0 ? (
-        <ul className="cautions" aria-label="Cautions">
-          {warnings.map((warning) => (
-            <li key={warning}>
-              <b>Caution</b>
-              {warning}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="note">Nothing to fix. Every task fits the EVA hours of its phase.</p>
-      )}
-
-      <section>
-        <h2 className="planner__title">To supply, {plan.marginPercent}% margin included</h2>
-        <div className="review__grid">
-          <Readout label="Food, packaged" value={`${num(provision.foodKg)} kg`} sub={`${num(kcal(provision.foodEnergyMJ) / 1e6, 2)} Gcal`} />
-          <Readout label="Water" value={`${num(provision.waterSupplyKg)} kg`} sub={recycled(total.waterUsedKg, total.waterSupplyKg)} />
-          <Readout label="Oxygen" value={`${num(provision.oxygenSupplyKg)} kg`} sub={recycled(total.oxygenUsedKg, total.oxygenSupplyKg)} />
-          <Readout
-            label="Electricity"
-            value={`${num(kwh(provision.electricityMJ))} kWh`}
-            sub={`${num((total.electricityMJ * 1000) / seconds, 2)} kW average`}
-          />
-        </div>
-      </section>
-
-      <section>
-        <h2 className="planner__title">Loads on the vehicle</h2>
-        <dl className="facts">
-          <dt>Carbon dioxide to remove</dt>
-          <dd>{num(total.co2Kg)} kg</dd>
-          <dt>Body heat to reject, average</dt>
-          <dd>{num((total.heatMJ * 1e6) / seconds)} W</dd>
-          <dt>EVA, all crew</dt>
-          <dd>{num(total.evaHours)} h</dd>
-        </dl>
-      </section>
-
-      <section>
-        <h2 className="planner__title">To supply by phase, before margin</h2>
-        <table className="table">
-          <thead>
-            <tr>
-              <th scope="col">Phase</th>
-              <th scope="col">Food kg</th>
-              <th scope="col">Water kg</th>
-              <th scope="col">Oxygen kg</th>
-            </tr>
-          </thead>
-          <tbody>
-            {plan.phases.map((phase, i) => (
-              <tr key={i}>
-                <th scope="row">
-                  {i + 1} {phase.kind}
-                </th>
-                <td>{num(phase.total.foodKg)}</td>
-                <td>{num(phase.total.waterSupplyKg)}</td>
-                <td>{num(phase.total.oxygenSupplyKg)}</td>
-              </tr>
+      <div className="step">
+        {warnings.length > 0 ? (
+          <ul className="cautions" aria-label="Cautions">
+            {warnings.map((warning) => (
+              <li key={warning}>
+                <b>Caution</b>
+                {warning}
+              </li>
             ))}
-          </tbody>
-        </table>
-      </section>
+          </ul>
+        ) : (
+          <p className="note">Nothing to fix. Every task fits the EVA hours of its phase.</p>
+        )}
 
-      <section>
-        <h2 className="planner__title">By crew member</h2>
-        <div>
-          {plan.crew.map((member, i) => (
-            <CrewNeeds key={i} member={member} days={plan.days} rates={rates} />
-          ))}
+        <section>
+          <h2 className="planner__title">To supply, {plan.marginPercent}% margin included</h2>
+          <div className="review__grid">
+            <Readout
+              label="Food, packaged"
+              value={`${num(provision.foodKg)} kg`}
+              sub={`${num(kcal(provision.foodEnergyMJ) / 1e6, 2)} Gcal`}
+            />
+            <Readout
+              label="Water"
+              value={`${num(provision.waterSupplyKg)} kg`}
+              sub={recycled(total.waterUsedKg, total.waterSupplyKg)}
+            />
+            <Readout
+              label="Oxygen"
+              value={`${num(provision.oxygenSupplyKg)} kg`}
+              sub={recycled(total.oxygenUsedKg, total.oxygenSupplyKg)}
+            />
+            <Readout
+              label="Electricity"
+              value={`${num(kwh(provision.electricityMJ))} kWh`}
+              sub={`${num((total.electricityMJ * 1000) / seconds, 2)} kW average`}
+            />
+          </div>
+        </section>
+
+        <section>
+          <h2 className="planner__title">Loads on the vehicle</h2>
+          <dl className="facts">
+            <dt>Carbon dioxide to remove</dt>
+            <dd>{num(total.co2Kg)} kg</dd>
+            <dt>Body heat to reject, average</dt>
+            <dd>{num((total.heatMJ * 1e6) / seconds)} W</dd>
+            <dt>EVA, all crew</dt>
+            <dd>{num(total.evaHours)} h</dd>
+          </dl>
+        </section>
+
+        <section>
+          <h2 className="planner__title">To supply by phase, before margin</h2>
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Phase</th>
+                <th scope="col">Food kg</th>
+                <th scope="col">Water kg</th>
+                <th scope="col">Oxygen kg</th>
+              </tr>
+            </thead>
+            <tbody>
+              {plan.phases.map((phase, i) => (
+                <tr key={i}>
+                  <th scope="row">
+                    {i + 1} {phase.kind}
+                  </th>
+                  <td>{num(phase.total.foodKg)}</td>
+                  <td>{num(phase.total.waterSupplyKg)}</td>
+                  <td>{num(phase.total.oxygenSupplyKg)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+
+        <section>
+          <h2 className="planner__title">By crew member</h2>
+          <div>
+            {plan.crew.map((member, i) => (
+              <CrewNeeds key={i} member={member} days={plan.days} rates={rates} />
+            ))}
+          </div>
+          <p className="note">
+            Electricity here is each person's share of life support and crew equipment. Vehicle base power is in the
+            mission total only.
+          </p>
+        </section>
+
+        <section>
+          <h2 className="planner__title">Mission file</h2>
+          <dl className="facts">
+            <dt>Size</dt>
+            <dd>{num(planned.fileBytes)} bytes</dd>
+          </dl>
+        </section>
+
+        <details className="details">
+          <summary>How these numbers are worked out</summary>
+          <dl className="facts">
+            <dt>Food energy per person-day</dt>
+            <dd>DRI equation</dd>
+            <dt>Added per EVA hour</dt>
+            <dd>{rates.evaFoodKcalPerHour} kcal</dd>
+            <dt>Food, packaged, per 1,000 kcal</dt>
+            <dd>{num(rates.foodKgPer1000Kcal ?? NaN, 2)} kg</dd>
+            <dt>Oxygen breathed per 1,000 kcal</dt>
+            <dd>{num(rates.oxygenKgPer1000Kcal ?? NaN, 3)} kg</dd>
+            <dt>Carbon dioxide per 1,000 kcal</dt>
+            <dd>{num(rates.co2KgPer1000Kcal ?? NaN, 3)} kg</dd>
+            <dt>Drinking and food water per person-day</dt>
+            <dd>{rates.potableWaterKgPerDay} kg or more</dd>
+            <dt>Drinking water per EVA hour</dt>
+            <dd>{rates.evaDrinkKgPerHour} kg</dd>
+            <dt>Suit cooling water lost per EVA hour</dt>
+            <dd>{rates.evaCoolingWaterKgPerHour} kg</dd>
+            <dt>Suit oxygen lost per EVA hour</dt>
+            <dd>{rates.evaOxygenLossKgPerHour} kg</dd>
+          </dl>
+          <p className="note">
+            Rates are from NASA's life support baseline document, NASA-STD-3001 and the 2020 exploration nutrition
+            requirements. Recycling, EVA hours and power are the phase settings in step 3, and you can change every one
+            of them. The planner's README lists each source and what is assumed.
+          </p>
+        </details>
+      </div>
+
+      <footer className="plan__dock">
+        <div className={`plan__verdict${stale || warnings.length > 0 ? ' is-caution' : ' is-go'}`} role="status">
+          <strong>{stale ? 'Stale' : warnings.length > 0 ? 'Caution' : 'Ready'}</strong>
+          <span>
+            {stale
+              ? 'From the last mission the planner accepted'
+              : warnings.length > 0
+                ? `${warnings.length} to look at before saving`
+                : `${num(planned.fileBytes)} byte mission file`}
+          </span>
         </div>
-        <p className="note">
-          Electricity here is each person's share of life support and crew equipment. Vehicle base power is
-          in the mission total only.
-        </p>
-      </section>
-
-      <section>
-        <h2 className="planner__title">Mission file</h2>
-        <dl className="facts">
-          <dt>Size</dt>
-          <dd>{num(planned.fileBytes)} bytes</dd>
-        </dl>
-        <Button onClick={onExportJson}>Export as JSON instead</Button>
-      </section>
-
-      <details className="details">
-        <summary>How these numbers are worked out</summary>
-        <dl className="facts">
-          <dt>Food energy per person-day</dt>
-          <dd>DRI equation</dd>
-          <dt>Added per EVA hour</dt>
-          <dd>{rates.evaFoodKcalPerHour} kcal</dd>
-          <dt>Food, packaged, per 1,000 kcal</dt>
-          <dd>{num(rates.foodKgPer1000Kcal ?? NaN, 2)} kg</dd>
-          <dt>Oxygen breathed per 1,000 kcal</dt>
-          <dd>{num(rates.oxygenKgPer1000Kcal ?? NaN, 3)} kg</dd>
-          <dt>Carbon dioxide per 1,000 kcal</dt>
-          <dd>{num(rates.co2KgPer1000Kcal ?? NaN, 3)} kg</dd>
-          <dt>Drinking and food water per person-day</dt>
-          <dd>{rates.potableWaterKgPerDay} kg or more</dd>
-          <dt>Drinking water per EVA hour</dt>
-          <dd>{rates.evaDrinkKgPerHour} kg</dd>
-          <dt>Suit cooling water lost per EVA hour</dt>
-          <dd>{rates.evaCoolingWaterKgPerHour} kg</dd>
-          <dt>Suit oxygen lost per EVA hour</dt>
-          <dd>{rates.evaOxygenLossKgPerHour} kg</dd>
-        </dl>
-        <p className="note">
-          Rates are from NASA's life support baseline document, NASA-STD-3001 and the 2020 exploration
-          nutrition requirements. Recycling, EVA hours and power are the phase settings in step 3, and
-          you can change every one of them. The planner's README lists each source and what is assumed.
-        </p>
-      </details>
+        <div className="plan__actions">
+          <button type="button" className="plan__button" disabled={!onSave} onClick={onExportJson}>
+            Export JSON
+          </button>
+          <button
+            type="button"
+            className="plan__button plan__button--primary"
+            disabled={!onSave}
+            onClick={onSave ?? undefined}
+            title="Ctrl+S"
+          >
+            Save mission file
+          </button>
+        </div>
+      </footer>
     </>
   )
 }

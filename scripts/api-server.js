@@ -78,8 +78,8 @@ export function mapTileProxy() {
   let stop
   async function configure(server, options) {
     const api = await startAPI()
-    stop = api.stop
     options.proxy['/api'].target = api.url
+    return api.stop
   }
   return {
     name: 'go-map-tile-proxy',
@@ -87,8 +87,28 @@ export function mapTileProxy() {
       server: { proxy: { '/api': { target: 'http://127.0.0.1:1' } } },
       preview: { proxy: { '/api': { target: 'http://127.0.0.1:1' } } },
     }),
-    configureServer: (server) => configure(server, server.config.server),
-    configurePreviewServer: (server) => configure(server, server.config.preview),
+    configureServer: async (server) => {
+      const stopAPI = await configure(server, server.config.server)
+      const apiRoot = join(root, 'apps/api')
+      let restartTimer
+      const onChange = (event, file) => {
+        if (!['add', 'change', 'unlink'].includes(event)) return
+        if (!file.startsWith(`${apiRoot}/`)) return
+        if (!file.endsWith('.go') && file !== join(apiRoot, 'go.mod') && file !== join(apiRoot, 'go.sum')) return
+        clearTimeout(restartTimer)
+        restartTimer = setTimeout(() => {
+          server.restart().catch((error) => server.config.logger.error(`Go API restart failed: ${error.message}`))
+        }, 100)
+      }
+      server.watcher.add(apiRoot)
+      server.watcher.on('all', onChange)
+      server.httpServer?.once('close', () => {
+        clearTimeout(restartTimer)
+        server.watcher.off('all', onChange)
+        void stopAPI()
+      })
+    },
+    configurePreviewServer: async (server) => { stop = await configure(server, server.config.preview) },
     closeBundle: () => stop?.(),
     closePreviewServer: () => stop?.(),
   }

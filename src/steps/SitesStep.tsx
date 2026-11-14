@@ -1,6 +1,6 @@
-import { formatLatLon } from '../globe/format.js'
+import { formatLatLon } from '../format.js'
 import type { Catalog, MissionPlan, Phase, Site, Task } from '../api'
-import { num } from '../format'
+import { num } from '../numbers'
 import type { Draft, Selection } from '../state'
 import { Button, NumberField, Segmented, Select, TextField } from '../components/controls'
 import { FactRow, isOpen, Row } from './parts'
@@ -16,6 +16,7 @@ export function SitesStep({
   onSelect,
   placing,
   onPlacing,
+  onTarget,
   onUpdateSite,
   onRemoveSite,
   onAddTask,
@@ -29,6 +30,8 @@ export function SitesStep({
   onSelect: (selection: Selection) => void
   placing: boolean
   onPlacing: (placing: boolean) => void
+  // Makes a site the target of the EVA route on the map. Null until the route has a start.
+  onTarget: ((index: number) => void) | null
   onUpdateSite: (index: number, patch: Partial<Site>, field: string) => void
   onRemoveSite: (index: number) => void
   onAddTask: (site: number) => void
@@ -44,7 +47,10 @@ export function SitesStep({
         {placing ? 'Cancel: click the map to place it' : 'Add site'}
       </Button>
       {draft.sites.length === 0 && !placing && (
-        <p className="note">No sites yet. Press Add site, then click the map where the work is.</p>
+        <p className="note">
+          No sites yet. Press Add site and click the map, right-click a spot, or plan an EVA on the left and add it to the
+          mission.
+        </p>
       )}
 
       <ol className="items">
@@ -57,7 +63,7 @@ export function SitesStep({
               key={i}
               index={i + 1}
               name={site.name || 'Unnamed'}
-              meta={tasks.length === 0 ? 'no tasks' : `${tasks.length} tasks, ${num(hours, 1)} h`}
+              meta={tasks.length === 0 ? 'no tasks' : `${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}, ${num(hours, 1)} h`}
               open={isOpen(selection, 'site', i)}
               onToggle={() => onSelect(isOpen(selection, 'site', i) ? null : { list: 'site', index: i })}
             >
@@ -66,10 +72,7 @@ export function SitesStep({
                 <NumberField label="Latitude, north +" value={site.lat} min={-90} max={90} step={0.0001} unit="°" onChange={(lat) => onUpdateSite(i, { lat }, 'lat')} />
                 <NumberField label="Longitude, east +" value={site.lon} min={-180} max={180} step={0.0001} unit="°" onChange={(lon) => onUpdateSite(i, { lon }, 'lon')} />
               </div>
-              <p className="note">
-                {validPosition && `${formatLatLon(site.lat, site.lon)}, planetocentric. `}Drag the marker on the map to move the
-                site.
-              </p>
+              {validPosition && <p className="note">{formatLatLon(site.lat, site.lon)}, planetocentric.</p>}
 
               <ul className="tasks">
                 {tasks.map(({ task, index }, n) => {
@@ -116,8 +119,15 @@ export function SitesStep({
 
               <div className="actions">
                 <Button onClick={() => onAddTask(i)}>Add task</Button>
+                <Button
+                  disabled={!onTarget || !validPosition}
+                  title={onTarget ? 'Routes the EVA on the left to this site' : 'Choose a start for the EVA first'}
+                  onClick={() => onTarget?.(i)}
+                >
+                  Route EVA here
+                </Button>
                 <Button className="button--remove" onClick={() => onRemoveSite(i)}>
-                  Remove site{tasks.length > 0 ? ` and ${tasks.length} tasks` : ''}
+                  Remove site{tasks.length > 0 ? ` and ${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}` : ''}
                 </Button>
               </div>
             </Row>

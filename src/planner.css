@@ -1,28 +1,17 @@
-/* The editor. styles.css is loaded first and supplies the tokens, the top
-   bar, the map stage with its readouts and camera buttons, the nav buttons
-   and the status bar. This file adds what an editor needs on top of that. */
+/* The mission pages. styles.css is loaded first and supplies the tokens, the
+   top bar, the map stage and the status bar. plan-panel.css supplies the
+   slicer look: cards, value boxes, the dock and its buttons. This file adds
+   the stage tabs, the page layouts and the form rows, in that same look. */
 
-/* Layout: the editor on the left, the globe beside it, the plan under the globe. */
+/* Layout: top bar, messages, the stage's page, then the page's own footer. */
 
-.console--planner {
-  grid-template:
-    'top top' var(--topbar-height)
-    'side map' minmax(0, 1fr)
-    'side plan' auto
-    'foot foot' auto
-    / min(var(--sidebar-width), 40vw) minmax(0, 1fr);
+.console--mission {
+  grid-template: auto auto minmax(0, 1fr) auto / minmax(0, 1fr);
 }
 
-.console--planner > .topbar {
-  grid-area: top;
-}
-
-.console--planner > .stage {
-  grid-area: map;
-}
-
-.console--planner > .statusbar {
-  grid-area: foot;
+.console--mission > .topbar {
+  min-height: var(--topbar-height);
+  padding-right: var(--space-3);
 }
 
 input,
@@ -37,25 +26,98 @@ summary {
   cursor: pointer;
 }
 
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* :where keeps this reset weaker than any class rule below it. */
-.planner :where(h1, h2, h3, p, ul, ol, dl, dd) {
+:where(.page, .sites, .review, .alerts, .planbar) :where(h1, h2, h3, p, ul, ol, dl, dd) {
   margin: 0;
   padding: 0;
 }
 
-.planner :is(ul, ol) {
+:where(.page, .sites, .review) :is(ul, ol) {
   list-style: none;
+}
+
+/* Stage tabs. Each stage is a page and a tab, like the tabs of a slicer. The
+   current one is raised with an accent line under it and carries
+   aria-current, so colour is not the only cue. */
+
+.tabs {
+  display: flex;
+  align-self: stretch;
+  min-width: 0;
+  margin-left: var(--space-4);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-width: 128px;
+  padding: 0 var(--space-4);
+  border: 0;
+  border-left: var(--border-width) solid var(--color-line);
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+}
+
+.tab:last-child {
+  border-right: var(--border-width) solid var(--color-line);
+}
+
+.tab:hover {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.tab[aria-current='page'] {
+  border-bottom-color: var(--color-accent);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.tab:focus-visible {
+  outline-offset: -3px;
+}
+
+.tab__flag {
+  color: var(--color-warning);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 /* Top bar actions, in the bar's own type. */
 
+.topbar__meta {
+  gap: var(--space-2);
+}
+
+.topbar__meta .topbar__item {
+  margin-right: var(--space-2);
+}
+
 .topbar__action {
-  padding: var(--space-2) var(--space-3);
+  height: var(--control-height);
+  padding: 0 var(--space-3);
   border: var(--border-width) solid var(--color-line);
   background: none;
   color: var(--color-text-muted);
   font-family: var(--font-mono);
-  letter-spacing: var(--tracking-label);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -64,149 +126,161 @@ summary {
   color: var(--color-text);
 }
 
-.topbar__meta {
-  gap: var(--space-2);
-}
+/* Messages, in one strip under the top bar on every page. Each starts with a
+   word saying what it is, and the ones that need action offer the action.
+   The warning colour means missing or inconsistent data. */
 
-/* The editor panel. */
-
-.planner {
-  grid-area: side;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  min-height: 0;
-  border-right: var(--border-width) solid var(--color-line);
+.problem,
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-left: 3px solid var(--color-warning);
   background: var(--color-surface);
 }
 
-/* Headings inside the panel: the step, its one-line help, a section. */
-
-.planner__title {
-  border-bottom: 1px solid var(--color-line);
-  color: var(--color-text-muted);
-  font-size: var(--text-label);
-  font-weight: 500;
-}
-
-.planner__heading {
-  font-size: var(--text-section);
-  line-height: 1.25;
-}
-
-.planner__intro {
-  color: var(--color-text-muted);
-}
-
-/* Steps, in the order a mission is made. The current one is underlined and
-   lighter, and carries aria-current, so colour is not the only cue. */
-
-.stepper {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+.alerts > * {
   border-bottom: var(--border-width) solid var(--color-line);
 }
 
-.stepper li + li {
-  border-left: var(--border-width) solid var(--color-line);
+.notice {
+  border-left-color: var(--color-line-strong);
 }
 
-.stepper button {
-  display: grid;
-  gap: 2px;
-  width: 100%;
-  height: 100%;
-  min-height: 44px;
-  padding: var(--space-2) var(--space-1);
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  color: var(--color-text-muted);
+.problem b,
+.notice b,
+.cautions b {
+  color: var(--color-warning);
   font-family: var(--font-mono);
   font-size: var(--text-label);
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
-  place-content: center;
-  text-align: center;
 }
 
-.stepper button:hover {
-  background: var(--color-surface-raised);
-  color: var(--color-text);
+.notice b {
+  color: var(--color-text-muted);
 }
 
-.stepper button[aria-current='step'] {
-  border-bottom-color: var(--color-text);
-  background: var(--color-surface-raised);
-  color: var(--color-text);
+.problem button,
+.notice button {
+  padding: 0;
+  border: 0;
+  background: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* A page that is one column of cards: mission, crew and phases. */
+
+.page {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+.page__column {
+  display: grid;
+  gap: var(--space-4);
+  width: min(720px, 100% - 2 * var(--space-4));
+  margin: 0 auto;
+  padding: var(--space-8) 0;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: var(--border-width) solid var(--color-line);
+  background: var(--color-surface);
+}
+
+.card__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-1);
+  font-size: 17px;
   font-weight: 700;
 }
 
-.stepper__flag {
-  color: var(--color-warning);
-  font-weight: 400;
-}
-
-.step {
+.page__next {
   display: flex;
-  flex-direction: column;
-  gap: var(--button-gap);
-  min-height: 0;
-  padding: var(--space-8);
-  overflow-y: auto;
-  scrollbar-width: thin;
+  gap: var(--space-2);
 }
 
-.step > * {
-  flex: none;
-}
-
-.step section {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.step__nav {
-  display: flex;
-  gap: var(--button-gap);
-  padding: var(--space-4) var(--space-8);
-  border-top: var(--border-width) solid var(--color-line);
-}
-
-.step__nav .button {
-  min-height: var(--button-height);
-}
-
-.step__nav .nav-button {
+.page__next .plan__button {
   flex: 1;
-  width: auto;
 }
 
-/* Next is a plain nav button in full-strength text. Save, the one primary
-   action, takes the accent the way a selected nav button does. */
-.nav-button--next {
+.page__next .page__forward {
+  flex: 2;
   border-color: var(--color-line-strong);
   color: var(--color-text);
 }
 
-.nav-button--primary:not(:disabled) {
-  border-color: var(--color-accent);
-  background: var(--gradient-accent);
-  clip-path: polygon(0 0, 100% 0, 100% calc(100% - var(--chamfer)), calc(100% - var(--chamfer)) 100%, 0 100%);
+/* What the mission holds, one line per stage. Each line opens its stage. */
+
+.contents button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  border-top: var(--border-width) solid var(--color-line);
+  background: none;
+  color: var(--color-text-muted);
+  text-align: left;
+}
+
+.contents button:hover {
   color: var(--color-text);
 }
 
-.nav-button--primary:not(:disabled) .nav-button__arrow {
-  border-left-color: var(--color-line-strong);
-  background: var(--color-accent-shade);
+.contents output {
   color: var(--color-text);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Section headings inside a panel: a small bold title with a rule after it. */
+
+.planner__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-body);
+  font-weight: 700;
+}
+
+.planner__title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-line);
 }
 
 /* Lists whose selected line opens an editor underneath. The line itself is
-   a nav button from styles.css. */
+   a nav button from styles.css, a little lower here. */
 
 .items {
   display: grid;
-  gap: var(--button-gap);
+  gap: var(--space-2);
+}
+
+.items .nav-button {
+  height: 48px;
+  font-size: var(--text-body);
+}
+
+.items .nav-button__arrow {
+  width: 48px;
 }
 
 /* A row that can be dragged has a grip to the left of its button. */
@@ -258,37 +332,46 @@ summary {
 }
 
 .item.is-drop-above::before {
-  top: calc(var(--button-gap) / -2 - 1px);
+  top: calc(var(--space-2) / -2 - 1px);
 }
 
 .item.is-drop-below::after {
-  bottom: calc(var(--button-gap) / -2 - 1px);
+  bottom: calc(var(--space-2) / -2 - 1px);
 }
 
 .item__body {
   display: grid;
-  gap: var(--space-4);
-  margin-top: var(--space-2);
+  gap: var(--space-2);
+  margin-top: var(--space-1);
   padding: var(--space-4);
   border: var(--border-width) solid var(--color-line-strong);
 }
 
-/* Buttons inside the editor: the same look as "Recenter" in the site panel. */
+/* Small buttons: mono capitals in a box, like the buttons inside the plan
+   panel's value boxes. */
 
 .button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-height: var(--control-height);
-  padding: var(--space-2) var(--space-3);
+  padding: 0 var(--space-3);
   border: var(--border-width) solid var(--color-line-strong);
   background: var(--color-surface-raised);
   color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.button:hover:not(:disabled),
+.button:hover:not(:disabled) {
+  border-color: var(--color-text-muted);
+}
+
 .button[aria-pressed='true'] {
-  border-color: var(--color-text);
+  border-color: var(--color-accent);
+  background: var(--color-accent-shade);
 }
 
 .button--quiet {
@@ -319,72 +402,75 @@ summary {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 .actions .button {
   flex: 1 1 auto;
 }
 
-/* Form fields */
+/* Form rows: the label on the left and its value box on the right, as in the
+   plan panel. */
 
 .label {
+  overflow: hidden;
   color: var(--color-text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-label);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .note {
-  color: var(--color-text-muted);
+  color: var(--color-text-dim);
+  font-size: var(--text-data);
 }
 
-.field {
+.field,
+.slider__head {
   display: grid;
-  gap: 6px;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  align-items: center;
+  gap: var(--space-3);
   min-width: 0;
-  align-content: start;
+  min-height: 40px;
 }
 
 .fields {
   display: grid;
-  gap: var(--space-3);
+  min-width: 0;
 }
 
-.fields--2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.fields--3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.input {
+.input,
+.slider__value {
   width: 100%;
   height: var(--control-height);
-  padding: 0 var(--space-3);
+  padding: 0 var(--space-2);
   border: var(--border-width) solid var(--color-line-strong);
-  background: var(--color-surface-raised);
+  background: var(--color-bg);
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .input::placeholder {
-  color: var(--color-text-muted);
+  color: var(--color-text-dim);
 }
 
 .input:hover,
-.input:focus-within {
-  border-color: var(--color-text);
+.input:focus-within,
+.slider__value:focus-within {
+  border-color: var(--color-text-muted);
 }
 
-.input--number {
+.input--number,
+.slider__value {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  color: var(--color-text-muted);
+  color: var(--color-text-dim);
+  font-size: var(--text-label);
 }
 
-.input--number input {
+.input--number input,
+.slider__value input {
   flex: 1;
   width: 0;
   min-width: 0;
@@ -393,12 +479,8 @@ summary {
   border: 0;
   background: none;
   color: var(--color-text);
+  font-size: var(--text-body);
   outline: none;
-}
-
-.input--number:focus-within {
-  outline: 2px solid var(--color-text);
-  outline-offset: 2px;
 }
 
 input[type='number'] {
@@ -425,14 +507,14 @@ select.input {
 
 .segmented {
   display: flex;
-  min-height: var(--control-height);
+  height: var(--control-height);
 }
 
 .segmented button {
   flex: 1;
   padding: 0 var(--space-2);
   border: var(--border-width) solid var(--color-line-strong);
-  background: var(--color-surface-raised);
+  background: var(--color-bg);
   color: var(--color-text-muted);
   font-family: var(--font-mono);
 }
@@ -447,48 +529,19 @@ select.input {
   color: var(--color-bg);
 }
 
-/* Slider, as the visual language draws it: label left, value right, a 3 px
-   track with a red fill up to a white thumb with a red ring. */
+/* A slider is a row with a thin track under it. */
 
 .slider {
   display: grid;
-  gap: var(--space-2);
 }
 
-.slider__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.slider__value {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-1);
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-}
-
-.slider__value input {
-  width: 7ch;
-  padding: 0;
-  border: 0;
-  border-bottom: var(--border-width) solid var(--color-line-strong);
-  background: none;
-  color: var(--color-text);
-  text-align: right;
-}
-
-.slider__value input:hover,
-.slider__value input:focus {
-  border-bottom-color: var(--color-text);
+.slider .label {
+  white-space: normal;
 }
 
 .slider input[type='range'] {
   width: 100%;
-  height: 20px;
+  height: 16px;
   margin: 0;
   background: none;
   appearance: none;
@@ -497,45 +550,93 @@ select.input {
 
 .slider input[type='range']::-webkit-slider-runnable-track {
   height: 3px;
-  background: linear-gradient(90deg, var(--color-accent) var(--fill), var(--color-line-strong) var(--fill));
+  background: linear-gradient(90deg, var(--color-text-muted) var(--fill), var(--color-line-strong) var(--fill));
 }
 
 .slider input[type='range']::-moz-range-track {
   height: 3px;
-  background: linear-gradient(90deg, var(--color-accent) var(--fill), var(--color-line-strong) var(--fill));
+  background: linear-gradient(90deg, var(--color-text-muted) var(--fill), var(--color-line-strong) var(--fill));
 }
 
 .slider input[type='range']::-webkit-slider-thumb {
-  width: 12px;
-  height: 12px;
-  margin-top: -4.5px;
-  border: 3px solid var(--color-accent);
-  border-radius: 50%;
+  width: 10px;
+  height: 10px;
+  margin-top: -3.5px;
+  border: 0;
+  border-radius: var(--radius);
   background: var(--color-text);
   appearance: none;
 }
 
 .slider input[type='range']::-moz-range-thumb {
-  width: 6px;
-  height: 6px;
-  border: 3px solid var(--color-accent);
-  border-radius: 50%;
+  width: 10px;
+  height: 10px;
+  border: 0;
+  border-radius: var(--radius);
   background: var(--color-text);
 }
 
-/* Marks a parameter that differs from the phase preset. Click to go back. */
+/* A parameter that differs from the phase preset takes the modified colour
+   and offers the way back, as changed limits do in the plan panel. */
 .preset {
   display: block;
-  margin-top: 2px;
   padding: 0;
   border: 0;
   background: none;
-  color: var(--color-warning);
-  letter-spacing: 0;
+  color: var(--color-modified);
+  font-size: var(--text-data);
   text-align: left;
-  text-transform: none;
-  text-decoration: underline;
+  text-decoration: underline dotted;
   text-underline-offset: 3px;
+}
+
+.slider:has(.preset) .slider__value {
+  border-color: var(--color-modified);
+}
+
+.slider:has(.preset) .slider__value input {
+  color: var(--color-modified);
+}
+
+/* Crew portraits: a photo from src/assets/crew, or two letters in a frame. */
+
+.portrait {
+  flex: none;
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-bg);
+  object-fit: cover;
+}
+
+.portrait--small {
+  width: 32px;
+  height: 32px;
+}
+
+.portrait--large {
+  width: 132px;
+  height: 132px;
+}
+
+.portrait--none {
+  display: grid;
+  place-items: center;
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.portrait--large.portrait--none {
+  font-size: var(--text-readout);
+}
+
+.crew-profile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-4);
 }
 
 /* Roster, details, fact lists, tasks */
@@ -572,7 +673,7 @@ select.input {
 
 .details summary {
   color: var(--color-text-muted);
-  text-decoration: underline;
+  text-decoration: underline dotted var(--color-text-dim);
   text-underline-offset: 3px;
 }
 
@@ -604,7 +705,7 @@ select.input {
   white-space: nowrap;
 }
 
-/* One crew member on the review step. Closed, it is a row: name and kcal. */
+/* One crew member on the review page. Closed, it is a row: name and kcal. */
 .crew-needs {
   border-bottom: var(--border-width) solid var(--color-line);
 }
@@ -657,7 +758,7 @@ select.input {
 
 .tasks {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
 .tasks:empty {
@@ -666,55 +767,27 @@ select.input {
 
 .task {
   display: grid;
-  gap: var(--space-3);
-  padding: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-3);
   border: var(--border-width) solid var(--color-line);
 }
 
-/* Messages. Each starts with a word saying what it is, and the ones that
-   need action offer the action. Most urgent first: cannot plan, caution, done.
-   The warning colour means missing or inconsistent data. */
-
-.problem,
-.notice,
-.cautions li {
-  display: grid;
-  gap: var(--space-1);
-  padding: var(--space-3) var(--space-4);
-  border: var(--border-width) solid var(--color-warning);
+.task > .label {
+  color: var(--color-text);
+  font-weight: 700;
 }
 
-.notice {
-  border-color: var(--color-line-strong);
-}
-
-.problem b,
-.notice b,
-.cautions b {
-  color: var(--color-warning);
-  font-family: var(--font-mono);
-  font-size: var(--text-label);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-}
-
-.notice b {
-  color: var(--color-text-muted);
-}
-
-.problem button,
-.notice button {
-  justify-self: start;
-  padding: 0;
-  border: 0;
-  background: none;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
+/* Cautions on the review page: a caution-coloured edge, as on the verdict. */
 
 .cautions {
   display: grid;
   gap: var(--space-2);
+}
+
+.cautions li {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-1) var(--space-3);
+  border-left: 3px solid var(--color-warning);
 }
 
 /* Figures: the map's readout type, laid out in the flow of the page. */
@@ -768,10 +841,10 @@ select.input {
   text-transform: uppercase;
 }
 
-/* The plan, always in view under the globe. */
+/* The plan, under every column page: what to supply and what the last edit
+   did to it. */
 
 .planbar {
-  grid-area: plan;
   display: grid;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-8);
@@ -783,7 +856,6 @@ select.input {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1) var(--space-4);
-  margin: 0;
   font-weight: 400;
 }
 
@@ -799,84 +871,162 @@ select.input {
 }
 
 .planbar .readout__value {
-  font-size: clamp(var(--text-body), 1.45vw, var(--text-readout));
+  font-size: var(--text-section);
 }
 
 /* Numbers from the last valid mission are struck through as well as dimmed. */
 .planbar.is-stale .readout__value,
-.step.is-stale :is(.readout__value, .facts dd, .table td, .crew-needs__meta) {
+.review.is-stale :is(.readout__value, .facts dd, .table td, .crew-needs__meta) {
   color: var(--color-text-muted);
   text-decoration: line-through;
 }
 
-/* The globe shares the width with the editor, so the view buttons sit in the
-   free bottom-left corner instead of the centre, clear of the altitude
-   readout. */
-.console--planner .zoom {
-  left: 30px;
-  translate: none;
+/* The sites page: the plan panel, the map, then the mission's sites. */
+
+.workspace--aside {
+  grid-template-columns: min(var(--sidebar-width), 30vw) minmax(0, 1fr) min(400px, 26vw);
 }
 
-/* Placing a site */
-
-.stage.is-placing .stage__map canvas {
-  cursor: crosshair;
-}
-
-.stage__hint {
-  position: absolute;
-  top: 30px;
-  left: 50%;
-  margin: 0;
-  padding: var(--space-2) var(--space-3);
-  border: var(--border-width) solid var(--color-text);
+.sites {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  padding: var(--space-4);
+  border-left: var(--border-width) solid var(--color-line);
   background: var(--color-surface);
-  font-family: var(--font-mono);
-  font-size: var(--text-label);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  translate: -50% 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
 }
 
-/* Narrow screens: the editor first, the globe and plan under it, one page scroll. */
+.sites > * {
+  flex: none;
+}
 
-@media (max-width: 1000px) {
-  .console--planner {
-    grid-template:
-      'top' auto
-      'side' auto
-      'map' 70dvh
-      'plan' auto
-      'foot' auto
-      / minmax(0, 1fr);
-    height: auto;
-    min-height: 100dvh;
-  }
+.sites section {
+  display: grid;
+  gap: var(--space-2);
+}
 
-  .console--planner > .topbar {
+/* The review page: the numbers on the left, the mission's sites on Mars
+   beside them. */
+
+.workspace--review {
+  grid-template-columns: min(560px, 42vw) minmax(0, 1fr);
+}
+
+.review {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: var(--border-width) solid var(--color-line);
+  background: var(--color-surface);
+}
+
+.review .step {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 0;
+  padding: var(--space-4);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+.review .step > * {
+  flex: none;
+}
+
+.review .step section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* Map status in the review page's status bar. */
+
+.statusbar {
+  min-height: var(--statusbar-height);
+}
+
+.map-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.map-status--error,
+.map-status__fallback {
+  color: var(--color-warning);
+}
+
+.map-status__fallback {
+  display: block;
+}
+
+.map-status button {
+  flex: none;
+  padding: 0 var(--space-2);
+  border: var(--border-width) solid var(--color-line-strong);
+  background: transparent;
+  color: var(--color-text);
+}
+
+.statusbar__credit {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--color-text-dim);
+  text-overflow: ellipsis;
+}
+
+/* Narrow screens: one column, the map under the panel. */
+
+@media (max-width: 900px) {
+  .console--mission > .topbar {
     flex-wrap: wrap;
     padding-block: var(--space-2);
     white-space: normal;
   }
 
-  .topbar__meta {
-    flex-wrap: wrap;
+  .tabs {
+    order: 3;
+    width: 100%;
     margin-left: 0;
   }
 
-  .planner {
-    display: block;
+  .tab {
+    min-width: 0;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .topbar__meta {
+    flex-wrap: wrap;
+  }
+
+  .workspace--aside,
+  .workspace--review {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 45%) auto;
+  }
+
+  .workspace--review {
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .sites {
+    order: 3;
+    max-height: 40dvh;
+    border-top: var(--border-width) solid var(--color-line);
+    border-left: 0;
+  }
+
+  .review {
     border-right: 0;
     border-bottom: var(--border-width) solid var(--color-line);
-  }
-
-  .step {
-    padding: var(--space-4);
-    overflow: visible;
-  }
-
-  .step__nav {
-    padding: var(--space-4);
   }
 
   .planbar {
@@ -886,19 +1036,15 @@ select.input {
   .planbar__grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-
-  .stage__hint {
-    top: 70px;
-  }
 }
 
-/* Shown in place of the editor while the planner service is being reached. */
+/* Shown in place of the pages while the planner service is being reached. */
 .startup {
-  grid-area: side / side / plan / map;
+  grid-row: 3;
   display: grid;
   place-content: center;
-  padding: var(--space-8);
   max-width: 60ch;
   margin-inline: auto;
+  padding: var(--space-8);
   color: var(--color-text-muted);
 }

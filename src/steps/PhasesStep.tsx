@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import type { Catalog, Phase, PhaseParams } from '../api'
-import { num } from '../format'
+import { num } from '../numbers'
 import type { Selection } from '../state'
 import { Button, NumberField, Select, Slider } from '../components/controls'
 import { isOpen, Row } from './parts'
+import { StageIcon } from '../components/icons'
 
 // How each phase parameter is shown and edited. `scale` converts the stored
 // value to the one on screen (watts to kilowatts, shares to percent).
@@ -60,7 +61,11 @@ export function PhasesStep({
   }
 
   return (
-    <>
+    <section className="card">
+      <h2 className="card__title">
+        <StageIcon id="phases" />
+        Phases
+      </h2>
       <div className="field">
         <label className="label" htmlFor="add-phase">
           Add a phase after the open one
@@ -157,6 +162,6 @@ export function PhasesStep({
           )
         })}
       </ol>
-    </>
+    </section>
   )
 }

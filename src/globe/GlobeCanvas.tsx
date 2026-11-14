@@ -22,12 +22,12 @@ import {
 } from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import type { Site } from '../api'
-import NavControls from './NavControls.jsx'
-import { pickGround, setupControls } from './camera.js'
-import { LOCAL_MAX_ZOOM, MAX_NATIVE_ZOOM, localTilePath, remoteTileUrl } from './basemap.js'
-import { addCtxLayer } from './ctx-layer.ts'
-import { DATUM_OFFSET, MARS_SPHERE, createTerrain } from './terrain.js'
-import { formatAltitude, formatElevation, formatLatLon } from './format.js'
+import NavControls from '../components/NavControls.jsx'
+import { pickGround, setupControls } from '../components/camera.js'
+import { LOCAL_MAX_ZOOM, MAX_NATIVE_ZOOM, localTilePath, remoteTileUrl } from '../data/basemap.js'
+import { addCtxLayer } from '../data/ctx-layer.ts'
+import { DATUM_OFFSET, MARS_SPHERE, createTerrain } from '../data/terrain.js'
+import { formatAltitude, formatElevation, formatLatLon } from '../format.js'
 
 export type MapStatusEvent =
   | { type: 'reset' }
@@ -456,35 +456,36 @@ export function GlobeCanvas({
           {site && <span className="readout__sub">Terrain safety not assessed</span>}
         </div>
         <AltitudeReadout viewer={viewer} />
-        <NavControls viewer={viewer} />
-
-        {placing && (
-          <p className="stage__hint" role="status">
-            Click the ground to place the site
-          </p>
-        )}
-
-        <div className="zoom" role="group" aria-label="View">
+        <NavControls viewer={viewer}>
           <button
             type="button"
-            className="zoom__reset"
+            className="nav__text nav__section"
             onClick={() => setRelief(nextRelief)}
             aria-label={`Elevation scale ${relief}×. Switch to ${nextRelief}×`}
+            title={`Elevation scale ${relief}×. Switch to ${nextRelief}×`}
           >
-            Elevation scale {relief}×
+            {relief}×
           </button>
           <button
             type="button"
-            className="zoom__reset"
             disabled={drawable.length === 0}
+            aria-label="All sites"
+            title="All sites"
             onClick={() => viewer && frameSites(viewer, drawable)}
           >
-            All sites
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M9 10h.01M15 9h.01M12 15h.01" />
+            </svg>
           </button>
-          <button type="button" className="zoom__reset" onClick={() => viewer && frameSites(viewer, [])}>
-            Global view
+          <button type="button" aria-label="Global view" title="Global view" onClick={() => viewer && frameSites(viewer, [])}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="8" />
+              <ellipse cx="12" cy="12" rx="3.5" ry="8" />
+              <path d="M4 12h16" />
+            </svg>
           </button>
-        </div>
+        </NavControls>
+
       </div>
     </main>
   )

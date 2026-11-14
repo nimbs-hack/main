@@ -29,6 +29,21 @@
   --color-ok: #3fb68b;           /* real, healthy status only */
   --color-warning: #e8ba73;      /* missing data and degraded map detail */
 
+  /* A setting changed from its preset. Cool, so it never reads as a hazard. */
+  --color-modified: #7fb2ff;
+
+  /* Suggested route lines, from deploy-v1's ROUTE_STRATEGY_VISUALS.
+     Detour and thermal sit close to caution and ok. They only ever appear
+     as dashed candidate lines, never on a value. */
+  --color-route-fast: #e5e0dc;
+  --color-route-flat: #38bdf8;
+  --color-route-thermal: #3fb68b;
+  --color-route-detour: #eab308;
+
+  /* Terrain hazard scale. Never the accent: red means selection, not danger. */
+  --color-caution: #e8c547;      /* slope 15 to 20° */
+  --color-hazard: #ff7a2f;       /* slope over 20° */
+
   /* Type. Fonts are outlined in the SVG export. These are best guesses, confirm in Figma. */
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
@@ -57,7 +72,7 @@
   --button-height: 56px;
   --button-gap: 12px;
   --button-icon-width: 64px;
-  --control-height: 40px; /* form fields, list rows, compact buttons */
+  --control-height: 36px; /* form fields, list rows, compact buttons */
 
   /* Shape. Square corners everywhere. The only "radius" is the clipped
      bottom-right corner on nav buttons. */

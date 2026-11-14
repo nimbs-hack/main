@@ -14,7 +14,8 @@ export interface RowDrag {
 
 // One line of a list, drawn as a nav button. Opens its
 // editor underneath when it is the selection; a check mark supplements the
-// selected colour. With `drag` it gets a grip to drag it by.
+// selected colour. With `drag` it gets a grip to drag it by. `media` is a
+// small picture in front of the name.
 export function Row({
   index,
   name,
@@ -22,6 +23,7 @@ export function Row({
   open,
   onToggle,
   drag,
+  media,
   children,
 }: {
   index?: number
@@ -30,11 +32,13 @@ export function Row({
   open: boolean
   onToggle: () => void
   drag?: RowDrag
+  media?: ReactNode
   children: ReactNode
 }) {
   const line = (
     <button type="button" className="nav-button" aria-pressed={open} aria-expanded={open} onClick={onToggle}>
       {index !== undefined && <span className="nav-button__meta">{String(index).padStart(2, '0')}</span>}
+      {media}
       <span className="nav-button__label">{name}</span>
       <span className="nav-button__meta">{meta}</span>
       <span className="nav-button__arrow" aria-hidden="true">

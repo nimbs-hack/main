@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import type { Astronaut, Catalog, MissionPlan } from '../api'
-import { kcal, num, range, words } from '../format'
+import { kcal, num, range, words } from '../numbers'
 import type { Selection } from '../state'
 import { Button, ConfirmButton, NumberField, Segmented, Select, Slider, TextField } from '../components/controls'
+import { Portrait } from '../components/Portrait'
+import { StageIcon } from '../components/icons'
 import { FactRow, isOpen, Row } from './parts'
 
 export function CrewStep({
@@ -35,7 +37,11 @@ export function CrewStep({
   const [rosterOpen, setRosterOpen] = useState(false)
 
   return (
-    <>
+    <section className="card">
+      <h2 className="card__title">
+        <StageIcon id="crew" />
+        Crew
+      </h2>
       <div className="actions">
         <Button onClick={() => onAdd()}>Add crew member</Button>
         <Button aria-expanded={rosterOpen} onClick={() => setRosterOpen(!rosterOpen)}>
@@ -49,6 +55,7 @@ export function CrewStep({
             const inCrew = crew.some((member) => member.name === person.name)
             return (
               <li key={person.name}>
+                <Portrait name={person.name} />
                 <span className="roster__who">
                   <b>{person.name}</b>
                   <span>
@@ -85,23 +92,25 @@ export function CrewStep({
             <Row
               key={i}
               name={person.name || 'Unnamed'}
-              meta={daily ? `${num(kcal(daily.foodEnergyMJ))} kcal/d` : ''}
+              media={<Portrait name={person.name} />}
+              meta={`${words(person.role)}${daily ? ` · ${num(kcal(daily.foodEnergyMJ))} kcal/d` : ''}`}
               open={isOpen(selection, 'crew', i)}
               onToggle={() => onSelect(isOpen(selection, 'crew', i) ? null : { list: 'crew', index: i })}
             >
-              <div className="fields fields--2">
-                <TextField label="Call sign" value={person.name} maxLength={31} onChange={(v) => set('name', v)} />
-                <Segmented label="Sex" value={person.sex} options={catalog.sexes} onChange={(v) => set('sex', v)} />
+              <div className="crew-profile">
+                <Portrait name={person.name} size="large" />
+                <div className="fields">
+                  <TextField label="Call sign" value={person.name} maxLength={31} onChange={(v) => set('name', v)} />
+                  <Segmented label="Sex" value={person.sex} options={catalog.sexes} onChange={(v) => set('sex', v)} />
+                  <Select label="Role" value={person.role} options={catalog.roles} format={words} onChange={(v) => set('role', v)} />
+                </div>
               </div>
               <div className="fields fields--3">
                 <NumberField label="Age" value={person.age} min={18} max={99} unit="y" onChange={(v) => set('age', v)} />
                 <NumberField label="Mass" value={person.massKg} min={30} max={250} step={0.1} unit="kg" onChange={(v) => set('massKg', v)} />
                 <NumberField label="Height" value={person.heightCm} min={120} max={250} unit="cm" onChange={(v) => set('heightCm', v)} />
               </div>
-              <div className="fields fields--2">
-                <Select label="Role" value={person.role} options={catalog.roles} format={words} onChange={(v) => set('role', v)} />
-                <Select label="Activity" value={person.activity} options={catalog.activities} format={words} onChange={(v) => set('activity', v)} />
-              </div>
+              <Select label="Activity" value={person.activity} options={catalog.activities} format={words} onChange={(v) => set('activity', v)} />
               <Slider
                 label="Share of EVA hours"
                 value={Math.round(person.evaShare * 100)}
@@ -149,6 +158,6 @@ export function CrewStep({
           )
         })}
       </ul>
-    </>
+    </section>
   )
 }

@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import MapStatus from './globe/MapStatus.jsx'
 import { INITIAL_MAP_STATUS, mapStatusReducer } from './globe/map-status.ts'
 import { type Astronaut, type Catalog, type Planned, PlannerError, fetchCatalog, fileBytes, requestPlan } from './api'
 import { GlobeCanvas } from './globe/GlobeCanvas'
 import { PlanBar } from './components/PlanBar'
-import { Button } from './components/controls'
+import { StageIcon } from './components/icons'
 import { CrewStep } from './steps/CrewStep'
 import { MissionStep } from './steps/MissionStep'
 import { PhasesStep } from './steps/PhasesStep'
 import { ReviewStep } from './steps/ReviewStep'
-import { SitesStep } from './steps/SitesStep'
+import { SitesPage } from './steps/SitesPage'
 import { download, fileStem, readMissionFile } from './files'
 import {
   type Draft,
@@ -19,6 +19,7 @@ import {
   createEdits,
   loadRoster,
   movedIndex,
+  stepFromHash,
   stepOfProblem,
   store,
   storedDraft,
@@ -112,7 +113,7 @@ export default function App() {
 
   if (state !== null && typeof state !== 'string') return <Editor catalog={state.catalog} opening={state.planned} />
   return (
-    <div className="console console--planner">
+    <div className="console console--mission">
       <header className="topbar">
         <strong className="topbar__title">Mission planner</strong>
       </header>
@@ -149,12 +150,12 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
     },
     [history.commit],
   )
-  const [step, setStep] = useState<StepId>('mission')
+  const [step, setStep] = useState<StepId>(stepFromHash)
   const [selection, setSelection] = useState<Selection>(null)
-  const [placing, setPlacing] = useState(false)
   const [roster, setRoster] = useState(() => loadRoster(catalog))
   const [fileProblem, setFileProblem] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  // The review globe. The sites page reports its own map state.
   const [mapStatus, dispatchMapStatus] = useReducer(mapStatusReducer, INITIAL_MAP_STATUS)
   const [imagerySource, setImagerySource] = useState<'V01' | 'beta01'>('V01')
   const [retryKey, setRetryKey] = useState(0)
@@ -199,17 +200,24 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
   if (valid) lastGood.current = valid
   const shown = lastGood.current
   const before = history.previous ? (plans.current.get(history.previous) ?? null) : null
+  const stale = problem !== null || offline !== null
 
   useEffect(() => {
     if (valid) store('draft', valid.mission)
   }, [valid])
 
+  // The stage lives in the address. Tabs and buttons change the address, and
+  // the page follows it, so back and forward move between stages.
+  useEffect(() => {
+    const onHash = () => setStep(stepFromHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
   const goTo = (next: StepId) => {
+    location.hash = next
     setStep(next)
-    setPlacing(false)
   }
   const stepIndex = STEPS.findIndex((entry) => entry.id === step)
-  const currentStep = STEPS[stepIndex]!
   const next = STEPS[stepIndex + 1]
   const previous = STEPS[stepIndex - 1]
   const problemStep = problem ? stepOfProblem(problem) : null
@@ -248,7 +256,7 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
       'Started a new mission with one crew member and the Mars long stay phases. The mission you had before is one Undo away.',
     )
     // Put the cursor where the first thing to do is.
-    requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.step input')?.focus())
+    requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.page input')?.focus())
   }
 
   // Latest handlers for the key listener, which is attached once.
@@ -256,7 +264,6 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
   keys.current = { save, undo: history.undo, redo: history.redo }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') return setPlacing(false)
       if (!(e.ctrlKey || e.metaKey)) return
       const key = e.key.toLowerCase()
       if (key === 'z' && e.shiftKey) keys.current.redo()
@@ -288,23 +295,38 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
     if (done) setNotice(done)
   }
 
-  const placeSite = useCallback(
-    (lat: number, lon: number) => {
-      commit((d) => edits.addSite(d, degrees(lat), degrees(lon)))
-      setSelection({ list: 'site', index: draft.sites.length })
-      setPlacing(false)
-    },
-    [commit, edits, draft.sites.length],
-  )
-
   const taskCounts = useMemo(
     () => draft.sites.map((_, i) => draft.tasks.filter((task) => task.site === i).length),
     [draft.sites, draft.tasks],
   )
 
+  // A page that is one column of cards, with the plan under it.
+  const column = (children: ReactNode) => (
+    <>
+      <main className="page" onBlur={settle}>
+        <div className="page__column">
+          {children}
+          <div className="page__next">
+            {previous && (
+              <button type="button" className="plan__button" onClick={() => goTo(previous.id)}>
+                Back
+              </button>
+            )}
+            {next && (
+              <button type="button" className="plan__button page__forward" onClick={() => goTo(next.id)}>
+                Next: {next.label}
+              </button>
+            )}
+          </div>
+        </div>
+      </main>
+      <PlanBar shown={shown} before={valid ? before : null} stale={stale} />
+    </>
+  )
+
   return (
     <div
-      className="console console--planner"
+      className="console console--mission"
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
         e.preventDefault()
@@ -313,10 +335,33 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
     >
       <header className="topbar">
         <strong className="topbar__title">Mission planner</strong>
-        <span className="topbar__item">
-          Mission <b>{draft.name || 'Unnamed'}</b>
-        </span>
+        <nav className="tabs" aria-label="Stages">
+          {STEPS.map((entry) => {
+            const flag =
+              entry.id === problemStep
+                ? 'Fix'
+                : entry.id === 'review' && cautionCount > 0
+                  ? count(cautionCount, 'caution')
+                  : ''
+            return (
+              <button
+                key={entry.id}
+                type="button"
+                className="tab"
+                aria-current={entry.id === step ? 'page' : undefined}
+                onClick={() => goTo(entry.id)}
+              >
+                <StageIcon id={entry.id} />
+                {entry.label}
+                {flag && <span className="tab__flag">{flag}</span>}
+              </button>
+            )
+          })}
+        </nav>
         <div className="topbar__meta">
+          <span className="topbar__item">
+            Mission <b>{draft.name || 'Unnamed'}</b>
+          </span>
           <button type="button" className="topbar__action" disabled={!history.canUndo} onClick={history.undo} title="Ctrl+Z">
             Undo
           </button>
@@ -324,10 +369,10 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
             Redo
           </button>
           <button type="button" className="topbar__action" onClick={() => fileInput.current?.click()} title="Ctrl+O">
-            Open file
+            Open
           </button>
-          <button type="button" className="topbar__action" onClick={startNew}>
-            New mission
+          <button type="button" className="topbar__action" disabled={!valid} onClick={save} title="Ctrl+S">
+            Save
           </button>
         </div>
         <input
@@ -342,245 +387,209 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
         />
       </header>
 
-      <aside className="planner" aria-label="Mission editor" onBlur={settle}>
-        <nav aria-label="Steps">
-          <ol className="stepper">
-            {STEPS.map((entry, i) => {
-              const flag =
-                entry.id === problemStep
-                  ? 'Fix'
-                  : entry.id === 'review' && cautionCount > 0
-                    ? count(cautionCount, 'caution')
-                    : ''
-              return (
-                <li key={entry.id}>
-                  <button
-                    type="button"
-                    aria-current={entry.id === step ? 'step' : undefined}
-                    onClick={() => goTo(entry.id)}
-                  >
-                    <span>
-                      {i + 1} {entry.label}
-                    </span>
-                    {flag && <span className="stepper__flag">{flag}</span>}
-                  </button>
-                </li>
-              )
-            })}
-          </ol>
-        </nav>
-
-        <div className={`step${step === 'review' && !valid ? ' is-stale' : ''}`}>
-          <div>
-            <h1 className="planner__heading">{currentStep.title}</h1>
-            {'help' in currentStep && <p className="planner__intro">{currentStep.help}</p>}
-          </div>
-
-          {offline && (
-            <p className="problem" role="alert">
-              <b>Planner not answering</b>
-              The numbers shown are from the last answer it gave: {offline}.
-              <button type="button" onClick={() => setPlanAttempt(planAttempt + 1)}>
-                Retry
-              </button>
-            </p>
-          )}
-          {fileProblem && (
-            <p className="problem" role="alert">
-              <b>Caution</b>
-              {fileProblem}
-              <button type="button" aria-label="Dismiss" onClick={() => setFileProblem(null)}>
-                ×
-              </button>
-            </p>
-          )}
-          {notice && (
-            <p className="notice" role="status">
-              <b>Done</b>
-              {notice}
-              <button
-                type="button"
-                onClick={() => {
-                  history.undo()
-                  setNotice(null)
-                }}
-              >
-                Undo
-              </button>
-            </p>
-          )}
-          {problem && (
-            <p className="problem" role="alert">
-              <b>Cannot plan yet</b>
-              {plainWords(problem)}.
-              {problemStep !== step && (
-                <button type="button" onClick={() => goTo(problemStep!)}>
-                  Go to {STEPS.find((entry) => entry.id === problemStep)!.label}
-                </button>
-              )}
-            </p>
-          )}
-
-          {step === 'mission' && (
-            <MissionStep
-              catalog={catalog}
-              draft={draft}
-              onName={(name) => commit((d) => ({ ...d, name }), 'name')}
-              onType={(type) => {
-                const loaded = edits.setType(draft, type).phases
-                structural(
-                  (d) => edits.setType(d, type),
-                  null,
-                  loaded === draft.phases
-                    ? undefined
-                    : `Phases replaced with the ${count(loaded.length, 'default')} for this type. Tasks kept their phase number where it still exists.`,
-                )
-              }}
-              onMargin={(marginPercent) => commit((d) => ({ ...d, marginPercent }), 'margin')}
-            />
-          )}
-          {step === 'crew' && (
-            <CrewStep
-              catalog={catalog}
-              crew={draft.crew}
-              plan={valid?.plan ?? null}
-              selection={selection}
-              onSelect={setSelection}
-              roster={roster}
-              onAdd={(person) =>
-                structural((d) => edits.addCrew(d, person), { list: 'crew', index: draft.crew.length })
-              }
-              onUpdate={(i, patch, field) => commit((d) => edits.updateCrew(d, i, patch), `crew ${i} ${field}`)}
-              onDuplicate={(i) =>
-                structural((d) => edits.duplicateCrew(d, i), { list: 'crew', index: draft.crew.length })
-              }
-              onRemove={(i) => {
-                const orphaned = draft.tasks.filter((task) => task.crew === i).length
-                structural(
-                  (d) => edits.removeCrew(d, i),
-                  null,
-                  `${draft.crew[i]!.name} removed.${orphaned > 0 ? ` ${count(orphaned, 'task')} of theirs now ${orphaned === 1 ? 'has' : 'have'} nobody assigned.` : ''}`,
-                )
-              }}
-              onSaveToRoster={(person) =>
-                updateRoster([...roster.filter((entry) => entry.name !== person.name), person])
-              }
-              onDropFromRoster={(name) => updateRoster(roster.filter((entry) => entry.name !== name))}
-            />
-          )}
-          {step === 'phases' && (
-            <PhasesStep
-              catalog={catalog}
-              phases={draft.phases}
-              selection={selection}
-              onSelect={setSelection}
-              onAdd={(kind) => {
-                const after = selection?.list === 'phase' ? selection.index : draft.phases.length - 1
-                structural((d) => edits.addPhase(d, kind, after), { list: 'phase', index: after + 1 })
-              }}
-              onUpdate={(i, patch, field) =>
-                commit((d) => edits.updatePhase(d, i, patch), field && `phase ${i} ${field}`)
-              }
-              onKind={(i, kind) => commit((d) => edits.setPhaseKind(d, i, kind))}
-              onMove={(from, to) =>
-                structural(
-                  (d) => edits.movePhase(d, from, to),
-                  // The open phase stays open wherever the move puts it.
-                  selection?.list === 'phase'
-                    ? { list: 'phase', index: movedIndex(selection.index, from, to) }
-                    : selection,
-                )
-              }
-              onDuplicate={(i) => structural((d) => edits.duplicatePhase(d, i), { list: 'phase', index: i + 1 })}
-              onRemove={(i) => {
-                const moved = draft.tasks.filter((task) => task.phase === i).length
-                structural(
-                  (d) => edits.removePhase(d, i),
-                  null,
-                  `Phase ${i + 1} removed.${moved > 0 ? ` Its ${count(moved, 'task')} moved to the phase now in that place.` : ''}`,
-                )
-              }}
-            />
-          )}
-          {step === 'sites' && (
-            <SitesStep
-              catalog={catalog}
-              draft={draft}
-              plan={valid?.plan ?? null}
-              selection={selection}
-              onSelect={setSelection}
-              placing={placing}
-              onPlacing={setPlacing}
-              onUpdateSite={(i, patch, field) => commit((d) => edits.updateSite(d, i, patch), `site ${i} ${field}`)}
-              onRemoveSite={(i) => {
-                const gone = draft.tasks.filter((task) => task.site === i).length
-                structural(
-                  (d) => edits.removeSite(d, i),
-                  null,
-                  `${draft.sites[i]!.name} removed${gone > 0 ? ` with its ${count(gone, 'task')}` : ''}.`,
-                )
-              }}
-              onAddTask={(site) => commit((d) => edits.addTask(d, site))}
-              onUpdateTask={(i, patch, field) => commit((d) => edits.updateTask(d, i, patch), `task ${i} ${field}`)}
-              onRemoveTask={(i) => commit((d) => edits.removeTask(d, i))}
-            />
-          )}
-          {step === 'review' && <ReviewStep catalog={catalog} planned={shown} onExportJson={exportJson} />}
-        </div>
-
-        <footer className="step__nav">
-          {previous && <Button onClick={() => goTo(previous.id)}>Back</Button>}
-          {next ? (
-            <button type="button" className="nav-button nav-button--next" onClick={() => goTo(next.id)}>
-              <span className="nav-button__label">Next: {next.label}</span>
-              <span className="nav-button__arrow" aria-hidden="true">
-                →
-              </span>
+      <div className="alerts">
+        {offline && (
+          <p className="problem" role="alert">
+            <b>Planner not answering</b>
+            The numbers shown are from the last answer it gave: {offline}.
+            <button type="button" onClick={() => setPlanAttempt(planAttempt + 1)}>
+              Retry
             </button>
-          ) : (
-            // The one primary action, so it gets the accent.
+          </p>
+        )}
+        {fileProblem && (
+          <p className="problem" role="alert">
+            <b>Caution</b>
+            {fileProblem}
+            <button type="button" aria-label="Dismiss" onClick={() => setFileProblem(null)}>
+              ×
+            </button>
+          </p>
+        )}
+        {notice && (
+          <p className="notice" role="status">
+            <b>Done</b>
+            {notice}
             <button
               type="button"
-              className="nav-button nav-button--primary"
-              disabled={!valid}
-              onClick={save}
-              title="Ctrl+S"
+              onClick={() => {
+                history.undo()
+                setNotice(null)
+              }}
             >
-              <span className="nav-button__label">Save mission file</span>
-              <span className="nav-button__arrow" aria-hidden="true">
-                ↓
-              </span>
+              Undo
             </button>
-          )}
-        </footer>
-      </aside>
+          </p>
+        )}
+        {problem && (
+          <p className="problem" role="alert">
+            <b>Cannot plan yet</b>
+            {plainWords(problem)}.
+            {problemStep !== step && (
+              <button type="button" onClick={() => goTo(problemStep!)}>
+                Go to {STEPS.find((entry) => entry.id === problemStep)!.label}
+              </button>
+            )}
+          </p>
+        )}
+      </div>
 
-      <GlobeCanvas
-        sites={draft.sites}
-        taskCounts={taskCounts}
-        selected={selection?.list === 'site' ? selection.index : -1}
-        editable={step === 'sites'}
-        placing={placing}
-        onPlace={placeSite}
-        onSelect={(index) => {
-          goTo('sites')
-          setSelection({ list: 'site', index })
-        }}
-        onMove={(index, lat, lon) =>
-          commit((d) => edits.updateSite(d, index, { lat: degrees(lat), lon: degrees(lon) }))
-        }
-        onStatus={dispatchMapStatus}
-        onImagerySource={setImagerySource}
-        retryKey={retryKey}
-      />
-      <PlanBar shown={shown} before={valid ? before : null} stale={problem !== null || offline !== null} />
+      {step === 'mission' &&
+        column(
+          <MissionStep
+            catalog={catalog}
+            draft={draft}
+            status={problem ? 'Cannot plan yet' : cautionCount > 0 ? count(cautionCount, 'caution') : 'Nothing to fix'}
+            days={shown.plan.days}
+            onGoTo={goTo}
+            onName={(name) => commit((d) => ({ ...d, name }), 'name')}
+            onType={(type) => {
+              const loaded = edits.setType(draft, type).phases
+              structural(
+                (d) => edits.setType(d, type),
+                null,
+                loaded === draft.phases
+                  ? undefined
+                  : `Phases replaced with the ${count(loaded.length, 'default')} for this type. Tasks kept their phase number where it still exists.`,
+              )
+            }}
+            onMargin={(marginPercent) => commit((d) => ({ ...d, marginPercent }), 'margin')}
+            onOpen={() => fileInput.current?.click()}
+            onNew={startNew}
+          />,
+        )}
 
-      <footer className="statusbar">
-        <MapStatus status={mapStatus} imagerySource={imagerySource} onRetry={() => setRetryKey((key) => key + 1)} />
-        <span className="statusbar__credit">
-          Viking / CTX · NASA / JPL / USGS / MSSS / The Murray Lab / Esri · Terrain NASA Mars Trek
-        </span>
-      </footer>
+      {step === 'crew' &&
+        column(
+          <CrewStep
+            catalog={catalog}
+            crew={draft.crew}
+            plan={valid?.plan ?? null}
+            selection={selection}
+            onSelect={setSelection}
+            roster={roster}
+            onAdd={(person) => structural((d) => edits.addCrew(d, person), { list: 'crew', index: draft.crew.length })}
+            onUpdate={(i, patch, field) => commit((d) => edits.updateCrew(d, i, patch), `crew ${i} ${field}`)}
+            onDuplicate={(i) => structural((d) => edits.duplicateCrew(d, i), { list: 'crew', index: draft.crew.length })}
+            onRemove={(i) => {
+              const orphaned = draft.tasks.filter((task) => task.crew === i).length
+              structural(
+                (d) => edits.removeCrew(d, i),
+                null,
+                `${draft.crew[i]!.name} removed.${orphaned > 0 ? ` ${count(orphaned, 'task')} of theirs now ${orphaned === 1 ? 'has' : 'have'} nobody assigned.` : ''}`,
+              )
+            }}
+            onSaveToRoster={(person) =>
+              updateRoster([...roster.filter((entry) => entry.name !== person.name), person])
+            }
+            onDropFromRoster={(name) => updateRoster(roster.filter((entry) => entry.name !== name))}
+          />,
+        )}
+
+      {step === 'phases' &&
+        column(
+          <PhasesStep
+            catalog={catalog}
+            phases={draft.phases}
+            selection={selection}
+            onSelect={setSelection}
+            onAdd={(kind) => {
+              const after = selection?.list === 'phase' ? selection.index : draft.phases.length - 1
+              structural((d) => edits.addPhase(d, kind, after), { list: 'phase', index: after + 1 })
+            }}
+            onUpdate={(i, patch, field) => commit((d) => edits.updatePhase(d, i, patch), field && `phase ${i} ${field}`)}
+            onKind={(i, kind) => commit((d) => edits.setPhaseKind(d, i, kind))}
+            onMove={(from, to) =>
+              structural(
+                (d) => edits.movePhase(d, from, to),
+                // The open phase stays open wherever the move puts it.
+                selection?.list === 'phase'
+                  ? { list: 'phase', index: movedIndex(selection.index, from, to) }
+                  : selection,
+              )
+            }
+            onDuplicate={(i) => structural((d) => edits.duplicatePhase(d, i), { list: 'phase', index: i + 1 })}
+            onRemove={(i) => {
+              const moved = draft.tasks.filter((task) => task.phase === i).length
+              structural(
+                (d) => edits.removePhase(d, i),
+                null,
+                `Phase ${i + 1} removed.${moved > 0 ? ` Its ${count(moved, 'task')} moved to the phase now in that place.` : ''}`,
+              )
+            }}
+          />,
+        )}
+
+      {step === 'sites' && (
+        <SitesPage
+          catalog={catalog}
+          draft={draft}
+          plan={valid?.plan ?? null}
+          taskCounts={taskCounts}
+          selection={selection}
+          onSelect={setSelection}
+          onSettle={settle}
+          onAddSite={(lat, lon) =>
+            structural((d) => edits.addSite(d, degrees(lat), degrees(lon)), { list: 'site', index: draft.sites.length })
+          }
+          onAddEva={(lat, lon, hours, note) => {
+            const after = edits.addEva(draft, degrees(lat), degrees(lon), hours, note)
+            const task = after.tasks[after.tasks.length - 1]!
+            structural(
+              (d) => edits.addEva(d, degrees(lat), degrees(lon), hours, note),
+              { list: 'site', index: task.site },
+              `${after.sites[task.site]!.name} has a new ${hours} h EVA task in phase ${task.phase + 1}. Nobody is assigned to it yet.`,
+            )
+          }}
+          onUpdateSite={(i, patch, field) => commit((d) => edits.updateSite(d, i, patch), `site ${i} ${field}`)}
+          onRemoveSite={(i) => {
+            const gone = draft.tasks.filter((task) => task.site === i).length
+            structural(
+              (d) => edits.removeSite(d, i),
+              null,
+              `${draft.sites[i]!.name} removed${gone > 0 ? ` with its ${count(gone, 'task')}` : ''}.`,
+            )
+          }}
+          onAddTask={(site) => commit((d) => edits.addTask(d, site))}
+          onUpdateTask={(i, patch, field) => commit((d) => edits.updateTask(d, i, patch), `task ${i} ${field}`)}
+          onRemoveTask={(i) => commit((d) => edits.removeTask(d, i))}
+        />
+      )}
+
+      {step === 'review' && (
+        <>
+          <div className="workspace workspace--review">
+            <aside className={`review${valid ? '' : ' is-stale'}`} aria-label="Review">
+              <ReviewStep
+                catalog={catalog}
+                planned={shown}
+                stale={stale}
+                onSave={valid ? save : null}
+                onExportJson={exportJson}
+              />
+            </aside>
+            <GlobeCanvas
+              sites={draft.sites}
+              taskCounts={taskCounts}
+              selected={selection?.list === 'site' ? selection.index : -1}
+              editable={false}
+              placing={false}
+              onPlace={() => {}}
+              onSelect={(index) => setSelection({ list: 'site', index })}
+              onMove={() => {}}
+              onStatus={dispatchMapStatus}
+              onImagerySource={setImagerySource}
+              retryKey={retryKey}
+            />
+          </div>
+          <footer className="statusbar">
+            <MapStatus status={mapStatus} imagerySource={imagerySource} onRetry={() => setRetryKey((key) => key + 1)} />
+            <span className="statusbar__credit">
+              Viking / CTX · NASA / JPL / USGS / MSSS / The Murray Lab / Esri · Terrain NASA Mars Trek
+            </span>
+          </footer>
+        </>
+      )}
     </div>
   )
 }

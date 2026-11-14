@@ -1,5 +1,7 @@
 # Mission planner design notes
 
+This note was written for the earlier layout: five steps in a panel beside one globe. The stages are now separate pages with tabs in the top bar, and Sites is the map with EVA route planning. The task analysis and the failure cases below still hold. The scenario steps name controls that have moved.
+
 These are the design products that NASA TM-1998-208470, the Field Guide for Designing Human Interaction With Intelligent Systems, asks a project to keep: a goal, a task description, scenarios, objectives for the current prototype and an evaluation. The guide wants them short and revised after every prototype.
 
 One thing the guide puts at the centre is missing. It calls for users and subject experts on the design team and for evaluation sessions with them. None of that has happened. Everything below is the developers' view and should be treated as a first draft to put in front of a real planner.

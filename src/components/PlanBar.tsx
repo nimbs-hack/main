@@ -1,5 +1,5 @@
 import type { Planned } from '../api'
-import { duration, kcal, kwh, num } from '../format'
+import { duration, kcal, kwh, num } from '../numbers'
 import { Readout } from './controls'
 
 // What the last edit did to a number, as "+1,669 kg" or "-12 kg". Empty when

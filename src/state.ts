@@ -5,36 +5,19 @@ import type { Astronaut, Catalog, Mission, Phase, Site, Task } from './api'
 // range or empty while someone is typing in it.
 export type Draft = Mission
 
-// The steps of making a mission, in the order they are done.
+// The stages of making a mission, in the order they are done. Each is a page.
 export const STEPS = [
-  {
-    id: 'mission',
-    label: 'Mission',
-    title: 'Mission',
-  },
-  {
-    id: 'crew',
-    label: 'Crew',
-    title: 'Crew',
-  },
-  {
-    id: 'phases',
-    label: 'Phases',
-    title: 'Phases',
-  },
-  {
-    id: 'sites',
-    label: 'Sites',
-    title: 'Sites and tasks',
-  },
-  {
-    id: 'review',
-    label: 'Review',
-    title: 'Review',
-    help: 'What the mission needs, and anything that does not add up. Save the file when it does.',
-  },
+  { id: 'mission', label: 'Mission' },
+  { id: 'crew', label: 'Crew' },
+  { id: 'phases', label: 'Phases' },
+  { id: 'sites', label: 'Sites' },
+  { id: 'review', label: 'Review' },
 ] as const
 export type StepId = (typeof STEPS)[number]['id']
+
+// The stage in the address, so a reload or the back button lands on it.
+export const stepFromHash = (): StepId =>
+  STEPS.find((entry) => `#${entry.id}` === location.hash)?.id ?? 'mission'
 
 export type Selection = { list: 'crew' | 'phase' | 'site'; index: number } | null
 
@@ -253,6 +236,37 @@ export function createEdits(catalog: Catalog) {
         return task.site > index ? { ...task, site: task.site - 1 } : task
       }),
     }),
+
+    // An EVA planned on the map: a site at its target, unless one is already
+    // there, and one EVA task as long as the walk out, the work and the walk back.
+    addEva: (draft: Draft, lat: number, lon: number, hours: number, note: string): Draft => {
+      const existing = draft.sites.findIndex((site) => site.lat === lat && site.lon === lon)
+      const sites =
+        existing >= 0
+          ? draft.sites
+          : [
+              ...draft.sites,
+              {
+                name: freeName(
+                  draft.sites.map((site) => site.name),
+                  'EVA',
+                ),
+                lat,
+                lon,
+              },
+            ]
+      const outside = draft.phases.findIndex((phase) => phase.evaHoursPerWeek > 0)
+      const task: Task = {
+        site: existing >= 0 ? existing : draft.sites.length,
+        phase: Math.max(outside, 0),
+        crew: null,
+        kind: catalog.taskKinds[0]!,
+        eva: true,
+        hours,
+        note,
+      }
+      return { ...draft, sites, tasks: [...draft.tasks, task] }
+    },
 
     // New tasks start in the first phase that has EVA hours to spend.
     addTask: (draft: Draft, site: number): Draft => {

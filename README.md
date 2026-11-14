@@ -5,7 +5,7 @@ Plans what a crew needs for a mission: food energy and nutrients, water, oxygen 
 It has three parts:
 
 - The planner, in Go, in `apps/api/internal/planner`. It has a command line and an HTTP API. Its [README](apps/api/internal/planner/README.md) covers the model, the mission file format, the sources of every rate and the limits.
-- The editor, in React and TypeScript, in `src`. A 3D Mars globe is in the middle. You build the mission in five steps on the left, and the bar under the globe shows what the mission needs as you go.
+- The editor, in React and TypeScript, in `src`. A mission is made in five stages, each its own page with a tab in the top bar: Mission, Crew, Phases, Sites and Review. Sites is the 3D Mars map with EVA route planning, map tools and science layers.
 - The API server, in Go, in `apps/api`. It serves the planner and proxies and caches the globe's imagery and terrain tiles.
 
 Everything the planner reports is a planning estimate built from published NASA rates.
@@ -52,17 +52,21 @@ Typecheck runs `tsc` on the editor and compiles the Go packages. Lint runs `go v
 
 ## Making a mission
 
-Press **New mission**. The cursor lands in the name field of step 1, and **Next** at the bottom of the panel walks through the rest. You can also jump to any step from the row of five at the top.
+The Mission page is where a mission starts: name it, or press **Start a new mission** or **Open mission file**. **Next** at the bottom of a page goes to the next stage, and the tabs in the top bar go to any of them. The address keeps the stage, so reload and the back button work.
 
-| Step | What you do |
+| Stage | What you do |
 | --- | --- |
-| 1 Mission | Name it, pick the type, set the margin on supplies. The type fills in the phases. |
-| 2 Crew | Add people, by hand or from the roster. Open a row to edit a profile and see that person's needs per day. |
-| 3 Phases | Set each phase's length, recycling, EVA hours and power. A changed value shows a link back to the preset. |
-| 4 Sites | Press Add site, click the ground. Open the site to name it and give it tasks: kind, length, who, which phase, EVA or inside. Drag a marker to move a site. |
-| 5 Review | Cautions, totals, loads on the vehicle, tables by phase and by crew, the file size. Save the mission file here. |
+| Mission | Name it, pick the type, set the margin on supplies. The type fills in the phases. The second card says what the mission holds and links to each stage. |
+| Crew | Add people, by hand or from the roster. Open a row to edit a profile and see that person's needs per day. A portrait shows when `src/assets/crew` has a file named after the call sign. |
+| Phases | Set each phase's length, recycling, EVA hours and power. Drag a phase by its grip to reorder. A changed value turns blue and offers the preset back. |
+| Sites | Plan an EVA on the map: start, target, waypoints, limits, a go or no-go verdict. **Add EVA to mission** makes a site at the target with one EVA task as long as the walk and the work. Sites and tasks are listed on the right. |
+| Review | Cautions, totals, loads on the vehicle, tables by phase and by crew, with the mission's sites on Mars beside them. Save the mission file here. |
 
-A step with a problem in it is marked **Fix** in the row of steps. Review shows how many cautions are waiting.
+A stage with a problem in it is marked **Fix** on its tab. The Review tab shows how many cautions are waiting.
+
+### How the stages fit together
+
+One mission is shared by every page, with one undo history. The plan under the Mission, Crew and Phases pages shows what each edit did to the supplies. An EVA assessed on the Sites map becomes a task, and its hours are checked against the EVA hours of its phase, so a route that is too long shows up as a caution in Review. The task note carries the route's verdict, distance and steepest slope.
 
 ## The globe
 
@@ -75,7 +79,7 @@ The status bar reports loading, missing terrain or imagery, and when the older C
 
 Coordinates are planetocentric latitude and east-positive longitude on the sphere the terrain tiles use. Sites are stored with longitude from -180 to 180; the screen shows 0 to 360 east, the usual convention for Mars.
 
-Sites are points with a label: number, name, task count. The selected one is larger, red, and its label starts with a check mark. Clicking a marker in any step opens that site in step 4. The readout says "Terrain safety not assessed" for every site, because nothing here checks slope or hazards.
+Mission sites are points with a label: number, name, task count. The selected one is larger, red, and its label starts with a check mark. On the Review globe the readout says "Terrain safety not assessed" for every site. Slope is checked only along an EVA route planned on the Sites page.
 
 ## Tasks and EVA hours
 
@@ -118,9 +122,9 @@ Requirement text is from [the standard's page on nasa.gov](https://www.nasa.gov/
 | V2 10005 Consistency | One row pattern for crew, phases and sites. One place for the primary action. Same control for the same kind of value everywhere. |
 | V2 10006 Standard nomenclature | The words crew member, phase, site, task and EVA mean one thing each, in the app, the file and the planner. The lists of roles, kinds and types come from the planner, so the two cannot drift. |
 | V2 10020 Stale or missing data | When the mission cannot be planned, or the planner does not answer, the plan bar says "Stale" and strikes its numbers through. |
-| V2 10032 Grouping by sequence | The five steps are the order a mission is made in. |
-| V2 10037 Critical information together | The plan bar stays on screen in every step. |
-| V2 10045 Colour never the only cue | The current step is also bold and underlined. Open rows show a check mark. Cautions start with the word. The selected site is larger and checked. Changes show a plus or minus. |
+| V2 10032 Grouping by sequence | The five stages are the order a mission is made in. |
+| V2 10037 Critical information together | The plan bar is under the Mission, Crew and Phases pages, and Review shows the same totals. |
+| V2 10045 Colour never the only cue | The current stage's tab is also bold and raised. Open rows show a check mark. Cautions start with the word. The selected site is larger and checked. Changes show a plus or minus. |
 | V2 10046 Units on every number | Every value shows its unit, or its column heading does. |
 | V2 10060, 10063 Labels, next to the item | Every control has a label directly above it. |
 | V2 10069 Hazardous controls coded | Remove buttons have a dashed edge and say what they remove. |
@@ -155,9 +159,12 @@ src/            Editor, in React and TypeScript
   App.tsx       Start-up, the editor's state, the layout
   api.ts        The planner's JSON shapes and its three calls
   state.ts      Edits to a draft, undo history, what is saved in the browser
-  steps/        One file per step: mission, crew, phases, sites, review
-  components/   Form controls, the plan bar
-  globe/        Cesium globe: terrain, imagery, camera, site markers, loading status
+  steps/        One file per stage: mission, crew, phases, sites, review
+  components/   The Sites map and its panels, form controls, the plan bar, portraits
+  data/         Map data: terrain, imagery, routes, science layers, landing sites
+  cache/        Service worker registration for map tiles
+  globe/        The Review globe: mission site markers, loading status
+  assets/crew/  Crew portraits, one file per call sign
 apps/api/       Go: planner, hr-planner command line, API server, tile proxy
 scripts/        Go API launcher for Vite, basemap tile download, gofmt check
 public/tiles/   Low zoom levels of the Viking basemap
@@ -165,7 +172,7 @@ docs/           Visual language, design notes for the editor
 data/           Dataset notes in SOURCES.md. The tile cache lands here and is not committed
 ```
 
-`src/styles.css` holds the console's base styles and loads the tokens from `src/tokens.css`. `src/planner.css` adds what the editor needs: form fields, the row of steps, messages and the plan bar.
+`src/styles.css` holds the console's base styles and loads the tokens from `src/tokens.css`. `src/components/plan-panel.css` holds the slicer look of the plan panel. `src/planner.css` adds what the mission pages need in that look: the stage tabs, form rows, messages and the plan bar.
 
 ## Dependencies
 
