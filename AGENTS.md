@@ -16,6 +16,8 @@ Judges will look for these things, so keep them in mind when deciding what to bu
 
 Product decisions (site, science objective, form factor, layer list) live in Notion, not here. See [Context](#context).
 
+This branch holds one part of that: the mission planner. It works out what a crew needs for a mission and lets you place sites and tasks on the globe. The map app itself is on other branches.
+
 ## Context
 
 Product context, research notes, decisions and task assignments live in Notion:
@@ -39,9 +41,10 @@ Commands:
 bun install
 bun run dev       # Vite starts a private Go API process
 bun run build     # Frontend in dist/, API binary in bin/mars-api
-bun run typecheck # Compile all Go packages
+bun run typecheck # tsc on the editor, then compile all Go packages
 bun run lint      # go vet and gofmt checks
 bun run test      # JavaScript tests and Go tests with the race detector
+bun run planner   # The planner's command line, for example: bun run planner demo
 ```
 
 Before you say a task is done, run typecheck, lint and tests. Report a failure as a failure, with the output. Don't say "should work".
@@ -49,11 +52,10 @@ Before you say a task is done, run typecheck, lint and tests. Report a failure a
 ## Repo layout
 
 ```
-src/            React frontend, map data and CSS tokens in src/styles.css
-apps/api/       Go server: tile proxy and disk cache, mission planner, hr-planner CLI
-apps/planner/   Vite editor for planning missions, on the Go planner API
-scripts/        Tile download and precache scripts, Go process launcher
-docs/           Visual language and other team docs
+src/            Mission editor: React and TypeScript. Steps in src/steps, globe in src/globe, tokens in src/tokens.css
+apps/api/       Go server: mission planner, hr-planner CLI, tile proxy and disk cache
+scripts/        Basemap tile download, Go process launcher, gofmt check
+docs/           Visual language, design notes for the editor
 data/           Local raw and processed data. Gitignored. Never commit large files.
 public/         Static assets and low-zoom imagery
 .agents/skills/ Agent skills shared by Claude Code and Codex
@@ -61,7 +63,7 @@ public/         Static assets and low-zoom imagery
 
 ## Design
 
-Read [docs/visual-language.md](docs/visual-language.md) before building UI. Tokens are in `src/styles.css`. Use them instead of hardcoded values. If one is missing, add it and mention it in the PR.
+Read [docs/visual-language.md](docs/visual-language.md) before building UI. Tokens are in `src/tokens.css`. Use them instead of hardcoded values. If one is missing, add it and mention it in the PR.
 
 Don't add labels, headers, badges or status indicators that carry no information. If the view is obviously the overview, it doesn't need an OVERVIEW title. The visual language doc has the full list of what to leave out.
 

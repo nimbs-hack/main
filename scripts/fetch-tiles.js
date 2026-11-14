@@ -4,7 +4,7 @@
 import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { LOCAL_MAX_ZOOM, localTilePath, remoteTileUrl } from '../src/data/basemap.js'
+import { LOCAL_MAX_ZOOM, localTilePath, remoteTileUrl } from '../src/globe/basemap.js'
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public')
 const CONCURRENCY = 6

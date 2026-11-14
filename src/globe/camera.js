@@ -14,7 +14,7 @@ import {
   Math as CesiumMath,
   ScreenSpaceEventType,
 } from 'cesium'
-import { CTX_METERS_PER_PIXEL } from '../data/ctx'
+import { CTX_METERS_PER_PIXEL } from './ctx'
 
 // Highest terrain in Trek's heights (Olympus Mons, about 29.4 km above the
 // sphere), with headroom. Cesium only checks for terrain collisions below

@@ -6,7 +6,7 @@ The mission travels as a single small binary file. A six-person Mars mission wit
 
 Everything is a planning estimate built from published NASA rates. The [sources](#sources) and the [limits](#limits) are listed below.
 
-It is one Go package with no dependencies outside the standard library, used three ways: from the command line, over HTTP by the editor in `apps/planner`, and from other Go code in this module.
+It is one Go package with no dependencies outside the standard library, used three ways: from the command line, over HTTP by the editor in `src`, and from other Go code in this module.
 
 ## Command line
 

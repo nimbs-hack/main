@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-// Map loading state and its wording are the map app's, so both apps report
-// missing terrain or fallback imagery the same way.
-import MapStatus from '../../../src/components/MapStatus.jsx'
-import { INITIAL_MAP_STATUS, mapStatusReducer } from '../../../src/components/map-status.ts'
+import MapStatus from './globe/MapStatus.jsx'
+import { INITIAL_MAP_STATUS, mapStatusReducer } from './globe/map-status.ts'
 import { type Astronaut, type Catalog, type Planned, PlannerError, fetchCatalog, fileBytes, requestPlan } from './api'
-import { GlobeCanvas } from './components/GlobeCanvas'
-import { Button, Readout } from './components/controls'
-import { CrewStep, MissionStep, PhasesStep, ReviewStep, SitesStep } from './components/steps'
+import { GlobeCanvas } from './globe/GlobeCanvas'
+import { PlanBar } from './components/PlanBar'
+import { Button } from './components/controls'
+import { CrewStep } from './steps/CrewStep'
+import { MissionStep } from './steps/MissionStep'
+import { PhasesStep } from './steps/PhasesStep'
+import { ReviewStep } from './steps/ReviewStep'
+import { SitesStep } from './steps/SitesStep'
 import { download, fileStem, readMissionFile } from './files'
-import { duration, kcal, kwh, num } from './format'
 import {
   type Draft,
   STEPS,
@@ -57,68 +59,6 @@ const plainWords = (message: string): string =>
   FIELD_WORDS.reduce((text, [field, words]) => text.replace(field, words), message)
 
 const count = (n: number, thing: string) => `${n} ${thing}${n === 1 ? '' : 's'}`
-
-// What the last edit did to a number, as "+1,669 kg" or "-12 kg". Empty when
-// the edit left it alone. The sign carries the direction, not a colour.
-function change(now: number, before: number | undefined, unit: string): string | undefined {
-  if (before === undefined) return undefined
-  const difference = Math.round(now) - Math.round(before)
-  if (difference === 0) return undefined
-  return `${difference > 0 ? '+' : '−'}${num(Math.abs(difference))} ${unit} last edit`
-}
-
-// The plan, always in view under the globe, with the effect of the last edit
-// under each number. While the draft cannot be planned it shows the last
-// numbers that could, marked as stale.
-function PlanBar({ shown, before, stale }: { shown: Planned; before: Planned | null; stale: boolean }) {
-  const { plan, fileBytes: size } = shown
-  const { provision } = plan
-  const was = before?.plan.provision
-  const typicalLink = shown.links.find((link) => link.id === 'x-band-hga')
-  return (
-    <section className={`planbar${stale ? ' is-stale' : ''}`} aria-label="Plan">
-      <h2 className="readout__label">
-        To supply, {plan.marginPercent}% margin included
-        {stale && <b className="planbar__stale">Stale: from the last valid mission</b>}
-      </h2>
-      <div className="planbar__grid">
-        <Readout
-          label="Food"
-          value={`${num(provision.foodKg)} kg`}
-          sub={change(provision.foodKg, was?.foodKg, 'kg') ?? `${num(kcal(provision.foodEnergyMJ) / 1e6, 1)} Gcal`}
-        />
-        <Readout
-          label="Water"
-          value={`${num(provision.waterSupplyKg)} kg`}
-          sub={change(provision.waterSupplyKg, was?.waterSupplyKg, 'kg')}
-        />
-        <Readout
-          label="Oxygen"
-          value={`${num(provision.oxygenSupplyKg)} kg`}
-          sub={change(provision.oxygenSupplyKg, was?.oxygenSupplyKg, 'kg')}
-        />
-        <Readout
-          label="Electricity"
-          value={`${num(kwh(provision.electricityMJ))} kWh`}
-          sub={change(kwh(provision.electricityMJ), was && kwh(was.electricityMJ), 'kWh')}
-        />
-        <Readout
-          label="Duration"
-          value={`${num(plan.days)} d`}
-          sub={change(plan.days, before?.plan.days, 'd') ?? `${plan.crew.length} crew`}
-        />
-        <Readout
-          label="Mission file"
-          value={`${num(size)} B`}
-          sub={
-            change(size, before?.fileBytes, 'B') ??
-            (typicalLink ? `${duration(typicalLink.seconds)} at 1 kbit/s` : undefined)
-          }
-        />
-      </div>
-    </section>
-  )
-}
 
 interface Start {
   catalog: Catalog
@@ -420,8 +360,8 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
 
         <div className={`step${step === 'review' && !valid ? ' is-stale' : ''}`}>
           <div>
-            <h1 className="sites__heading">{currentStep.title}</h1>
-            <p className="sites__intro">{currentStep.help}</p>
+            <h1 className="planner__heading">{currentStep.title}</h1>
+            <p className="planner__intro">{currentStep.help}</p>
           </div>
 
           {offline && (

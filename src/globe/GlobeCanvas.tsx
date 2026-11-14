@@ -22,14 +22,12 @@ import {
 } from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import type { Site } from '../api'
-// The globe is built from the map app's modules in the repo root, so both
-// apps show the same terrain, imagery and camera behaviour.
-import NavControls from '../../../../src/components/NavControls.jsx'
-import { pickGround, setupControls } from '../../../../src/components/camera.js'
-import { LOCAL_MAX_ZOOM, MAX_NATIVE_ZOOM, localTilePath, remoteTileUrl } from '../../../../src/data/basemap.js'
-import { addCtxLayer } from '../../../../src/data/ctx-layer.ts'
-import { DATUM_OFFSET, MARS_SPHERE, createTerrain } from '../../../../src/data/terrain.js'
-import { formatAltitude, formatElevation, formatLatLon } from '../../../../src/format.js'
+import NavControls from './NavControls.jsx'
+import { pickGround, setupControls } from './camera.js'
+import { LOCAL_MAX_ZOOM, MAX_NATIVE_ZOOM, localTilePath, remoteTileUrl } from './basemap.js'
+import { addCtxLayer } from './ctx-layer.ts'
+import { DATUM_OFFSET, MARS_SPHERE, createTerrain } from './terrain.js'
+import { formatAltitude, formatElevation, formatLatLon } from './format.js'
 
 export type MapStatusEvent =
   | { type: 'reset' }
@@ -38,7 +36,7 @@ export type MapStatusEvent =
   | { type: 'failure'; source: 'Viking imagery' | 'CTX imagery' | 'Terrain' | '3D viewer' }
 
 // Opening view when the mission has no sites yet: Tharsis and Valles
-// Marineris, where the relief is easiest to see. Same as the map app.
+// Marineris, where the relief is easiest to see.
 const HOME = { lon: -85, lat: 0, height: 9_000_000 }
 const FLY_PITCH = CesiumMath.toRadians(-35)
 // Closest the camera frames a single site, in metres.
@@ -71,7 +69,7 @@ function toLatLon(position: Cartesian3): { lat: number; lon: number } {
 }
 
 // Light from the top left of the screen, low over the horizon: the
-// convention for shaded relief. Mirrors aimLight in the map app.
+// convention for shaded relief.
 const scratch = { up: new Cartesian3(), forward: new Cartesian3(), right: new Cartesian3(), tmp: new Cartesian3() }
 function aimLight(viewer: Viewer): void {
   const { scene } = viewer
@@ -92,8 +90,7 @@ function aimLight(viewer: Viewer): void {
   Cartesian3.normalize(light.direction, light.direction)
 }
 
-// Viewer setup. It follows createViewer in src/components/MarsGlobe.jsx,
-// which is not exported; once that lands on main the two should share one.
+// Viewer setup: Mars sphere, Trek terrain, Viking basemap with CTX on top.
 function createViewer(container: HTMLElement, ctx: Parameters<typeof addCtxLayer>[1]) {
   const terrain = createTerrain()
   const imagery = new UrlTemplateImageryProvider({

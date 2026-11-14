@@ -1,7 +1,6 @@
-/* Mission planner. The map app's stylesheet (src/styles.css in the repo root)
-   is loaded first and supplies the tokens, the top bar, the map stage with
-   its readouts and camera buttons, the nav buttons and the status bar. This
-   file adds only what an editor needs on top of that. */
+/* The editor. styles.css is loaded first and supplies the tokens, the top
+   bar, the map stage with its readouts and camera buttons, the nav buttons
+   and the status bar. This file adds what an editor needs on top of that. */
 
 /* Layout: the editor on the left, the globe beside it, the plan under the globe. */
 
@@ -69,7 +68,7 @@ summary {
   gap: var(--space-2);
 }
 
-/* The editor panel: same surface and padding as the map app's site panel. */
+/* The editor panel. */
 
 .planner {
   grid-area: side;
@@ -78,6 +77,24 @@ summary {
   min-height: 0;
   border-right: var(--border-width) solid var(--color-line);
   background: var(--color-surface);
+}
+
+/* Headings inside the panel: the step, its one-line help, a section. */
+
+.planner__title {
+  border-bottom: 1px solid var(--color-line);
+  color: var(--color-text-muted);
+  font-size: var(--text-label);
+  font-weight: 500;
+}
+
+.planner__heading {
+  font-size: var(--text-section);
+  line-height: 1.25;
+}
+
+.planner__intro {
+  color: var(--color-text-muted);
 }
 
 /* Steps, in the order a mission is made. The current one is underlined and
@@ -185,7 +202,7 @@ summary {
 }
 
 /* Lists whose selected line opens an editor underneath. The line itself is
-   the map app's nav button. */
+   a nav button from styles.css. */
 
 .items {
   display: grid;
@@ -549,7 +566,7 @@ select.input {
 
 /* Messages. Each starts with a word saying what it is, and the ones that
    need action offer the action. Most urgent first: cannot plan, caution, done.
-   The warning colour means missing or inconsistent data, as in the map app. */
+   The warning colour means missing or inconsistent data. */
 
 .problem,
 .notice,
@@ -685,8 +702,8 @@ select.input {
   text-decoration: line-through;
 }
 
-/* The globe is narrower here than in the map app, so the view buttons sit in
-   the free bottom-left corner instead of the centre, clear of the altitude
+/* The globe shares the width with the editor, so the view buttons sit in the
+   free bottom-left corner instead of the centre, clear of the altitude
    readout. */
 .console--planner .zoom {
   left: 30px;

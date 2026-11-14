@@ -21,13 +21,13 @@ The Go proxy also rebuilds a truncated intermediate tile from its four children 
 
 - Source/service: https://astro.arcgis.com/arcgis/rest/services/OnMars/CTX/MapServer. This older Murray Lab CTX mosaic uses the same 512 px geographic grid, Mars radius and approximately 5 m/pixel level 12. It is not V01; its registration and brightness differ.
 - Mission/instrument and credit: MRO/CTX, NASA/JPL/MSSS/The Murray Lab, hosted by Esri. Retain attribution and consult the service's linked terms for reuse.
-- Fetch/cache implementation: the same proxy with `source=beta01`, separate from the default `source=v01`. Backup tiles use `data/cache/ctx-v01/beta01/`, capped at 512 entries, with a separate 32 MiB memory cache. The precache script fetches this version with `--backup`.
+- Fetch/cache implementation: the same proxy with `source=beta01`, separate from the default `source=v01`. Backup tiles use `data/cache/ctx-v01/beta01/`, capped at 512 entries, with a separate 32 MiB memory cache.
 - On a V01 tile failure, the client replaces the entire imagery layer with beta01. Switching individual tiles created visible joins between mosaics. The selection persists for the browser tab's session and appears in the footer. Failed backup tiles use Cesium's coarser imagery fallback and report a loading error.
-- Verification: the screenshot location at 11.250°N, 255.552°E rendered level-12 beta01 imagery. Backup tile `11/812/2926` also returned a truncated image, so this service is not a complete repair for the upstream data. The three-site backup precache run validated 990 of 1,018 imagery and terrain requests; 28 imagery requests failed validation.
+- Verification: the screenshot location at 11.250°N, 255.552°E rendered level-12 beta01 imagery. Backup tile `11/812/2926` also returned a truncated image, so this service is not a complete repair for the upstream data. A warm-up run over three landing sites validated 990 of 1,018 imagery and terrain requests; 28 imagery requests failed validation.
 
 The Vite dev and preview servers start a private Go API process and proxy requests to it. For a standalone build, run `bun run build` then `bun run start` from the repository root. A static-only host must route `/api/imagery/ctx-v01/*` and `/api/terrain/mars-v14/*` to the API; copying `dist/` alone does not provide the tile proxy.
 
-Viking stays below CTX and at the poles. CTX starts at terrain level 6. Missing imagery can fall back to Viking; CTX does not add elevation detail. Site prefetch requests one tile at a time after visible tiles settle and stops when the selected site changes.
+Viking stays below CTX and at the poles. CTX starts at terrain level 6. Missing imagery can fall back to Viking; CTX does not add elevation detail.
 
 ## Mars Trek terrain
 
@@ -40,11 +40,7 @@ Viking stays below CTX and at the poles. CTX starts at terrain level 6. Missing 
 - Fetch/cache implementation: `apps/api/internal/tiles/terrain.go`. Original mesh bytes are cached under `data/cache/mars-v14-v2/`, capped at 8,192 tiles of at most 2 MiB each, plus a 16 MiB memory cache. Metadata is pinned to version 2.0 and served with local relative tile paths. Clear the directory and restart the API to refresh it.
 - Data limitation: the source blends elevation models with visible offsets. Caching preserves those source bytes and does not repair vertical registration. The existing client seam-smoothing heuristic is unchanged and should not be used as a corrected scientific elevation product.
 
-Rover paths use `src/components/route-overlay.ts` to project their coordinates onto loaded terrain and draw above the map. Cesium's ground-polyline geometry uses an Earth-specific approximate-height table, which can exclude Mars terrain and hide the route. The overlay updates when terrain refines or elevation exaggeration changes, keeps a fixed screen width and outline, and clips points hidden by the planet. It intentionally draws over local hills. While terrain is unavailable, route projection uses the datum height; it does not wait on extra terrain downloads.
-
-## Precaching site views
-
-Run `bun run precache` to cache CTX V01 and terrain around Curiosity, Perseverance and Pathfinder. Run `bun run precache --backup` to also warm beta01. Pass site IDs to select others, for example `bun run precache spirit opportunity`. The script samples rover traverses, caches imagery through its native 5 m level and available terrain through level 14, and uses at most six concurrent requests. Existing tiles are validated and reused. It does not download the entire planet.
+## Camera and loading
 
 During camera movement, the globe temporarily uses a larger screen-space error tolerance to avoid loading fine tiles at every intermediate position. It returns to the original full-detail tolerance 150 ms after movement ends. Site framing uses loaded terrain, or an approximate datum height, so flights start without waiting for remote elevation sampling. That approximation changes only camera framing, not elevation readouts or terrain.
 

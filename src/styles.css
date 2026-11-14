@@ -1,4 +1,4 @@
-@import '../apps/web/src/styles/tokens.css';
+@import './tokens.css';
 
 :root {
   color-scheme: dark;
@@ -111,13 +111,6 @@ button {
   outline-offset: -2px;
 }
 
-.stage__map .route-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-}
-
 /* HUD over the map. Only its controls take pointer events. */
 
 .hud {
@@ -171,13 +164,6 @@ button {
   top: 30px;
   left: 30px;
   transition: translate 0.25s ease;
-}
-
-/* Keep the cursor readout clear of the open sites panel. */
-@media (min-width: 701px) {
-  .hud:has(.sites.is-open) .readout--tl {
-    translate: calc(min(var(--sidebar-width), 40vw) + var(--space-8)) 0;
-  }
 }
 
 .readout--tr {
@@ -308,169 +294,12 @@ button {
   fill: var(--color-text-dim);
 }
 
-/* Landing sites: a full-height panel that slides out from the left edge of
-   the map. The wrapper is as tall as the map, so only the panel and its tab
-   take pointer events. */
-
-.sites {
-  --sites-width: min(var(--sidebar-width), 40vw);
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  display: flex;
-  align-items: center;
-  translate: calc(-1 * var(--sites-width)) 0;
-  transition: translate 0.25s ease;
-}
-
-.sites.is-open {
-  translate: 0 0;
-}
-
-.sites__panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--button-gap);
-  width: var(--sites-width);
-  height: 100%;
-  padding: var(--space-8);
-  border-right: 1px solid var(--color-line);
-  background: var(--color-surface);
-  overflow-y: auto;
-  scrollbar-width: thin;
-  pointer-events: auto;
-}
-
-.sites__title {
-  margin: 0 0 6px;
-  padding-bottom: 9px;
-  border-bottom: 1px solid var(--color-line);
-  color: var(--color-text-muted);
-  font-size: var(--text-label);
-  font-weight: 500;
-}
-
-.sites__heading {
-  margin: 0;
-  font-size: var(--text-section);
-  line-height: 1.25;
-}
-
-.sites__intro,
-.map-context p {
-  margin: var(--space-2) 0 0;
-  color: var(--color-text-muted);
-}
-
-.site-detail,
-.map-context {
-  padding: var(--space-4) 0;
-  border-block: 1px solid var(--color-line);
-}
-
-.site-detail h2 {
-  margin: 0;
-  font-size: var(--text-section);
-}
-
-.site-detail dl,
-.map-context dl {
-  display: grid;
-  gap: var(--space-3);
-  margin: var(--space-3) 0;
-}
-
-.site-detail dt,
-.map-context dt {
-  color: var(--color-text-muted);
-  font-size: var(--text-label);
-  font-family: var(--font-mono);
-}
-
-.site-detail dd,
-.map-context dd {
-  margin: var(--space-1) 0 0;
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
-}
-
-.site-detail__locate,
 .map-status button {
   min-height: var(--button-height);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-line-strong);
   background: var(--color-surface-raised);
   color: var(--color-text);
-}
-
-.site-detail__locate {
-  width: 100%;
-  text-align: left;
-}
-
-.map-legend {
-  display: grid;
-  gap: var(--space-2);
-  padding: 0;
-  list-style: none;
-}
-
-.map-legend li {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.map-legend__line {
-  width: var(--space-6);
-  border-top: 2px solid var(--color-text);
-  flex: none;
-}
-
-.map-legend__point {
-  width: var(--space-2);
-  height: var(--space-2);
-  margin-inline: var(--space-2);
-  background: var(--color-text);
-  flex: none;
-}
-
-.sites__toggle {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  width: 30px;
-  padding: 12px 0;
-  border: 1px solid var(--color-line);
-  border-left: 0;
-  background: var(--color-surface);
-  color: var(--color-text-muted);
-  pointer-events: auto;
-}
-
-.sites__toggle:hover {
-  background: var(--color-surface-raised);
-  color: var(--color-text);
-}
-
-.sites__toggle-arrow {
-  color: var(--color-text);
-  font-size: var(--text-button);
-  line-height: 1;
-  letter-spacing: 0;
-  transition: rotate 0.25s ease;
-}
-
-.sites.is-open .sites__toggle-arrow {
-  rotate: 180deg;
-}
-
-.sites__toggle-text {
-  font-size: var(--text-label);
-  writing-mode: vertical-rl;
 }
 
 .nav-button {
@@ -596,8 +425,6 @@ button:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sites,
-  .sites__toggle-arrow,
   .nav-button,
   .readout--tl {
     transition: none;
@@ -650,10 +477,6 @@ button:disabled {
     bottom: 22px;
   }
 
-  .sites {
-    --sites-width: min(320px, calc(100vw - 48px));
-  }
-
   /* Leaves room for the longest site name. */
   .nav-button__arrow {
     display: none;
@@ -683,31 +506,7 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
-@media (max-width: 1100px) {
-  .hud:has(.sites.is-open) .readout--tl {
-    visibility: hidden;
-  }
-
-  .sites__panel {
-    padding: var(--space-4);
-  }
-}
-
-/* The open panel owns the left side on small displays. Keep map controls
-   reachable after collapsing it instead of overlapping the panel's content. */
-@media (max-width: 1100px) {
-  .hud:has(.sites.is-open) .zoom,
-  .hud:has(.sites.is-open) .readout--br {
-    visibility: hidden;
-  }
-}
-
 @media (max-width: 700px) {
-  .hud:has(.sites.is-open) .nav,
-  .hud:has(.sites.is-open) .readout--tr {
-    visibility: hidden;
-  }
-
   .statusbar__credit {
     width: 100%;
     margin-left: 0;
