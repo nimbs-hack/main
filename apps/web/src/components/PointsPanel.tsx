@@ -10,6 +10,7 @@ import { PointClassIcon, resolvePointSymbolMeta } from "./PointClassIcon";
 import { ThemedIconPicker } from "./ThemedIconPicker";
 
 interface PointsPanelProps {
+  readOnly?: boolean;
   classes: MapPointClass[];
   points: MapPoint[];
   hiddenClassIds: string[];
@@ -52,6 +53,7 @@ function formatCoord(coord: MarsCoord, fmt: LonFormat): string {
 }
 
 export function PointsPanel({
+  readOnly = false,
   classes,
   points,
   hiddenClassIds,
@@ -180,13 +182,14 @@ export function PointsPanel({
       <div className="panel-header">
         <h1 className="panel-title">Points</h1>
         <p className="panel-desc">
-          Right-click the map to drop MIL-STD-2525C tactical markers with notes, or toggle point
-          classes.
+          {readOnly
+            ? "View MIL-STD-2525C markers, filter classes, and set A/B route waypoints."
+            : "Right-click the map to drop MIL-STD-2525C tactical markers with notes, or toggle point classes."}
         </p>
         <div className="panel-rule" />
       </div>
 
-      {isDraftOpen ? (
+      {!readOnly && isDraftOpen ? (
         <form className="poi-form-card" onSubmit={handlePointSubmit}>
           <div className="field-label-row" style={{ marginBottom: 0 }}>
             <span className="value-label">{editingPoint ? "EDIT POINT" : "NEW POINT"}</span>
@@ -277,7 +280,7 @@ export function PointsPanel({
             <span className="chamfer-btn-arrow">→</span>
           </button>
         </form>
-      ) : (
+      ) : !readOnly ? (
         <button
           type="button"
           className={`chamfer-btn ${pickMode ? "is-primary" : ""}`}
@@ -290,9 +293,9 @@ export function PointsPanel({
           </span>
           <span className="chamfer-btn-arrow">{pickMode ? "×" : "+"}</span>
         </button>
-      )}
+      ) : null}
 
-      <div className="divider" />
+      {!readOnly && <div className="divider" />}
 
       <div className="poi-section">
         <div className="field-label-row">
@@ -312,17 +315,19 @@ export function PointsPanel({
             >
               ALL OFF
             </button>
-            <button
-              type="button"
-              className={`compact-btn ${showNewClassForm ? "is-active" : ""}`}
-              onClick={() => setShowNewClassForm((v) => !v)}
-            >
-              + CLASS
-            </button>
+            {!readOnly && (
+              <button
+                type="button"
+                className={`compact-btn ${showNewClassForm ? "is-active" : ""}`}
+                onClick={() => setShowNewClassForm((v) => !v)}
+              >
+                + CLASS
+              </button>
+            )}
           </div>
         </div>
 
-        {showNewClassForm && (
+        {!readOnly && showNewClassForm && (
           <form className="poi-form-card" onSubmit={handleClassSubmit}>
             <div className="poi-new-class-row">
               <input
@@ -392,7 +397,7 @@ export function PointsPanel({
                     {visible ? "SHOW" : "HIDE"}
                   </span>
                 </button>
-                {!cls.builtIn && count === 0 && (
+                {!readOnly && !cls.builtIn && count === 0 && (
                   <button
                     type="button"
                     className="poi-del-btn"
@@ -431,7 +436,9 @@ export function PointsPanel({
         {points.length === 0 ? (
           <div className="readout-card">
             <span className="readout-sub">
-              No points yet. Right-click anywhere on the map and select Add Classified Point.
+              {readOnly
+                ? "No saved points in this workspace."
+                : "No points yet. Right-click anywhere on the map and select Add Classified Point."}
             </span>
           </div>
         ) : filteredPoints.length === 0 ? (
@@ -497,20 +504,24 @@ export function PointsPanel({
                     >
                       SET B
                     </button>
-                    <button
-                      type="button"
-                      className="compact-btn"
-                      onClick={() => onStartEditPoint(pt)}
-                    >
-                      EDIT
-                    </button>
-                    <button
-                      type="button"
-                      className="compact-btn"
-                      onClick={() => onDeletePoint(pt.id)}
-                    >
-                      DEL
-                    </button>
+                    {!readOnly && (
+                      <>
+                        <button
+                          type="button"
+                          className="compact-btn"
+                          onClick={() => onStartEditPoint(pt)}
+                        >
+                          EDIT
+                        </button>
+                        <button
+                          type="button"
+                          className="compact-btn"
+                          onClick={() => onDeletePoint(pt.id)}
+                        >
+                          DEL
+                        </button>
+                      </>
+                    )}
                   </div>
                 </article>
               );

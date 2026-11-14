@@ -5,10 +5,18 @@ import type {
   RoutePlanResponse,
   RoutePoint,
   RouteStrategy,
+  TraversePresetId,
+  UiMode,
 } from "@nimbs/shared";
-import type { EvaWeatherEvaluation, EvaWeatherLimits, RouteBlockedReason } from "../services/api";
+import {
+  type EvaWeatherEvaluation,
+  type EvaWeatherLimits,
+  type RouteBlockedReason,
+  TRAVERSE_PRESETS,
+} from "../services/api";
 import { ElevationProfile } from "./ElevationProfile";
 import { MaxSlopeControl } from "./MaxSlopeControl";
+import { TraversePresetControl } from "./TraversePresetControl";
 import { evaStatusClass } from "./WeatherPanel";
 import {
   buildSparklineGeometry,
@@ -18,6 +26,9 @@ import {
 } from "./routeVisuals";
 
 interface RoutePlannerPanelProps {
+  uiMode: UiMode;
+  presetId: TraversePresetId;
+  onSelectPreset: (id: TraversePresetId) => void;
   siteCompactLabel: string;
   maxSlopeDeg: number;
   onChangeMaxSlopeDeg: (deg: number) => void;
@@ -99,6 +110,9 @@ function slopeToneColor(slopeDeg: number, maxSlopeDeg: number): string {
 }
 
 export function RoutePlannerPanel({
+  uiMode,
+  presetId,
+  onSelectPreset,
   siteCompactLabel,
   maxSlopeDeg,
   onChangeMaxSlopeDeg,
@@ -201,7 +215,11 @@ export function RoutePlannerPanel({
       </div>
 
       {/* Slope + Weather constraint strip */}
-      <MaxSlopeControl valueDeg={maxSlopeDeg} onChange={onChangeMaxSlopeDeg} />
+      {uiMode === "basic" ? (
+        <TraversePresetControl presetId={presetId} onSelectPreset={onSelectPreset} compact />
+      ) : (
+        <MaxSlopeControl valueDeg={maxSlopeDeg} onChange={onChangeMaxSlopeDeg} />
+      )}
 
       <div className="rte-filter-bar">
         <button
@@ -217,7 +235,11 @@ export function RoutePlannerPanel({
           type="button"
           className="rte-limit-pills"
           onClick={onOpenWeatherPanel}
-          title="Edit suit weather thresholds"
+          title={
+            uiMode === "basic"
+              ? "View weather and traverse windows"
+              : "Edit suit weather thresholds and traverse speeds"
+          }
         >
           {weatherRoutingEnabled ? (
             <>
@@ -264,7 +286,8 @@ export function RoutePlannerPanel({
               BLOCKED · {blockedReasonTag(routePlan.blockedReason)}
             </span>
             <div className="rte-blocked-actions">
-              {routePlan.minRequiredSlopeDeg !== undefined &&
+              {uiMode === "advance" &&
+                routePlan.minRequiredSlopeDeg !== undefined &&
                 routePlan.minRequiredSlopeDeg > maxSlopeDeg &&
                 (() => {
                   const targetDeg = Math.ceil(routePlan.minRequiredSlopeDeg * 2) / 2;
@@ -278,6 +301,19 @@ export function RoutePlannerPanel({
                     </button>
                   );
                 })()}
+              {uiMode === "basic" &&
+                presetId === "human" &&
+                routePlan.minRequiredSlopeDeg !== undefined &&
+                routePlan.minRequiredSlopeDeg > maxSlopeDeg &&
+                routePlan.minRequiredSlopeDeg <= TRAVERSE_PRESETS.rover.maxSlopeDeg && (
+                  <button
+                    type="button"
+                    className="compact-btn"
+                    onClick={() => onSelectPreset("rover")}
+                  >
+                    ROVER {TRAVERSE_PRESETS.rover.maxSlopeDeg}°
+                  </button>
+                )}
               <button type="button" className="compact-btn" onClick={onOpenWeatherPanel}>
                 WXR →
               </button>
@@ -450,6 +486,9 @@ export function RoutePlannerPanel({
             EVA {weatherEval.status}
           </span>
           <span className="rte-eva-meta">
+            {weatherEval.estimatedRouteHours !== null
+              ? `~${weatherEval.estimatedRouteHours.toFixed(1)}h · `
+              : ""}
             {simClockLabel} LMST
             {weatherEval.selectedHourWeather
               ? ` · ${weatherEval.selectedHourWeather.rimTempC.toFixed(0)}°C · ${weatherEval.selectedHourWeather.windSpeedMps.toFixed(1)} m/s`

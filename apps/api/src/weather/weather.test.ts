@@ -400,5 +400,40 @@ describe("Weather HTTP API endpoints", () => {
       body: JSON.stringify({ limits: { maxEvaHours: -2 } }),
     });
     expect(badEval.status).toBe(400);
+
+    const fastRoverEval = await app.request("/api/weather/evaluate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scenario: "nominal",
+        sol: 1859,
+        limits: {
+          ...DEFAULT_EVA_LIMITS,
+          minAirTempC: -110,
+          maxEvaHours: 8,
+          flatSpeedMPerH: 5000,
+          climbSpeedMPerH: 700,
+          descentSpeedMPerH: 1200,
+        },
+        route: {
+          totalDistanceM: 5000,
+          elevationGainM: 350,
+          elevationLossM: 0,
+          maxElevationM: -1750,
+        },
+      }),
+    });
+    expect(fastRoverEval.status).toBe(200);
+    const fastBody = (await fastRoverEval.json()) as {
+      evaluation: { estimatedRouteHours: number | null };
+    };
+    expect(fastBody.evaluation.estimatedRouteHours).toBe(1.5);
+
+    const badSpeedEval = await app.request("/api/weather/evaluate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limits: { flatSpeedMPerH: 10 } }),
+    });
+    expect(badSpeedEval.status).toBe(400);
   });
 });

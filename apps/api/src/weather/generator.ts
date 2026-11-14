@@ -1164,6 +1164,10 @@ interface WalkTimeSample {
   elevationM: number;
 }
 
+function resolvePositiveSpeed(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 function resolveLimits(partial?: Partial<EvaWeatherLimits>): EvaWeatherLimits {
   return {
     minAirTempC: partial?.minAirTempC ?? DEFAULT_EVA_LIMITS.minAirTempC,
@@ -1171,10 +1175,38 @@ function resolveLimits(partial?: Partial<EvaWeatherLimits>): EvaWeatherLimits {
     minPressurePa: partial?.minPressurePa ?? DEFAULT_EVA_LIMITS.minPressurePa,
     maxPressureSwingPa: partial?.maxPressureSwingPa ?? DEFAULT_EVA_LIMITS.maxPressureSwingPa,
     maxEvaHours: partial?.maxEvaHours ?? DEFAULT_EVA_LIMITS.maxEvaHours,
+    flatSpeedMPerH: resolvePositiveSpeed(
+      partial?.flatSpeedMPerH,
+      DEFAULT_EVA_LIMITS.flatSpeedMPerH,
+    ),
+    climbSpeedMPerH: resolvePositiveSpeed(
+      partial?.climbSpeedMPerH,
+      DEFAULT_EVA_LIMITS.climbSpeedMPerH,
+    ),
+    descentSpeedMPerH: resolvePositiveSpeed(
+      partial?.descentSpeedMPerH,
+      DEFAULT_EVA_LIMITS.descentSpeedMPerH,
+    ),
   };
 }
 
-function computePointsDurationHours(points: readonly TraversePointSample[]): number {
+function computeSegmentHours(
+  distM: number,
+  gainM: number,
+  lossM: number,
+  limits: EvaWeatherLimits,
+): number {
+  return (
+    distM / limits.flatSpeedMPerH +
+    gainM / limits.climbSpeedMPerH +
+    lossM / limits.descentSpeedMPerH
+  );
+}
+
+function computePointsDurationHours(
+  points: readonly TraversePointSample[],
+  limits: EvaWeatherLimits,
+): number {
   let total = 0;
   for (let i = 1; i < points.length; i += 1) {
     const prev = points[i - 1];
@@ -1184,20 +1216,23 @@ function computePointsDurationHours(points: readonly TraversePointSample[]): num
     const dElev = curr.elevationM - prev.elevationM;
     const gain = Math.max(0, dElev);
     const loss = Math.max(0, -dElev);
-    total += dDist / 2500 + gain / 350 + loss / 800;
+    total += computeSegmentHours(dDist, gain, loss, limits);
   }
   return total;
 }
 
-function resolveRouteDurationHours(route: EvaRouteContext | undefined): number | null {
+function resolveRouteDurationHours(
+  route: EvaRouteContext | undefined,
+  limits: EvaWeatherLimits,
+): number | null {
   if (route?.totalDistanceM !== undefined && Number.isFinite(route.totalDistanceM)) {
     const distM = Math.max(0, route.totalDistanceM);
     const gainM = Math.max(0, route.elevationGainM ?? 0);
     const lossM = Math.max(0, route.elevationLossM ?? 0);
-    return roundTo(distM / 2500 + gainM / 350 + lossM / 800, 2);
+    return roundTo(computeSegmentHours(distM, gainM, lossM, limits), 2);
   }
   if (route?.points && route.points.length >= 2) {
-    return roundTo(computePointsDurationHours(route.points), 2);
+    return roundTo(computePointsDurationHours(route.points, limits), 2);
   }
   return null;
 }
@@ -1207,6 +1242,7 @@ function buildWalkTimeProfile(
   floorElevationM: number,
   evaluationElevationM: number,
   fallbackDurationHours: number,
+  limits: EvaWeatherLimits,
 ): {
   durationHours: number;
   timeGrid: WalkTimeSample[];
@@ -1226,7 +1262,7 @@ function buildWalkTimeProfile(
       const dElev = curr.elevationM - prev.elevationM;
       const gain = Math.max(0, dElev);
       const loss = Math.max(0, -dElev);
-      cumHours += dDist / 2500 + gain / 350 + loss / 800;
+      cumHours += computeSegmentHours(dDist, gain, loss, limits);
       rawVertices.push({ elapsedHours: cumHours, elevationM: curr.elevationM });
     }
 
@@ -1331,13 +1367,14 @@ export function computeTraverseWindows(
     options.siteMeta?.maxElevationM ??
     snapshot.site.maxElevationM;
 
-  const routeDuration = resolveRouteDurationHours(options.route);
+  const routeDuration = resolveRouteDurationHours(options.route, limits);
   const targetDuration = routeDuration ?? limits.maxEvaHours;
   const profile = buildWalkTimeProfile(
     options.route,
     floorElevationM,
     evaluationElevationM,
     targetDuration,
+    limits,
   );
 
   const walkDuration = roundTo(profile.durationHours, 2);
@@ -1776,7 +1813,7 @@ export function evaluateEvaWeather(
     2,
   );
 
-  const estimatedRouteHours = resolveRouteDurationHours(options.route);
+  const estimatedRouteHours = resolveRouteDurationHours(options.route, limits);
 
   const requiredHours = estimatedRouteHours ?? limits.maxEvaHours;
   const { window: safeWindow, thermalDaylightHours } = findSafeTraverseWindow(

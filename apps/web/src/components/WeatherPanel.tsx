@@ -1,16 +1,23 @@
 import type {
+  EvaWeatherCheck,
   EvaWeatherEvaluation,
   EvaWeatherLimits,
   MarsWeatherSnapshot,
+  TraversePresetId,
+  UiMode,
   WeatherCheckId,
   WeatherScenario,
 } from "../services/api";
 import { TimeSimulationControl, evaStatusClass } from "./TimeSimulationControl";
+import { TraversePresetControl } from "./TraversePresetControl";
 import { TraverseWindowsPanel } from "./TraverseWindowsPanel";
 
 export { evaStatusClass };
 
 interface WeatherPanelProps {
+  uiMode: UiMode;
+  presetId: TraversePresetId;
+  onSelectPreset: (id: TraversePresetId) => void;
   weather: MarsWeatherSnapshot | null;
   evaluation: EvaWeatherEvaluation | null;
   limits: EvaWeatherLimits;
@@ -29,11 +36,12 @@ interface WeatherPanelProps {
   onRefresh: () => void;
 }
 
-interface WeatherSliderSpec {
-  id: WeatherCheckId;
+interface LimitSliderSpec {
+  id: string;
+  checkId?: WeatherCheckId;
   key: keyof EvaWeatherLimits;
   label: string;
-  shortTag: string;
+  shortTag?: string;
   unit: string;
   min: number;
   max: number;
@@ -43,9 +51,13 @@ interface WeatherSliderSpec {
   maxCaption: string;
 }
 
-const SLIDER_SPECS: readonly WeatherSliderSpec[] = [
+const THRESHOLD_SLIDERS: readonly (LimitSliderSpec & {
+  checkId: WeatherCheckId;
+  shortTag: string;
+})[] = [
   {
     id: "air_temp",
+    checkId: "air_temp",
     key: "minAirTempC",
     label: "MIN AIR TEMP",
     shortTag: "TEMP",
@@ -59,6 +71,7 @@ const SLIDER_SPECS: readonly WeatherSliderSpec[] = [
   },
   {
     id: "wind_speed",
+    checkId: "wind_speed",
     key: "maxWindSpeedMps",
     label: "MAX WIND",
     shortTag: "WIND",
@@ -72,6 +85,7 @@ const SLIDER_SPECS: readonly WeatherSliderSpec[] = [
   },
   {
     id: "pressure",
+    checkId: "pressure",
     key: "minPressurePa",
     label: "MIN PRESS",
     shortTag: "PA",
@@ -85,6 +99,7 @@ const SLIDER_SPECS: readonly WeatherSliderSpec[] = [
   },
   {
     id: "pressure_swing",
+    checkId: "pressure_swing",
     key: "maxPressureSwingPa",
     label: "MAX SWING",
     shortTag: "SWG",
@@ -98,6 +113,7 @@ const SLIDER_SPECS: readonly WeatherSliderSpec[] = [
   },
   {
     id: "eva_duration",
+    checkId: "eva_duration",
     key: "maxEvaHours",
     label: "MAX EVA",
     shortTag: "DUR",
@@ -111,6 +127,121 @@ const SLIDER_SPECS: readonly WeatherSliderSpec[] = [
   },
 ];
 
+const SPEED_SLIDERS: readonly LimitSliderSpec[] = [
+  {
+    id: "flat_speed",
+    key: "flatSpeedMPerH",
+    label: "FLAT SPEED",
+    unit: "m/h",
+    min: 500,
+    max: 10000,
+    step: 100,
+    decimals: 0,
+    minCaption: "0.5 km/h",
+    maxCaption: "10 km/h",
+  },
+  {
+    id: "climb_speed",
+    key: "climbSpeedMPerH",
+    label: "CLIMB RATE",
+    unit: "m/h",
+    min: 50,
+    max: 2000,
+    step: 25,
+    decimals: 0,
+    minCaption: "50 m/h",
+    maxCaption: "2000 m/h",
+  },
+  {
+    id: "descent_speed",
+    key: "descentSpeedMPerH",
+    label: "DESCENT RATE",
+    unit: "m/h",
+    min: 100,
+    max: 3000,
+    step: 50,
+    decimals: 0,
+    minCaption: "100 m/h",
+    maxCaption: "3000 m/h",
+  },
+];
+
+function ParameterSliderRow({
+  spec,
+  value,
+  check,
+  onChange,
+}: {
+  spec: LimitSliderSpec;
+  value: number;
+  check?: EvaWeatherCheck;
+  onChange: (nextValue: number) => void;
+}) {
+  const pct = Math.max(0, Math.min(100, ((value - spec.min) / (spec.max - spec.min)) * 100));
+  const speedKmhNote =
+    spec.key === "flatSpeedMPerH"
+      ? `${(value / 1000).toFixed(1)} km/h · MAX ${spec.maxCaption}`
+      : null;
+
+  return (
+    <div className="mars-slider-wrap wx-slider-item">
+      <div className="field-label-row">
+        <label className="value-label" htmlFor={`wx-${spec.id}`}>
+          {spec.label}
+        </label>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span className="mono-value">
+            {value.toFixed(spec.decimals)} {spec.unit}
+          </span>
+          {check && (
+            <span className={`wx-status-tag ${evaStatusClass(check.status)}`}>{check.status}</span>
+          )}
+        </div>
+      </div>
+
+      <div className="slope-input-row">
+        <input
+          id={`wx-${spec.id}`}
+          type="range"
+          className="mars-slider"
+          min={spec.min}
+          max={spec.max}
+          step={spec.step}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+          style={{
+            background: `linear-gradient(90deg, var(--color-accent) ${pct}%, var(--color-line-strong) ${pct}%)`,
+          }}
+        />
+        <input
+          type="number"
+          className="number-input"
+          aria-label={spec.label}
+          min={spec.min}
+          max={spec.max}
+          step={spec.step}
+          value={value}
+          onChange={(e) => {
+            const num = Number(e.target.value);
+            if (Number.isFinite(num)) onChange(num);
+          }}
+        />
+      </div>
+
+      <div className="wx-slider-foot">
+        <span>{spec.minCaption}</span>
+        {check ? (
+          <span className="wx-check-reason" title={check.reason}>
+            {check.reason}
+          </span>
+        ) : (
+          <span>{speedKmhNote ?? spec.maxCaption}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const SCENARIO_OPTIONS: readonly { id: WeatherScenario; label: string }[] = [
   { id: "auto", label: "AUTO" },
   { id: "nominal", label: "NOMINAL" },
@@ -122,12 +253,15 @@ function kelvinToC(kelvin: number): number {
   return kelvin - 273.15;
 }
 
-function clampSpec(spec: WeatherSliderSpec, raw: number): number {
+function clampSpec(spec: LimitSliderSpec, raw: number): number {
   if (!Number.isFinite(raw)) return spec.min;
   return Math.max(spec.min, Math.min(spec.max, raw));
 }
 
 export function WeatherPanel({
+  uiMode,
+  presetId,
+  onSelectPreset,
   weather,
   evaluation,
   limits,
@@ -147,7 +281,7 @@ export function WeatherPanel({
 }: WeatherPanelProps) {
   const checksById = new Map(evaluation?.checks.map((c) => [c.id, c]) ?? []);
 
-  const updateLimit = (spec: WeatherSliderSpec, nextValue: number) => {
+  const updateLimit = (spec: LimitSliderSpec, nextValue: number) => {
     const clamped = clampSpec(spec, nextValue);
     onChangeLimits({
       ...limits,
@@ -316,8 +450,8 @@ export function WeatherPanel({
           </div>
 
           <div className="wx-checks-strip">
-            {SLIDER_SPECS.map((spec) => {
-              const chk = checksById.get(spec.id);
+            {THRESHOLD_SLIDERS.map((spec) => {
+              const chk = checksById.get(spec.checkId);
               const cls = chk ? evaStatusClass(chk.status) : "is-go";
               return (
                 <div key={spec.id} className={`wx-check-pip ${cls}`} title={chk?.reason}>
@@ -338,7 +472,7 @@ export function WeatherPanel({
               ELEV {evaluation.evaluationElevationM.toFixed(0)}m{hasSelectedRoute ? " RTE" : ""}
             </span>
             {evaluation.estimatedRouteHours !== null && (
-              <span>WALK {evaluation.estimatedRouteHours.toFixed(1)}h</span>
+              <span>EST {evaluation.estimatedRouteHours.toFixed(1)}h</span>
             )}
           </div>
         </div>
@@ -473,79 +607,47 @@ export function WeatherPanel({
 
       <div className="divider" />
 
-      <div className="wx-sliders-header">
-        <span className="value-label">SUIT THRESHOLDS</span>
-        <button type="button" className="compact-btn" onClick={onResetLimits}>
-          RESET
-        </button>
-      </div>
+      {uiMode === "basic" ? (
+        <TraversePresetControl presetId={presetId} onSelectPreset={onSelectPreset} />
+      ) : (
+        <>
+          <div className="wx-sliders-header">
+            <span className="value-label">SUIT THRESHOLDS</span>
+            <button type="button" className="compact-btn" onClick={onResetLimits}>
+              RESET
+            </button>
+          </div>
 
-      <div className="wx-sliders-list">
-        {SLIDER_SPECS.map((spec) => {
-          const val = limits[spec.key];
-          const check = checksById.get(spec.id);
-          const pct = Math.max(0, Math.min(100, ((val - spec.min) / (spec.max - spec.min)) * 100));
-          return (
-            <div key={spec.id} className="mars-slider-wrap wx-slider-item">
-              <div className="field-label-row">
-                <label className="value-label" htmlFor={`wx-${spec.id}`}>
-                  {spec.label}
-                </label>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span className="mono-value">
-                    {val.toFixed(spec.decimals)} {spec.unit}
-                  </span>
-                  {check && (
-                    <span className={`wx-status-tag ${evaStatusClass(check.status)}`}>
-                      {check.status}
-                    </span>
-                  )}
-                </div>
-              </div>
+          <div className="wx-sliders-list">
+            {THRESHOLD_SLIDERS.map((spec) => (
+              <ParameterSliderRow
+                key={spec.id}
+                spec={spec}
+                value={limits[spec.key]}
+                check={checksById.get(spec.checkId)}
+                onChange={(nextValue) => updateLimit(spec, nextValue)}
+              />
+            ))}
+          </div>
 
-              <div className="slope-input-row">
-                <input
-                  id={`wx-${spec.id}`}
-                  type="range"
-                  className="mars-slider"
-                  min={spec.min}
-                  max={spec.max}
-                  step={spec.step}
-                  value={val}
-                  onChange={(e) => updateLimit(spec, Number(e.target.value))}
-                  style={{
-                    background: `linear-gradient(90deg, var(--color-accent) ${pct}%, var(--color-line-strong) ${pct}%)`,
-                  }}
-                />
-                <input
-                  type="number"
-                  className="number-input"
-                  aria-label={spec.label}
-                  min={spec.min}
-                  max={spec.max}
-                  step={spec.step}
-                  value={val}
-                  onChange={(e) => {
-                    const num = Number(e.target.value);
-                    if (Number.isFinite(num)) updateLimit(spec, num);
-                  }}
-                />
-              </div>
+          <div className="divider" />
 
-              <div className="wx-slider-foot">
-                <span>{spec.minCaption}</span>
-                {check ? (
-                  <span className="wx-check-reason" title={check.reason}>
-                    {check.reason}
-                  </span>
-                ) : (
-                  <span>{spec.maxCaption}</span>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+          <div className="wx-sliders-header">
+            <span className="value-label">TRAVERSE SPEEDS</span>
+          </div>
+
+          <div className="wx-sliders-list">
+            {SPEED_SLIDERS.map((spec) => (
+              <ParameterSliderRow
+                key={spec.id}
+                spec={spec}
+                value={limits[spec.key]}
+                onChange={(nextValue) => updateLimit(spec, nextValue)}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </>
   );
 }

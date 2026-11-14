@@ -37,6 +37,7 @@ interface MapViewProps {
   pointClasses: MapPointClass[];
   selectedPointId: string | null;
   pickMode: boolean;
+  readOnlyPoints?: boolean;
   focusPointTrigger: { coord: MarsCoord; seq: number } | null;
   leftInsetPx?: number;
   focusRequestCount: number;
@@ -84,6 +85,7 @@ function buildPointIconHtml(
 function buildPointPopupElement(
   point: MapPoint,
   cls: MapPointClass | undefined,
+  showEditActions: boolean,
   actions: {
     onSetA: (coord: MarsCoord) => void;
     onSetB: (coord: MarsCoord) => void;
@@ -144,8 +146,10 @@ function buildPointPopupElement(
   };
   addAction("SET A", () => actions.onSetA(point.coord));
   addAction("SET B", () => actions.onSetB(point.coord));
-  addAction("EDIT", () => actions.onEdit(point));
-  addAction("DEL", () => actions.onDelete(point.id));
+  if (showEditActions) {
+    addAction("EDIT", () => actions.onEdit(point));
+    addAction("DEL", () => actions.onDelete(point.id));
+  }
   root.appendChild(bar);
 
   return root;
@@ -228,6 +232,7 @@ export function MapView({
   pointClasses,
   selectedPointId,
   pickMode,
+  readOnlyPoints = false,
   focusPointTrigger,
   leftInsetPx = 0,
   focusRequestCount,
@@ -658,7 +663,7 @@ export function MapView({
 
       marker.bindPopup(
         () =>
-          buildPointPopupElement(point, cls, {
+          buildPointPopupElement(point, cls, !readOnlyPoints, {
             onSetA: (coord) => {
               marker.closePopup();
               callbacksRef.current.onPointSetA(coord);
@@ -681,7 +686,7 @@ export function MapView({
 
       marker.addTo(group);
     }
-  }, [points, pointClasses, selectedPointId]);
+  }, [points, pointClasses, selectedPointId, readOnlyPoints]);
 
   return <div ref={containerRef} className="map-root" />;
 }

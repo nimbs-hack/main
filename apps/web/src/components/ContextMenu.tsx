@@ -5,6 +5,7 @@ interface ContextMenuProps {
   y: number;
   coord: MarsCoord;
   hasWaypoints: boolean;
+  canAddPoint?: boolean;
   onSetA: (coord: MarsCoord) => void;
   onSetB: (coord: MarsCoord) => void;
   onAddPoint: (coord: MarsCoord) => void;
@@ -17,6 +18,7 @@ export function ContextMenu({
   y,
   coord,
   hasWaypoints,
+  canAddPoint = true,
   onSetA,
   onSetB,
   onAddPoint,
@@ -59,19 +61,21 @@ export function ContextMenu({
           B
         </span>
       </button>
-      <button
-        type="button"
-        className="context-menu-item"
-        onClick={() => {
-          onAddPoint(coord);
-          onClose();
-        }}
-      >
-        <span>Add Classified Point</span>
-        <span className="context-menu-tag" style={{ color: "#38bdf8" }}>
-          POI
-        </span>
-      </button>
+      {canAddPoint && (
+        <button
+          type="button"
+          className="context-menu-item"
+          onClick={() => {
+            onAddPoint(coord);
+            onClose();
+          }}
+        >
+          <span>Add Classified Point</span>
+          <span className="context-menu-tag" style={{ color: "#38bdf8" }}>
+            POI
+          </span>
+        </button>
+      )}
       {hasWaypoints && (
         <button
           type="button"

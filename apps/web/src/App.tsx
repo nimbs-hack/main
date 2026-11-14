@@ -21,6 +21,7 @@ import {
   formatLmstClock,
   resolveSolDisplay,
 } from "./components/TimeSimulationControl";
+import { TraversePresetControl } from "./components/TraversePresetControl";
 import { WeatherPanel, evaStatusClass } from "./components/WeatherPanel";
 import { ToolRegistry } from "./registry/toolRegistry";
 import {
@@ -30,7 +31,10 @@ import {
   type EvaWeatherLimits,
   type MarsWeatherSnapshot,
   type SiteEnvironmentSummary,
+  TRAVERSE_PRESETS,
   type TraversePointSample,
+  type TraversePresetId,
+  type UiMode,
   type WeatherScenario,
   evaluateWeatherConstraints,
   fetchBaseLayers,
@@ -107,11 +111,13 @@ export function App() {
   const [showTemperatureLayer, setShowTemperatureLayer] = useState(false);
   const [showSiteBounds, setShowSiteBounds] = useState(true);
 
+  const [uiMode, setUiMode] = useState<UiMode>("basic");
+  const [presetId, setPresetId] = useState<TraversePresetId>("human");
   const [activeToolId, setActiveToolId] = useState("route");
   const [panelOpen, setPanelOpen] = useState(true);
   const [lonFormat, setLonFormat] = useState<LonFormat>("180");
 
-  const [maxSlopeDeg, setMaxSlopeDeg] = useState(15);
+  const [maxSlopeDeg, setMaxSlopeDeg] = useState<number>(TRAVERSE_PRESETS.human.maxSlopeDeg);
   const [weatherRoutingEnabled, setWeatherRoutingEnabled] = useState(true);
   const [waypointA, setWaypointA] = useState<MarsCoord | null>(null);
   const [waypointB, setWaypointB] = useState<MarsCoord | null>(null);
@@ -467,18 +473,46 @@ export function App() {
     return filterVisiblePoints(points, hiddenClassIds);
   }, [points, hiddenClassIds, showPointsOverlay]);
 
-  const openPointComposerAtCoord = useCallback((coord: MarsCoord) => {
-    setEditingPoint(null);
-    setPendingPointCoord(coord);
-    setPendingPointElevM(null);
-    setPickPointMode(false);
-    setActiveToolId("points");
-    setPanelOpen(true);
-
-    fetchElevation(coord.lat, coord.lon)
-      .then((res) => setPendingPointElevM(res.elevationM))
-      .catch(() => setPendingPointElevM(null));
+  const handleSelectPreset = useCallback((nextId: TraversePresetId) => {
+    const preset = TRAVERSE_PRESETS[nextId];
+    setPresetId(nextId);
+    setMaxSlopeDeg(preset.maxSlopeDeg);
+    setWeatherLimits({ ...preset.limits });
   }, []);
+
+  const handleChangeUiMode = useCallback(
+    (nextMode: UiMode) => {
+      if (nextMode === uiMode) return;
+      setUiMode(nextMode);
+      if (nextMode === "basic") {
+        const preset = TRAVERSE_PRESETS[presetId];
+        setMaxSlopeDeg(preset.maxSlopeDeg);
+        setWeatherLimits({ ...preset.limits });
+        setEditingPoint(null);
+        setPendingPointCoord(null);
+        setPendingPointElevM(null);
+        setPickPointMode(false);
+      }
+    },
+    [uiMode, presetId],
+  );
+
+  const openPointComposerAtCoord = useCallback(
+    (coord: MarsCoord) => {
+      if (uiMode === "basic") return;
+      setEditingPoint(null);
+      setPendingPointCoord(coord);
+      setPendingPointElevM(null);
+      setPickPointMode(false);
+      setActiveToolId("points");
+      setPanelOpen(true);
+
+      fetchElevation(coord.lat, coord.lon)
+        .then((res) => setPendingPointElevM(res.elevationM))
+        .catch(() => setPendingPointElevM(null));
+    },
+    [uiMode],
+  );
 
   const handleSavePoint = useCallback(
     (payload: {
@@ -490,6 +524,7 @@ export function App() {
       coord: MarsCoord;
       elevationM?: number | null;
     }) => {
+      if (uiMode === "basic") return;
       if (payload.id) {
         const now = new Date().toISOString();
         setPoints((prev) =>
@@ -520,24 +555,32 @@ export function App() {
       setPendingPointCoord(null);
       setPendingPointElevM(null);
     },
-    [],
+    [uiMode],
   );
 
-  const handleDeletePoint = useCallback((pointId: string) => {
-    setPoints((prev) => prev.filter((pt) => pt.id !== pointId));
-    setSelectedPointId((prev) => (prev === pointId ? null : prev));
-    setEditingPoint((prev) => (prev?.id === pointId ? null : prev));
-  }, []);
+  const handleDeletePoint = useCallback(
+    (pointId: string) => {
+      if (uiMode === "basic") return;
+      setPoints((prev) => prev.filter((pt) => pt.id !== pointId));
+      setSelectedPointId((prev) => (prev === pointId ? null : prev));
+      setEditingPoint((prev) => (prev?.id === pointId ? null : prev));
+    },
+    [uiMode],
+  );
 
-  const handleStartEditPoint = useCallback((point: MapPoint) => {
-    setPendingPointCoord(null);
-    setPendingPointElevM(point.elevationM ?? null);
-    setEditingPoint(point);
-    setSelectedPointId(point.id);
-    setPickPointMode(false);
-    setActiveToolId("points");
-    setPanelOpen(true);
-  }, []);
+  const handleStartEditPoint = useCallback(
+    (point: MapPoint) => {
+      if (uiMode === "basic") return;
+      setPendingPointCoord(null);
+      setPendingPointElevM(point.elevationM ?? null);
+      setEditingPoint(point);
+      setSelectedPointId(point.id);
+      setPickPointMode(false);
+      setActiveToolId("points");
+      setPanelOpen(true);
+    },
+    [uiMode],
+  );
 
   const handleFocusPoint = useCallback((point: MapPoint) => {
     setSelectedPointId(point.id);
@@ -551,15 +594,20 @@ export function App() {
 
   const handleCreateCustomClass = useCallback(
     (payload: { name: string; shortCode: string; color: string; icon: PointIconKey }) => {
+      if (uiMode === "basic") return;
       setPointClasses((prev) => [...prev, createCustomPointClass(payload, prev)]);
     },
-    [],
+    [uiMode],
   );
 
-  const handleDeleteCustomClass = useCallback((classId: string) => {
-    setPointClasses((prev) => prev.filter((c) => c.id !== classId || c.builtIn));
-    setHiddenClassIds((prev) => prev.filter((id) => id !== classId));
-  }, []);
+  const handleDeleteCustomClass = useCallback(
+    (classId: string) => {
+      if (uiMode === "basic") return;
+      setPointClasses((prev) => prev.filter((c) => c.id !== classId || c.builtIn));
+      setHiddenClassIds((prev) => prev.filter((id) => id !== classId));
+    },
+    [uiMode],
+  );
 
   const simSolDisplay = resolveSolDisplay(weatherSnapshot?.sol, simLmstHour);
   const simClockLabel = formatLmstClock(simLmstHour);
@@ -579,6 +627,9 @@ export function App() {
       order: 1,
       render: () => (
         <RoutePlannerPanel
+          uiMode={uiMode}
+          presetId={presetId}
+          onSelectPreset={handleSelectPreset}
           siteCompactLabel={siteLabels.sizeCompact}
           maxSlopeDeg={maxSlopeDeg}
           onChangeMaxSlopeDeg={setMaxSlopeDeg}
@@ -622,6 +673,7 @@ export function App() {
       order: 2,
       render: () => (
         <PointsPanel
+          readOnly={uiMode === "basic"}
           classes={pointClasses}
           points={points}
           hiddenClassIds={hiddenClassIds}
@@ -671,6 +723,9 @@ export function App() {
       order: 3,
       render: () => (
         <WeatherPanel
+          uiMode={uiMode}
+          presetId={presetId}
+          onSelectPreset={handleSelectPreset}
           weather={weatherSnapshot}
           evaluation={weatherEval}
           limits={weatherLimits}
@@ -849,13 +904,18 @@ export function App() {
           <div className="panel-header">
             <h1 className="panel-title">Settings</h1>
             <p className="panel-desc">
-              Slope threshold in degrees filters passable edges in the {siteLabels.sizeCompact} km
-              terrain graph.
+              {uiMode === "basic"
+                ? `Mission preset filters passable edges in the ${siteLabels.sizeCompact} km terrain graph.`
+                : `Slope threshold in degrees filters passable edges in the ${siteLabels.sizeCompact} km terrain graph.`}
             </p>
             <div className="panel-rule" />
           </div>
 
-          <MaxSlopeControl valueDeg={maxSlopeDeg} onChange={setMaxSlopeDeg} />
+          {uiMode === "basic" ? (
+            <TraversePresetControl presetId={presetId} onSelectPreset={handleSelectPreset} />
+          ) : (
+            <MaxSlopeControl valueDeg={maxSlopeDeg} onChange={setMaxSlopeDeg} />
+          )}
 
           {routePlan && (
             <div className="readout-card">
@@ -933,6 +993,9 @@ export function App() {
     routingBusy,
     siteError,
     layers,
+    uiMode,
+    presetId,
+    handleSelectPreset,
     activeLayerId,
     showHillshade,
     showSlopeHazard,
@@ -1050,7 +1113,8 @@ export function App() {
           points={visiblePoints}
           pointClasses={pointClasses}
           selectedPointId={selectedPointId}
-          pickMode={pickPointMode}
+          pickMode={uiMode === "advance" && pickPointMode}
+          readOnlyPoints={uiMode === "basic"}
           focusPointTrigger={focusPointTrigger}
           leftInsetPx={leftHudOffset}
           focusRequestCount={focusCount}
@@ -1093,6 +1157,27 @@ export function App() {
             </div>
 
             <div className="tool-rail-group">
+              <fieldset className="rail-mode-switch" aria-label="Interface mode">
+                <button
+                  type="button"
+                  title="Basic mode: Human/Rover presets and read-only points"
+                  aria-pressed={uiMode === "basic"}
+                  className={`rail-mode-btn ${uiMode === "basic" ? "is-active" : ""}`}
+                  onClick={() => handleChangeUiMode("basic")}
+                >
+                  BSC
+                </button>
+                <button
+                  type="button"
+                  title="Advance mode: all parameter sliders and point editing"
+                  aria-pressed={uiMode === "advance"}
+                  className={`rail-mode-btn ${uiMode === "advance" ? "is-active" : ""}`}
+                  onClick={() => handleChangeUiMode("advance")}
+                >
+                  ADV
+                </button>
+              </fieldset>
+
               <button
                 type="button"
                 className="rail-button"
@@ -1223,6 +1308,7 @@ export function App() {
             y={contextMenu.y}
             coord={contextMenu.coord}
             hasWaypoints={waypointA !== null || waypointB !== null}
+            canAddPoint={uiMode === "advance"}
             onSetA={(c) => {
               setWaypointA(c);
               setActiveToolId("route");

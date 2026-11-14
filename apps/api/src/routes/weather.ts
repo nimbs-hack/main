@@ -256,6 +256,20 @@ function validateLimits(rawLimits: Partial<EvaWeatherLimits> | undefined): {
     out.maxEvaHours = rawLimits.maxEvaHours;
   }
 
+  const speedBounds = [
+    ["flatSpeedMPerH", 100, 50_000],
+    ["climbSpeedMPerH", 25, 10_000],
+    ["descentSpeedMPerH", 25, 15_000],
+  ] as const;
+  for (const [key, minVal, maxVal] of speedBounds) {
+    const raw = rawLimits[key];
+    if (raw === undefined) continue;
+    if (!Number.isFinite(raw) || raw < minVal || raw > maxVal) {
+      return { limits: {}, error: `${key} must be a finite number in [${minVal}, ${maxVal}]` };
+    }
+    out[key] = raw;
+  }
+
   return { limits: out };
 }
 

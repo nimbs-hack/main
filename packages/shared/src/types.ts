@@ -158,6 +158,12 @@ export interface EvaWeatherLimits {
   minPressurePa: number;
   maxPressureSwingPa: number;
   maxEvaHours: number;
+  /** Horizontal traverse speed on flat terrain (meters per hour). */
+  flatSpeedMPerH: number;
+  /** Vertical ascent climb rate (meters per hour). */
+  climbSpeedMPerH: number;
+  /** Vertical descent rate (meters per hour). */
+  descentSpeedMPerH: number;
 }
 
 export const DEFAULT_EVA_WEATHER_LIMITS: EvaWeatherLimits = {
@@ -166,6 +172,47 @@ export const DEFAULT_EVA_WEATHER_LIMITS: EvaWeatherLimits = {
   minPressurePa: 650,
   maxPressureSwingPa: 35,
   maxEvaHours: 4,
+  flatSpeedMPerH: 2500,
+  climbSpeedMPerH: 350,
+  descentSpeedMPerH: 800,
+};
+
+export type UiMode = "basic" | "advance";
+
+export type TraversePresetId = "human" | "rover";
+
+export interface TraversePreset {
+  id: TraversePresetId;
+  label: string;
+  subtitle: string;
+  maxSlopeDeg: number;
+  limits: EvaWeatherLimits;
+}
+
+export const TRAVERSE_PRESETS: Record<TraversePresetId, TraversePreset> = {
+  human: {
+    id: "human",
+    label: "HUMAN",
+    subtitle: "EVA SUIT",
+    maxSlopeDeg: 7,
+    limits: { ...DEFAULT_EVA_WEATHER_LIMITS },
+  },
+  rover: {
+    id: "rover",
+    label: "ROVER",
+    subtitle: "PRESSURIZED",
+    maxSlopeDeg: 15,
+    limits: {
+      minAirTempC: -110,
+      maxWindSpeedMps: 28,
+      minPressurePa: 450,
+      maxPressureSwingPa: 70,
+      maxEvaHours: 8,
+      flatSpeedMPerH: 5000,
+      climbSpeedMPerH: 700,
+      descentSpeedMPerH: 1200,
+    },
+  },
 };
 
 export interface TraversePointSample {

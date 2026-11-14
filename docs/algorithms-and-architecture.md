@@ -1,6 +1,6 @@
 # Algorithms and architecture
 
-This document covers the implemented terrain-graph prototype for Mars Mission Planner. All file paths, symbols, constants, formulas, HTTP endpoints, and test counts come directly from the codebase under `packages/shared`, `apps/api`, `apps/web`, and `scripts`.
+This document covers the implemented terrain-graph prototype for Mars Mission Planner. All file paths, symbols, constants, formulas, HTTP endpoints, and test counts come directly from the codebase under `packages/shared`, `apps/api`, `apps/web`, and `scripts`. For exact signatures and per-function walkthroughs across every module, see [Function reference](function-reference.md).
 
 ## Monorepo layout
 
@@ -9,7 +9,7 @@ The root `package.json`, named `mars-mission-planner`, configures Bun workspaces
 ```text
 packages/shared/src/     Coordinate geodesy, basemap layer metadata, and shared TypeScript types for @nimbs/shared
 apps/api/src/            Hono HTTP API, TerrainGraph engine, spatial weather field, weather generator/evaluator, PNG encoder, and tile proxy for @nimbs/api
-apps/web/src/            React and Leaflet console UI, ToolRegistry, time-simulation controls, FGDC point symbology, weather panel, and CSS design tokens for @nimbs/web
+apps/web/src/            React and Leaflet console UI, ToolRegistry, time-simulation controls, MIL-STD-2525C tactical point symbology (with fgdcSymbols.ts retained as legacy archive), weather panel, and CSS design tokens for @nimbs/web
 scripts/dev.ts           Process launcher running @nimbs/api with --hot and @nimbs/web Vite dev server
 scripts/data/            Offline terrain and weather ingestion scripts (fetch-site.ts, fetch-weather.ts)
 scripts/assets/          FGDC geologic symbol extractor (extract-fgdc-symbols.ts)
@@ -170,13 +170,15 @@ Pressure follows `p = pScale * exp(-elev / 10800)` where `pScale = sample.pressu
 
 ### ToolRegistry and layout structure
 
-`apps/web/src/registry/toolRegistry.ts` manages rail tools via `ToolRegistry` methods `register`, `list` sorted ascending by `order`, and `get`. Following `docs/adding-tools.md`, `apps/web/src/App.tsx` registers five tools on the 64px vertical `.tool-rail`:
+`apps/web/src/registry/toolRegistry.ts` manages rail tools via `ToolRegistry` methods `register`, `list` sorted ascending by `order`, and `get`. Following `docs/adding-tools.md`, `apps/web/src/App.tsx` registers five tools on the 64px vertical `.tool-rail` alongside a compact `BSC` / `ADV` mode switch:
 
-- `route`, rail label `RTE`, order `1`: waypoint readouts, `MaxSlopeControl`, a `WEATHER ROUTING` toggle with a `T >= ... / P >= ... / LMST` strip, route strategy buttons, route weather check summary, summary stats, and `ElevationProfile`.
-- `points`, rail label `PTS`, order `2`: classified map markers, per-class visibility toggles, class creation, and themed FGDC symbol selection (`ThemedIconPicker`).
-- `weather`, rail label `WXR`, order `3`: `WeatherPanel` with a full `TimeSimulationControl`, NASA/PDS weather telemetry, simulated/hybrid provenance notice, scenario selector (`auto`, `nominal`, `dust-storm`, `cold-snap`), 24-hour LMST forecast strip, the 48-hour `TraverseWindowsPanel`, and 5 EVA constraint sliders.
+- `BSC` (basic mode): replaces parameter sliders in `RTE`, `WXR`, and `SET` with `TraversePresetControl` (`HUMAN` EVA suit vs `ROVER` pressurized vehicle presets), and switches `PTS` and marker popups/context menus to read-only point viewing while keeping `A` and `B` route waypoint placement active.
+- `ADV` (advance mode): exposes all slope, EVA threshold, and traverse speed sliders plus full map point and custom class creation, editing, and deletion.
+- `route`, rail label `RTE`, order `1`: waypoint readouts, `TraversePresetControl` (in `BSC`) or `MaxSlopeControl` (in `ADV`), a `WEATHER ROUTING` toggle with a `T >= ... / P >= ... / LMST` strip, route strategy buttons, route weather check summary, summary stats, and `ElevationProfile`.
+- `points`, rail label `PTS`, order `2`: classified map markers, per-class visibility toggles, and (in `ADV`) class creation and themed symbol selection (`ThemedIconPicker`).
+- `weather`, rail label `WXR`, order `3`: `WeatherPanel` with a full `TimeSimulationControl`, NASA/PDS weather telemetry, simulated/hybrid provenance notice, scenario selector (`auto`, `nominal`, `dust-storm`, `cold-snap`), 24-hour LMST forecast strip, the 48-hour `TraverseWindowsPanel`, and either `TraversePresetControl` (`BSC`) or 5 EVA constraint sliders plus 3 traverse speed sliders (`ADV`).
 - `layers`, rail label `LYR`, order `4`: global basemap selector and toggles for the local site hillshade, slope hazard mask, pressure overlay, temperature overlay, and site bounding box, plus a compact `TimeSimulationControl`.
-- `settings`, rail label `SET`, order `5`: `MaxSlopeControl`, graph edge passability percentage, `-180..180` versus `0..360E` longitude display toggle, DEM grid stats, and a button to re-center on the local site patch.
+- `settings`, rail label `SET`, order `5`: `TraversePresetControl` (`BSC`) or `MaxSlopeControl` (`ADV`), graph edge passability percentage, `-180..180` versus `0..360E` longitude display toggle, DEM grid stats, and a button to re-center on the local site patch.
 
 ### Classified points and FGDC symbology
 
@@ -197,7 +199,7 @@ Live NASA InSight weather endpoints no longer return current data (`mars.nasa.go
 - Real channels: `WeatherService` probes NASA Perseverance MEDA RSS and MSL REMS RSS with a 4s timeout and falls back to `data/site-weather.json` populated by `scripts/data/fetch-weather.ts` from `atmos.nmsu.edu` PDS4 MEDA (`DER_PS`, `CAL_ATS`, `DER_ANCILLARY`) and PDS3 REMS (`RME_*RMD*.TAB`).
 - Diurnal physics generator: `apps/api/src/weather/generator.ts` scales barometric pressure to target or crater-rim elevation using Martian scale height `MARS_SCALE_HEIGHT_M = 10_800` m (`P(z) = P_ref * exp(-(z - z_ref) / 10800)`) and adjusts air temperature with `MARS_LAPSE_RATE_K_PER_M = -0.0025` K/m. Seasonal pressure follows a two-harmonic CO2 condensation cycle, wind directions map into 16 compass sectors (`N` through `NNW`), and dust opacity `tau` attenuates solar irradiance via Beer-Lambert scaling.
 - Explicit provenance: every `MarsWeatherSnapshot` records `isSimulated`, `sourceType` (`"real"`, `"hybrid"`, or `"simulated"`), `realChannels`, `simulatedChannels`, and a `disclaimer` string displayed in the `WXR` sidebar. Missing channels (such as MEDA wind after Sol 315 or dust-storm scenario overrides) are explicitly marked simulated.
-- EVA evaluation: `evaluateEvaWeather` scales pressure and temperature to `route.maxElevationM` (defaulting to the site's maximum elevation rim), evaluates 5 interactive threshold checks (`air_temp`, `wind_speed`, `pressure`, `pressure_swing`, `eva_duration`) returning `GO`, `DEGRADED`, or `NO-GO`, estimates route walking duration from `totalDistanceM / 2500 + elevationGainM / 350 + elevationLossM / 800`, and selects the longest contiguous safe daylight traverse window (`safeWindow`).
+- EVA evaluation: `evaluateEvaWeather` scales pressure and temperature to `route.maxElevationM` (defaulting to the site's maximum elevation rim), evaluates 5 interactive threshold checks (`air_temp`, `wind_speed`, `pressure`, `pressure_swing`, `eva_duration`) returning `GO`, `DEGRADED`, or `NO-GO`, estimates traverse duration from `totalDistanceM / limits.flatSpeedMPerH + elevationGainM / limits.climbSpeedMPerH + elevationLossM / limits.descentSpeedMPerH` (defaulting to `2500`, `350`, and `800` m/h), and selects the longest contiguous safe daylight traverse window (`safeWindow`).
 - Spatial field and 48-hour timeline: `computeSiteWeatherField` projects the snapshot onto the site grid at a given LMST hour (see "Spatial weather fields and weather-constrained routing"), and `evaluateEvaWeather` accepts an `lmstHour` that fills a `selectedHourWeather` floor and rim summary plus a 48-hour `departureSlots` timeline and ranked `recommendedWindows` of `TraverseWindowRecommendation`. The `WXR` panel drives both from the `TimeSimulationControl` slider.
 
 When `panelOpen` is true, the `64px` `.tool-rail` plus `416px` `.side-panel` equals `480px`, matching `--sidebar-width` in `apps/web/src/styles/tokens.css`, and shifts `.map-hud` left offset from `64px` to `480px`.
