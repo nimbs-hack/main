@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createServer, preview } from 'vite'
 import { mapTileProxy } from './api-server.js'
 
@@ -30,9 +31,24 @@ for (const mode of ['dev', 'preview']) {
       const missing = await fetch(`http://127.0.0.1:${port}/api/unknown`)
       expect(missing.status).toBe(404)
       const apiURL = server.config[mode === 'dev' ? 'server' : 'preview'].proxy['/api'].target
+      if (mode === 'dev') {
+        const restart = server.restart.bind(server)
+        const restarted = new Promise((resolve, reject) => {
+          server.restart = (...args) => restart(...args).then(resolve, reject)
+        })
+        server.watcher.emit('all', 'change', fileURLToPath(new URL('../apps/api/cmd/server/main.go', import.meta.url)))
+        await restarted
+        expect(server.config.server.proxy['/api'].target).not.toBe(apiURL)
+        await expect(fetch(`${apiURL}/api/unknown`)).rejects.toThrow()
+        const science = await fetch(`http://127.0.0.1:${server.httpServer.address().port}/api/science/mola-color/99/0/0.png`)
+        expect(science.status).toBe(400)
+        expect(await science.text()).toBe('Invalid science tile coordinates\n')
+      }
+      const currentAPIURL = server.config[mode === 'dev' ? 'server' : 'preview'].proxy['/api'].target
       await server.close()
       server = undefined
       await expect(fetch(`${apiURL}/api/unknown`)).rejects.toThrow()
+      await expect(fetch(`${currentAPIURL}/api/unknown`)).rejects.toThrow()
     } finally {
       await server?.close()
       await rm(root, { recursive: true, force: true })

@@ -2,9 +2,8 @@ import { useEffect, useState } from 'react'
 import { Math as CesiumMath } from 'cesium'
 import { isTilted, resetNorth, toggleTilt, zoomBy } from './camera'
 
-// Compass, 2D/3D and zoom buttons on the right edge of the map, like the
-// stack in Google Maps and Earth.
-export default function NavControls({ viewer }) {
+// Camera controls and view actions share one rail on the map's right edge.
+export default function NavControls({ viewer, children }) {
   const [heading, setHeading] = useState(0)
   const [tilted, setTilted] = useState(false)
 
@@ -21,7 +20,7 @@ export default function NavControls({ viewer }) {
   const north = Math.abs(((heading + 180) % 360) - 180) < 0.5
 
   return (
-    <div className="nav" role="group" aria-label="Camera">
+    <div className="nav" role="group" aria-label="Map view">
       <button
         type="button"
         className="nav__compass"
@@ -48,6 +47,7 @@ export default function NavControls({ viewer }) {
       <button type="button" onClick={() => viewer && zoomBy(viewer, 2)} aria-label="Zoom out">
         −
       </button>
+      {children}
     </div>
   )
 }

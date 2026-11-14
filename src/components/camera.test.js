@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { imageryZoomLimit, zoomBy, orbitCenter } from './camera'
+import { imageryZoomLimit, zoomBy, orbitCenter, tiltLimit } from './camera'
 import { Cartesian3, Ellipsoid } from 'cesium'
 
 test('zoom limit keeps a 5 m source pixel within two screen pixels', () => {
@@ -21,6 +21,7 @@ test('zoom buttons and tilt changes preserve the minimum ground clearance', () =
     camera: {
       positionWC: Cartesian3.fromDegrees(-104.448, 11.25, ground + 3000, ellipsoid),
       pitch: -Math.PI / 2, heading: 0,
+      positionCartographic: { height: ground + 3000 },
       getPickRay: () => ({}),
       flyTo: (options) => { destination = options.destination },
       flyToBoundingSphere: (_sphere, options) => { orbit = options.offset },
@@ -37,4 +38,11 @@ test('zoom buttons and tilt changes preserve the minimum ground clearance', () =
   const pitch = -Math.PI / 6
   orbitCenter(viewer, { pitch })
   expect(orbit.range * -Math.sin(pitch)).toBeGreaterThanOrEqual(2800)
+})
+
+test('tilt limit shrinks with altitude to straight down from orbit', () => {
+  expect(tiltLimit(1000)).toBeCloseTo(Math.PI * 80 / 180)
+  expect(tiltLimit(741_000)).toBeLessThan(tiltLimit(100_000))
+  expect(tiltLimit(100_000)).toBeLessThan(tiltLimit(30_000))
+  expect(tiltLimit(9_000_000)).toBe(0)
 })

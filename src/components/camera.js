@@ -10,9 +10,13 @@ import {
   Cartesian3,
   CameraEventType,
   HeadingPitchRange,
+  IntersectionTests,
   KeyboardEventModifier,
   Math as CesiumMath,
+  Matrix4,
+  Ray,
   ScreenSpaceEventType,
+  Transforms,
 } from 'cesium'
 import { CTX_METERS_PER_PIXEL } from '../data/ctx'
 
@@ -30,6 +34,20 @@ export function imageryZoomLimit(viewportHeight, verticalFov) {
 }
 // Steepest tilt, measured from straight down. 90° would be the horizon.
 const MAX_TILT = CesiumMath.toRadians(80)
+// Like Google Earth, allowed tilt shrinks with altitude so Mars stays under
+// the middle of the screen. Full tilt below FULL_TILT_HEIGHT, straight down
+// only above NO_TILT_HEIGHT, log-scaled in between.
+const FULL_TILT_HEIGHT = 30_000
+const NO_TILT_HEIGHT = 2_000_000
+const TILT_SLACK = 0.01
+
+/** Steepest tilt from straight down allowed at a camera height in meters. */
+export function tiltLimit(height) {
+  if (height <= FULL_TILT_HEIGHT) return MAX_TILT
+  if (height >= NO_TILT_HEIGHT) return 0
+  const t = Math.log(height / FULL_TILT_HEIGHT) / Math.log(NO_TILT_HEIGHT / FULL_TILT_HEIGHT)
+  return MAX_TILT * (1 - t)
+}
 const TOP_DOWN = CesiumMath.toRadians(-90)
 const TILTED = CesiumMath.toRadians(-40)
 const FLAT_ENOUGH = CesiumMath.toRadians(-80)
@@ -48,7 +66,7 @@ export function setupControls(viewer) {
   const resizeObserver = new ResizeObserver(updateZoomLimit)
   resizeObserver.observe(scene.canvas)
   controls.maximumZoomDistance = scene.ellipsoid.maximumRadius * 4
-  controls.maximumTiltAngle = MAX_TILT
+  const removeTiltLimit = scene.preUpdate.addEventListener(() => limitTilt(scene))
   // Free look turns the camera in place and loses the ground. Google's
   // tools don't have it, and it's how people end up staring at the sky.
   controls.enableLook = false
@@ -68,7 +86,49 @@ export function setupControls(viewer) {
     const target = pickGround(viewer, position)
     if (target) moveToward(viewer, target, 0.5)
   }, ScreenSpaceEventType.LEFT_DOUBLE_CLICK)
-  return () => resizeObserver.disconnect()
+  return () => {
+    resizeObserver.disconnect()
+    removeTiltLimit()
+  }
+}
+
+const limitRay = new Ray()
+const limitPivot = new Cartesian3()
+const limitFrame = new Matrix4()
+const limitDirection = new Cartesian3()
+
+// Runs every frame, after input and flights have moved the camera. Sets the
+// tilt cap for mouse input, then pulls the camera back to it if zooming out,
+// a flight or Cesium's grazing-angle tilt above COLLISION_CEILING left it
+// looking past the limb.
+function limitTilt(scene) {
+  const { camera, ellipsoid } = scene
+  if (!Matrix4.equals(camera.transform, Matrix4.IDENTITY)) return
+  const limit = tiltLimit(camera.positionCartographic.height)
+  scene.screenSpaceCameraController.maximumTiltAngle = limit
+
+  Cartesian3.clone(camera.positionWC, limitRay.origin)
+  Cartesian3.clone(camera.directionWC, limitRay.direction)
+  const hit = IntersectionTests.rayEllipsoid(limitRay, ellipsoid)
+  let pivot
+  if (hit) {
+    pivot = Ray.getPoint(limitRay, hit.start, limitPivot)
+  } else {
+    const grazing = IntersectionTests.grazingAltitudeLocation(limitRay, ellipsoid)
+    pivot = grazing && ellipsoid.scaleToGeodeticSurface(grazing, limitPivot)
+    if (!pivot) return
+  }
+
+  // View direction in east-north-up axes at the pivot.
+  Transforms.eastNorthUpToFixedFrame(pivot, ellipsoid, limitFrame)
+  Matrix4.inverseTransformation(limitFrame, limitFrame)
+  const local = Matrix4.multiplyByPointAsVector(limitFrame, camera.directionWC, limitDirection)
+  const tilt = Math.acos(CesiumMath.clamp(-local.z, -1, 1))
+  if (hit && tilt <= limit + TILT_SLACK) return
+
+  const range = Cartesian3.distance(camera.positionWC, pivot)
+  camera.lookAt(pivot, new HeadingPitchRange(Math.atan2(local.x, local.y), limit - Math.PI / 2, range))
+  camera.lookAtTransform(Matrix4.IDENTITY)
 }
 
 /** The ground under a screen position, or undefined over empty space. */
@@ -133,6 +193,7 @@ export function orbitCenter(viewer, { heading, pitch }) {
   const { camera } = viewer
   heading ??= camera.heading
   pitch ??= camera.pitch
+  pitch = Math.max(pitch, tiltLimit(camera.positionCartographic.height) - Math.PI / 2)
   const target = pickGround(viewer, screenCenter(viewer))
   if (!target) {
     camera.flyTo({ destination: camera.positionWC, orientation: { heading, pitch, roll: 0 }, duration: MOVE_SECONDS })

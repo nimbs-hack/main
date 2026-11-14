@@ -16,7 +16,10 @@
 // - layer.json lists vertex normals, but the tiles don't contain any.
 //   Without normals Cesium can't shade slopes, so computeNormals() builds
 //   them from each tile's triangles.
-import { BoundingSphere, CesiumTerrainProvider, Ellipsoid, OrientedBoundingBox, Terrain } from 'cesium'
+// - Header bounding spheres can miss the decoded mesh by kilometers, and
+//   horizon points arrive in meters instead of ellipsoid-scaled coordinates.
+//   Rebuild both from the rendered sphere coordinates, on every tile.
+import { BoundingSphere, Cartesian3, CesiumTerrainProvider, Ellipsoid, EllipsoidalOccluder, OrientedBoundingBox, Terrain } from 'cesium'
 import { TERRAIN_API_PATH } from './terrain-source'
 
 const RADIUS = 3_396_190
@@ -40,6 +43,7 @@ const WALL_MIN_SLOPE = Math.tan((55 * Math.PI) / 180)
 // Heights within this distance of a wall are relaxed into a smooth ramp.
 const WALL_RAMP = 1500 // meters
 const RELAX_ITERATIONS = 60
+const occluder = new EllipsoidalOccluder(MARS_SPHERE)
 
 export function createTerrain() {
   return new Terrain(
@@ -50,28 +54,29 @@ export function createTerrain() {
     }).then((provider) => {
       const request = provider.requestTileGeometry.bind(provider)
       provider.requestTileGeometry = (x, y, level, req) =>
-        request(x, y, level, req)?.then((data) => {
-          if (data._encodedNormals) return data
-          const rect = provider.tilingScheme.tileXYToRectangle(x, y, level)
-          const positions = tilePositions(data, rect)
-          if (smoothWalls(data, positions)) {
-            positions.refresh()
-            // Cesium culls and picks against these, so they must contain
-            // the moved vertices or the ground can't be hit-tested there.
-            data._orientedBoundingBox = OrientedBoundingBox.fromRectangle(
-              rect,
-              data._minimumHeight,
-              data._maximumHeight,
-              MARS_SPHERE,
-            )
-            data._boundingSphere = BoundingSphere.fromVertices(positions.xyz)
-          }
-          data._encodedNormals = computeNormals(data, positions)
-          return data
-        })
+        request(x, y, level, req)?.then((data) => prepareTerrainTile(
+          data, provider.tilingScheme.tileXYToRectangle(x, y, level),
+        ))
       return provider
     }),
   )
+}
+
+// Keep culling and depth-frustum bounds in the same coordinates as the mesh.
+// Repair tiles with supplied normals too; their header bounds can still be bad.
+export function prepareTerrainTile(data, rect) {
+  const positions = tilePositions(data, rect)
+  const smoothed = !data._encodedNormals && smoothWalls(data, positions)
+  if (smoothed) positions.refresh()
+  data._boundingSphere = BoundingSphere.fromVertices(positions.xyz)
+  data._orientedBoundingBox = OrientedBoundingBox.fromRectangle(
+    rect, data._minimumHeight, data._maximumHeight, MARS_SPHERE,
+  )
+  data._horizonOcclusionPoint = occluder.computeHorizonCullingPointFromVerticesPossiblyUnderEllipsoid(
+    data._boundingSphere.center, positions.xyz, 3, Cartesian3.ZERO, data._minimumHeight,
+  )
+  if (smoothed || !data._encodedNormals) data._encodedNormals = computeNormals(data, positions)
+  return data
 }
 
 // Decoded vertex heights and planet-centered positions for a tile.

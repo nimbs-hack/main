@@ -62,6 +62,81 @@ Read [docs/visual-language.md](docs/visual-language.md) before building UI. Toke
 
 Don't add labels, headers, badges or status indicators that carry no information. If the view is obviously the overview, it doesn't need an OVERVIEW title. The visual language doc has the full list of what to leave out.
 
+## UI and UX rules
+
+These came out of design reviews. They apply to every panel and plan variant. When a rule and a screenshot from a teammate disagree, ask before breaking the rule.
+
+### Layout
+
+The map is the product. Everything else sits around it, and floating pieces never overlap each other. Each zone has one owner:
+
+| Zone | Owner |
+| --- | --- |
+| Left sidebar, `--sidebar-width` | The plan panel. Settings live here, like a slicer's settings panel. |
+| Map top left | Suggested routes |
+| Map top right | Current site |
+| Map right edge, middle | The camera rail: camera controls, then view actions, then map tools, each section under a divider. A tool's readout opens just left of the rail. |
+| Map bottom left | Layer switcher |
+| Map bottom strip | Route profile |
+| Below the map | Status bar |
+
+- A new panel needs a free zone. If there isn't one, make it on demand: a menu or popover that opens from an action and closes itself.
+- Information about one spot on the map goes in the right-click menu at the cursor, not a pinned card. The menu flips to stay inside the map and closes on Esc, a click outside, or any camera move.
+- A left click on the ground does nothing unless a placement mode or a map tool is on. Only one of them takes clicks at a time, so turning one on turns the other off. Each says what the next click does, and Esc always ends it.
+- Map tools (ruler, range rings, line of sight) draw on their own layer, keep their points while you switch between them, and are also offered from the right-click menu for the clicked spot. A tool result that could become a plan gets a button that does it, like "Use as route".
+- Check layout at 1440 px wide. A narrow preview pane switches to the stacked phone layout, which hides desktop problems.
+
+### Following known tools
+
+Copy patterns people already know instead of inventing new ones. Copy the behavior, not the look. The look comes from `docs/visual-language.md`.
+
+- Settings work like a 3D printer slicer (Orca, CrealityPrint). See the next section.
+- The status bar works like Google Earth's. Left side: tile state only while loading or failed, then a "Data attribution" button that opens the credits. Right side: scale bar, camera height, cursor coordinates and elevation. Never show "loaded" or other steady-state text.
+- The layer switcher works like Google Maps'. One tile opens a row of layer tiles with real thumbnails. Full controls (opacity, legends, sources) sit behind More.
+- Route alternatives work like Google Maps directions. Every option is drawn dashed in its own color. Hovering a row or a line highlights it and shows a tooltip with name, distance and max slope. Clicking either picks it and makes it the plan. Editing the route by hand clears the pick.
+- Route lines use deploy-v1's styles, kept as constants in `src/components/plan-overlay.ts`. Candidates are dashed 6 5 at 2.5 px, each dash outlined in dark at 5.5 px and 60% opacity, with the gaps left open. Every line drawn over imagery needs a dark casing or halo, or it vanishes on ground of its own color. The plan, which is the selected route, is a solid red 3.5 px line on a dark 6.5 px halo, with any stretch over the slope limit in orange on top. Start and target are square A and B pins with red and green borders.
+- The right-click menu works like Google Maps'. Coordinates at the top copy on click.
+
+### Settings panels
+
+- An icon rail picks one tab. Only that tab's settings show. Never render all settings as one long scrolling page.
+- Inside a tab, group rows under small headers, the way a slicer has "Layer height" and "Line width".
+- Rows are a label on the left and a value box on the right with the unit inside the box, dim and mono. Editable boxes look different from read-only ones.
+- Show the main rows by default and the rest behind an Advanced switch. Tell the user how many rows are hidden.
+- Search looks across every tab and shows which tab each match lives in.
+- Hidden tabs can hide problems. Put a dot on the rail icon of any tab with a value near or over a limit.
+- Presets stay selected while the user edits values. Mark each changed field with `--color-modified`, give it a reset button that shows the preset value, and offer one reset for all. Don't switch the preset to "Custom" and don't add "N changed" text to the dropdown.
+
+### Color
+
+Each color means one thing everywhere. If a color needs a legend to read, put the explanation next to it or drop the color.
+
+| Color | Meaning |
+| --- | --- |
+| `--color-accent` (red) | The primary action and the current selection. Never danger. |
+| `--color-caution` (yellow) | Within 5° of the slope limit, or close to another limit |
+| `--color-hazard` (orange) | Over a limit. Any of it on the route makes the plan NO-GO. |
+| `--color-ok` (green) | GO, from real data only |
+| `--color-modified` (blue) | Changed from the selected preset |
+| `--color-route-*` | One per suggested route strategy, from deploy-v1. Detour and thermal look like caution and ok, so use them only for dashed candidate lines and their swatches, never on a number or a status. |
+
+- Hazard colors go on the number, not on an outline around its box. Outlines added noise and nobody could say what they meant.
+- New meanings get new tokens. Don't borrow a color that already means something else.
+
+### Showing data
+
+- One chart that combines two things beats two lanes side by side. The route profile is an elevation area filled by slope level, not an elevation lane plus a slope lane.
+- Charts need a minimum vertical range, so 30 m of relief doesn't fill the height and read as a hill. Put axis values inside the chart and show exact values in a hover tooltip.
+- Only show data that changes along the thing being shown. The route profile dropped Day IR, Night IR and Albedo because they barely vary across a walk.
+- No footnote paragraphs in panels. Put a caveat in the tooltip of the value it qualifies. The one exception is a single line where users edit assumptions, such as the suit limits.
+- Pick the unit by size: meters under 1 km, kilometers above. Coordinates are decimal degrees with east longitude 0 to 360°.
+- When alternatives come out the same, collapse them into one row and say why ("Ground here varies under 2°"). Never show four identical rows.
+- Every failure says what to do next. Failed tiles and samples get Retry. A route blocked by the slope limit says which limit would work and has a button that applies it.
+
+### Comparing layouts
+
+When the team is choosing between layouts, build each as a variant in `src/components/plan-variants/` with the same props, switchable with `?ui=<id>` and the top bar buttons. Variants share state through the parent and never fork it. Delete the losing variants once the team picks one.
+
 ## Mars data
 
 The more real NASA data we can layer, the stronger the submission. Every dataset we use gets an entry in `data/SOURCES.md` (TODO: create it) with name, mission and instrument, URL, resolution, license or terms, and the script that fetches it.
