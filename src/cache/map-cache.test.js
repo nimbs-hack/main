@@ -73,6 +73,17 @@ describe('persistent map cache', () => {
     expect(request(`https://unrelated.test${path}`)).toBeUndefined()
   })
 
+  test('science overlays and pixel sampling share persisted images', async () => {
+    let calls = 0
+    const request = worker(async () => { calls++; return new Response('science') })
+    const path = '/api/science/themis-night/9/205/731.png'
+    expect(await (await request(`https://mars.test${path}`, 'image/*')).text()).toBe('science')
+    expect(await (await request(`https://mars.test${path}`, '*/*')).text()).toBe('science')
+    expect(calls).toBe(1)
+    expect(request(`https://unrelated.test${path}`)).toBeUndefined()
+    expect(request('https://mars.test/api/science/unknown/9/205/731.png')).toBeUndefined()
+  })
+
   test('delivers tiles before disk writes finish and shares image Accept variants', async () => {
     let release
     const blocked = new Promise((resolve) => { release = resolve })

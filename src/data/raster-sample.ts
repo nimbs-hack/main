@@ -54,20 +54,33 @@ const cache = new Map<string, Promise<Pixels | null>>()
 
 export const loadTile: TileLoader = (url) => {
   const hit = cache.get(url)
-  if (hit) return hit
+  if (hit) {
+    cache.delete(url)
+    cache.set(url, hit)
+    return hit
+  }
   const promise = fetch(url)
     .then((response) => (response.ok ? response.blob() : null))
     .then((blob) => (blob ? createImageBitmap(blob) : null))
     .then((bitmap) => {
       if (!bitmap) return null
-      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
-      const context = canvas.getContext('2d')
-      if (!context) return null
-      context.drawImage(bitmap, 0, 0)
-      const { width, height, data } = context.getImageData(0, 0, bitmap.width, bitmap.height)
-      return { width, height, data }
+      try {
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+        const context = canvas.getContext('2d')
+        if (!context) return null
+        context.drawImage(bitmap, 0, 0)
+        const { width, height, data } = context.getImageData(0, 0, bitmap.width, bitmap.height)
+        return { width, height, data }
+      } finally {
+        bitmap.close()
+      }
     })
     .catch(() => null)
+    .then((pixels) => {
+      // A failed request must not turn Retry into a permanent cache hit.
+      if (!pixels && cache.get(url) === promise) cache.delete(url)
+      return pixels
+    })
   cache.set(url, promise)
   if (cache.size > 256) cache.delete(cache.keys().next().value as string)
   return promise
@@ -79,9 +92,19 @@ export function tileUrl(source: ScienceRaster, level: number, x: number, y: numb
 
 export async function sampleRaster(source: ScienceRaster, points: LatLon[], load: TileLoader = loadTile) {
   const level = source.maxLevel
-  return Promise.all(points.map(async (point) => {
+  const groups = new Map<string, { index: number; px: number; py: number }[]>()
+  points.forEach((point, index) => {
     const { x, y, px, py } = tileFor(point, level, source.tileSize)
-    const pixels = await load(tileUrl(source, level, x, y))
-    return pixels ? pixelValue(pixels, px, py, source.legend.colors) : null
+    const url = tileUrl(source, level, x, y)
+    const group = groups.get(url) ?? []
+    group.push({ index, px, py })
+    groups.set(url, group)
+  })
+  const values: (number | null)[] = points.map(() => null)
+  await Promise.all([...groups].map(async ([url, group]) => {
+    const pixels = await load(url)
+    if (!pixels) return
+    for (const { index, px, py } of group) values[index] = pixelValue(pixels, px, py, source.legend.colors)
   }))
+  return values
 }

@@ -1,5 +1,6 @@
 import { Cartographic, sampleTerrain } from 'cesium'
-import type { TerrainProvider } from 'cesium'
+import type { TerrainData, TerrainProvider } from 'cesium'
+import { indexTerrainHeights } from './terrain-height'
 import { offset } from './geo'
 import type { LatLon } from './geo'
 import { DATUM_OFFSET } from './terrain.js'
@@ -19,12 +20,49 @@ export function slopeFromNeighbors(north: number, south: number, east: number, w
 
 export type SurfaceSample = { elevation: number | null; slope: number | null }
 
+// Sampling owns these tiles. Sharing mutable TerrainData with the renderer
+// would let mesh creation discard the buffers while another caller uses them.
+const samplers = new WeakMap<TerrainProvider, TerrainProvider>()
+
+export function samplingProvider(provider: TerrainProvider): TerrainProvider {
+  const existing = samplers.get(provider)
+  if (existing) return existing
+  const tiles = new Map<string, Promise<TerrainData>>()
+  const sampler: TerrainProvider = Object.create(provider)
+  sampler.requestTileGeometry = (x, y, level) => {
+    // A single-layer Cesium provider still downloads tiles explicitly marked
+    // absent. Skip those requests so sampleSurface can try its next level now.
+    if (provider.getTileDataAvailable?.(x, y, level) === false) {
+      return Promise.reject(new Error('Terrain tile outside measured coverage'))
+    }
+    const key = `${level}/${x}/${y}`
+    const hit = tiles.get(key)
+    if (hit) {
+      tiles.delete(key)
+      tiles.set(key, hit)
+      return hit
+    }
+    const request = provider.requestTileGeometry(x, y, level)
+    if (!request) return undefined
+    const pending = request.then(indexTerrainHeights).catch((error: unknown) => {
+      if (tiles.get(key) === pending) tiles.delete(key)
+      throw error
+    })
+    tiles.set(key, pending)
+    // Keep a bounded working set across the profile, tools and route edits.
+    if (tiles.size > 64) tiles.delete(tiles.keys().next().value!)
+    return pending
+  }
+  samplers.set(provider, sampler)
+  return sampler
+}
+
 async function sampleAt(provider: TerrainProvider, level: number, points: LatLon[]) {
   const positions = points.flatMap((point) => [point,
     offset(point, SLOPE_BASELINE, 0), offset(point, -SLOPE_BASELINE, 0),
     offset(point, 0, SLOPE_BASELINE), offset(point, 0, -SLOPE_BASELINE),
   ].map(([lat, lon]) => Cartographic.fromDegrees(lon, lat)))
-  const heights = (await sampleTerrain(provider, level, positions)).map((c) => c.height)
+  const heights = (await sampleTerrain(samplingProvider(provider), level, positions)).map((c) => c.height)
   return points.map((_, i): SurfaceSample => {
     const [center, north, south, east, west] = heights.slice(i * 5, i * 5 + 5)
     const known = (h: number | undefined): h is number => typeof h === 'number' && Number.isFinite(h)

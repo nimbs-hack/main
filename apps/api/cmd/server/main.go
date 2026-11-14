@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -36,9 +37,26 @@ func handler(cacheDir, staticDir string, client *http.Client) (http.Handler, fun
 		}
 		name := filepath.Join(staticDir, filepath.FromSlash(strings.TrimPrefix(r.URL.Path, "/")))
 		if info, err := os.Stat(name); err == nil && !info.IsDir() {
+			// Vite fingerprints everything under assets. Entry points and the
+			// service worker must revalidate so deployments take effect.
+			if strings.HasPrefix(r.URL.Path, "/assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache")
+			}
+			if compressed, err := os.Stat(name + ".gz"); err == nil && !compressed.IsDir() {
+				w.Header().Set("Vary", "Accept-Encoding")
+				if acceptsGzip(r.Header.Get("Accept-Encoding")) {
+					w.Header().Set("Content-Encoding", "gzip")
+					w.Header().Set("Content-Type", mime.TypeByExtension(filepath.Ext(name)))
+					r = r.Clone(r.Context())
+					r.URL.Path += ".gz"
+				}
+			}
 			files.ServeHTTP(w, r)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
 	})
 	return mux, func() { flushCTX(); flushTerrain(); flushScience() }
@@ -53,7 +71,7 @@ func run() error {
 	cacheDir := flag.String("cache-dir", "data/cache", "Tile cache directory")
 	staticDir := flag.String("static-dir", "dist", "Built frontend directory")
 	flag.Parse()
-	app, flush := handler(*cacheDir, *staticDir, &http.Client{})
+	app, flush := handler(*cacheDir, *staticDir, tiles.NewClient())
 	defer flush()
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {

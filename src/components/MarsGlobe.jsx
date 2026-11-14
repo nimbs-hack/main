@@ -646,8 +646,8 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     return plan.start && plan.target ? path : null
   }, [plan])
 
-  // Samples every layer, not only the visible ones, so the profile strip
-  // always shows the full stack. Long routes sample coarser terrain tiles.
+  // Sample the layers shown in the profile. Other layers are read on demand
+  // by the point menu. Long routes sample coarser terrain tiles.
   useEffect(() => {
     setHoverIndex(null)
     if (!terrainProvider || !routePath) {
@@ -659,7 +659,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     setProfile({ status: 'loading', samples: null })
     buildProfile(routePath, {
       provider: terrainProvider,
-      rasters: SAMPLED_RASTERS,
+      rasters: PROFILE_RASTERS,
       count: 200,
       level: length > 20_000 ? 12 : 15,
     }).then((samples) => {

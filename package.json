@@ -20,7 +20,7 @@
     "start": "go -C apps/api run ./cmd/server -cache-dir ../../data/cache -static-dir ../../dist",
     "tiles": "bun scripts/fetch-tiles.js",
     "precache": "bun scripts/precache-map.ts",
-    "build:web": "bun --bun vite build",
+    "build:web": "bun --bun vite build && bun scripts/compress-assets.js",
     "build:api": "go -C apps/api build -o ../../bin/mars-api ./cmd/server",
     "typecheck": "go -C apps/api build ./...",
     "lint": "go -C apps/api vet ./... && bun scripts/check-go-format.js",

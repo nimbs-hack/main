@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+// NewClient keeps connections between tile bursts as the camera moves. The
+// default transport retains only two idle connections per upstream host.
+func NewClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 128
+	transport.MaxIdleConnsPerHost = 32
+	return &http.Client{Transport: transport}
+}
+
 // ParseCoordinate rejects signs, leading zeros and values outside the tile grid.
 func ParseCoordinate(value string, max int) (int, error) {
 	if value == "" || len(value) > 1 && value[0] == '0' {
