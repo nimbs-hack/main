@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { distance, resample } from './geo'
 import {
   DEFAULT_LIMITS, PRESETS, assess, formatDuration, insertWaypoint, legStats, moveVertex,
-  planPath, presetFor, removeWaypoint, walkSpeed, walkTime,
+  planPath, presetFor, removeWaypoint, stepTime, traverseTime,
 } from './plan'
 
 // Flat ground along the equator, with an optional slope between two distances.
@@ -29,18 +29,28 @@ test('moving a vertex updates the start, a waypoint or the target', () => {
   expect(moveVertex(plan, 2, [1, 1]).target).toEqual([1, 1])
 })
 
-test('walk speed is the pace on flat ground and slower up steep grades', () => {
-  expect(walkSpeed(0, 1)).toBeCloseTo(1, 6)
-  expect(walkSpeed(0.3, 1)).toBeLessThan(0.4)
-  expect(walkSpeed(-0.05, 1)).toBeGreaterThan(1)
+test('a step costs its length at the flat speed, plus height at the climb or descent rate', () => {
+  const limits = { ...DEFAULT_LIMITS, pace: 1, climb: 0.1, descent: 0.25 }
+  expect(stepTime(100, 0, limits)).toBeCloseTo(100, 6)
+  expect(stepTime(100, 10, limits)).toBeCloseTo(100 + 10 / 0.1, 6)
+  expect(stepTime(100, -10, limits)).toBeCloseTo(100 + 10 / 0.25, 6)
 })
 
-test('climbing out takes longer than walking back down', () => {
+test('climbing out takes longer than coming back down', () => {
+  const limits = { ...DEFAULT_LIMITS, pace: 1 }
   const path = [[0, 0], [0, 0.03]]
   const route = samples(path, { rise: (d) => d * 0.1 })
-  expect(walkTime(route, 1)).toBeGreaterThan(walkTime(route, 1, true))
+  expect(traverseTime(route, limits)).toBeGreaterThan(traverseTime(route, limits, true))
   const flat = samples(path)
-  expect(walkTime(flat, 1)).toBeCloseTo(flat.at(-1).d, 3)
+  expect(traverseTime(flat, limits)).toBeCloseTo(flat.at(-1).d, 3)
+})
+
+test('with stops, legs run between the stops and the turns between them belong to a leg', () => {
+  const path = [[0, 0], [0, 0.01], [0, 0.02], [0, 0.03], [0, 0.04]]
+  const legs = legStats(samples(path), path, 20, [0, 2, 4])
+  expect(legs).toHaveLength(2)
+  expect(legs[0].length).toBeCloseTo(distance(path[0], path[2]), 0)
+  expect(legs[1].to).toBeCloseTo(distance(path[0], path[4]), 0)
 })
 
 test('legs split the slope stats at waypoints', () => {
@@ -82,7 +92,7 @@ test('slopes near the limit and missing terrain are caution', () => {
 })
 
 test('presets are recognized and durations read as hours and minutes', () => {
-  expect(presetFor(PRESETS[0].limits)?.id).toBe('conservative')
+  expect(presetFor(PRESETS.find((preset) => preset.id === 'rover').limits)?.id).toBe('rover')
   expect(presetFor({ ...DEFAULT_LIMITS, slope: 18 })).toBeNull()
   expect(formatDuration(45 * 60)).toBe('45 min')
   expect(formatDuration(3 * 3600)).toBe('3 h')

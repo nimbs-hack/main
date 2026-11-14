@@ -7,7 +7,7 @@ export type PlanVertex = { point: LatLon, kind: 'start' | 'waypoint' | 'target',
 export type RoutePoint = { point: LatLon, level: string }
 // A suggested route drawn dashed under the plan. `focus` draws it brighter.
 export type Alternative = { id: string, points: LatLon[], color: string, focus: boolean }
-export type PlanColors = { text: string, bg: string, surface: string, dim: string, hazard: string, accent: string, ok: string }
+export type PlanColors = { text: string, bg: string, surface: string, dim: string, pending: string, hazard: string, accent: string, ok: string }
 
 // Line styles ported from deploy-v1 (apps/web/src/components/MapView.tsx).
 // Selected: a dark 6.5 px halo at 72% under a solid 3.5 px accent line at
@@ -22,6 +22,11 @@ const LINE_HIT = 6
 type Projected = { location: Cartographic, position: Cartesian3, screen: Cartesian2 | null }
 
 const HIT_RADIUS = 14
+// A terrain height is a ray cast against the tile mesh. While tiles stream
+// in during a zoom they would be redone for every point on every frame, so
+// tile changes refresh heights at most this often. New points and a new
+// elevation scale are placed at once.
+const HEIGHTS_MS = 400
 const LABEL_FONT = '500 11px "JetBrains Mono Variable", ui-monospace, monospace'
 
 /**
@@ -43,9 +48,15 @@ export function addPlanOverlay(viewer: Viewer, colors: PlanColors) {
   let route: (RoutePoint & Projected)[] = []
   let alternatives: (Omit<Alternative, 'points'> & { points: ({ point: LatLon } & Projected)[] })[] = []
   let dragging: number | null = null
-  let heightsDirty = true
+  // `heightsNow`: place every point this frame. `heightsStale`: tiles have
+  // changed since the last pass. `heightsDirty` is set for one draw.
+  let heightsDirty = false
+  let heightsNow = true
+  let heightsStale = false
+  let lastHeights = 0
+  let later: ReturnType<typeof setTimeout> | undefined
   let exaggeration = scene.verticalExaggeration
-  const removeProgress = scene.globe.tileLoadProgressEvent.addEventListener(() => { heightsDirty = true })
+  const removeProgress = scene.globe.tileLoadProgressEvent.addEventListener(() => { heightsStale = true })
 
   const project = <T extends { point: LatLon }>(item: T): T & Projected => ({
     ...item,
@@ -112,12 +123,19 @@ export function addPlanOverlay(viewer: Viewer, colors: PlanColors) {
     }
   }
 
-  // Straight legs while terrain samples load, or while a handle is dragged.
+  // Straight grey legs while the route is being worked out, or while a
+  // handle is dragged. Grey says "not routed yet": the accent is kept for
+  // the route once terrain along it is known.
   const drawLegs = () => {
     trace(vertices)
-    context.setLineDash(CANDIDATE.dash)
-    strokeSelected()
-    context.setLineDash([])
+    context.globalAlpha = SELECTED.haloAlpha
+    context.strokeStyle = colors.bg
+    context.lineWidth = SELECTED.halo
+    context.stroke()
+    context.globalAlpha = 1
+    context.strokeStyle = colors.pending
+    context.lineWidth = CANDIDATE.width
+    context.stroke()
   }
 
   const drawAlternatives = () => {
@@ -177,8 +195,20 @@ export function addPlanOverlay(viewer: Viewer, colors: PlanColors) {
     context.setTransform(scale, 0, 0, scale, 0, 0)
     context.clearRect(0, 0, width, height)
     occluder.cameraPosition = viewer.camera.positionWC
-    heightsDirty ||= exaggeration !== scene.verticalExaggeration
+    heightsNow ||= exaggeration !== scene.verticalExaggeration
     exaggeration = scene.verticalExaggeration
+    const now = performance.now()
+    heightsDirty = heightsNow || (heightsStale && now - lastHeights >= HEIGHTS_MS)
+    if (heightsDirty) {
+      lastHeights = now
+      heightsNow = false
+      heightsStale = false
+    } else if (heightsStale) {
+      later ??= setTimeout(() => {
+        later = undefined
+        scene.requestRender()
+      }, HEIGHTS_MS)
+    }
     context.lineJoin = 'round'
     context.lineCap = 'round'
 
@@ -192,7 +222,7 @@ export function addPlanOverlay(viewer: Viewer, colors: PlanColors) {
 
   const removeRender = scene.postRender.addEventListener(draw)
   const redraw = () => {
-    heightsDirty = true
+    heightsNow = true
     scene.requestRender()
   }
 
@@ -248,6 +278,7 @@ export function addPlanOverlay(viewer: Viewer, colors: PlanColors) {
       redraw()
     },
     destroy() {
+      clearTimeout(later)
       removeProgress()
       removeRender()
       canvas.remove()

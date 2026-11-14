@@ -21,6 +21,7 @@
 //   Rebuild both from the rendered sphere coordinates, on every tile.
 import { BoundingSphere, Cartesian3, CesiumTerrainProvider, Ellipsoid, EllipsoidalOccluder, OrientedBoundingBox, Terrain } from 'cesium'
 import { TERRAIN_API_PATH } from './terrain-source'
+import { limiter } from './performance'
 
 const RADIUS = 3_396_190
 export const MARS_SPHERE = new Ellipsoid(RADIUS, RADIUS, RADIUS)
@@ -43,6 +44,8 @@ const WALL_MIN_SLOPE = Math.tan((55 * Math.PI) / 180)
 // Heights within this distance of a wall are relaxed into a smooth ramp.
 const WALL_RAMP = 1500 // meters
 const RELAX_ITERATIONS = 60
+// Decoded tiles kept for route and point sampling.
+const SAMPLED_TILES = 512
 const occluder = new EllipsoidalOccluder(MARS_SPHERE)
 
 export function createTerrain() {
@@ -53,10 +56,32 @@ export function createTerrain() {
       credit: 'Terrain: NASA / JPL-Caltech Mars Trek',
     }).then((provider) => {
       const request = provider.requestTileGeometry.bind(provider)
-      provider.requestTileGeometry = (x, y, level, req) =>
-        request(x, y, level, req)?.then((data) => prepareTerrainTile(
-          data, provider.tilingScheme.tileXYToRectangle(x, y, level),
-        ))
+      const prepared = (x, y, level) => (data) => prepareTerrainTile(
+        data, provider.tilingScheme.tileXYToRectangle(x, y, level),
+      )
+      // Route and point sampling ask for tiles without a request object, all
+      // of them at once. A browser opens six connections to a server, so a
+      // long route would hold every one and the globe would wait behind it.
+      // Three at a time leaves the globe the other three.
+      const sample = limiter(3)
+      // Sampled tiles, decoded and repaired, newest last. A route that
+      // changes at one point samples mostly the same tiles again, and
+      // fetching and repairing a tile costs far more than keeping it.
+      const sampled = new Map()
+      provider.requestTileGeometry = (x, y, level, req) => {
+        if (req) return request(x, y, level, req)?.then(prepared(x, y, level))
+        const key = `${level}/${x}/${y}`
+        let tile = sampled.get(key)
+        sampled.delete(key)
+        if (!tile) {
+          tile = sample(() => request(x, y, level)).then(prepared(x, y, level))
+          // A tile that failed is asked for again next time.
+          tile.catch(() => sampled.delete(key))
+        }
+        sampled.set(key, tile)
+        if (sampled.size > SAMPLED_TILES) sampled.delete(sampled.keys().next().value)
+        return tile
+      }
       return provider
     }),
   )

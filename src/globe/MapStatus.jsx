@@ -5,7 +5,10 @@ export default function MapStatus({ status, imagerySource, onRetry }) {
   return (
     <div className={`map-status${failed ? ' map-status--error' : ''}`}>
       <div role="status" aria-live="polite" aria-atomic="true">
-        <span>{mapStatusText(status)}</span>
+        <span>
+          {!failed && (status.loadingTiles || !status.terrainReady) && <span className="spinner" aria-hidden="true" />}
+          {mapStatusText(status)}
+        </span>
         {imagerySource === 'beta01' && (
           <span className="map-status__fallback">CTX backup mosaic in use. V01 failed; image alignment may differ.</span>
         )}

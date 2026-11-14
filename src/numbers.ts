@@ -9,11 +9,8 @@ export const kwh = (megajoules: number): number => megajoules / MJ_PER_KWH
 
 export const range = (r: { min: number; max: number }): string => `${num(r.min)}-${num(r.max)}`
 
-export function duration(seconds: number): string {
-  if (seconds < 1) return `${num(seconds * 1000)} ms`
-  if (seconds < 120) return `${num(seconds, 1)} s`
-  return `${num(seconds / 60, 1)} min`
-}
+// Meters under a kilometer, kilometers above, as the map panels show distance.
+export const meters = (value: number): string => (value >= 1000 ? `${num(value / 1000, 2)} km` : `${num(value)} m`)
 
 // "flight-engineer" reads better on screen as "flight engineer".
 export const words = (id: string): string => id.replaceAll('-', ' ')

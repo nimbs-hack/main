@@ -6,6 +6,7 @@ import {
   Cartographic,
   Color,
   DirectionalLight,
+  EasingFunction,
   GeographicTilingScheme,
   HeadingPitchRange,
   HeightReference,
@@ -23,6 +24,7 @@ import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { LOCAL_MAX_ZOOM, MAX_NATIVE_ZOOM, localTilePath, remoteTileUrl } from '../data/basemap'
 import { SITES } from '../data/sites'
 import { DATUM_OFFSET, MARS_SPHERE, createTerrain } from '../data/terrain'
+import { FAST_VIEWER_OPTIONS, tuneViewer } from '../data/performance'
 import NavControls from './NavControls'
 import { pickGround, setupControls } from './camera'
 import { warmSiteImagery } from '../cache/map-cache'
@@ -34,7 +36,7 @@ import { cumulative, distance } from '../data/geo'
 import { buildProfile, slopeLevel, summarize } from '../data/route-profile'
 import { DEFAULT_LIMITS, EMPTY_PLAN, assess, insertWaypoint, moveVertex, planPath, removeWaypoint } from '../data/plan'
 import { addPlanOverlay } from './plan-overlay'
-import { areaStats, buildGrid, gridSlopes, routeOptions, sameReason } from '../data/route-options'
+import { STRATEGIES, areaStats, buildGrid, gridSlopes, routeOptions, sameReason } from '../data/route-options'
 import RouteOptions from './RouteOptions'
 import { formatDistance } from './RouteProfile'
 import LayerSwitcher from './LayerSwitcher'
@@ -44,7 +46,7 @@ import { sampleSurface } from '../data/terrain-sample'
 import SciencePanel from './SciencePanel'
 import RouteProfile from './RouteProfile'
 import PointReadout from './PointReadout'
-import SuitView from './SuitView'
+import SuitView, { PLAY_TICK_MS } from './SuitView'
 import PlanPanel from './PlanPanel'
 
 const MARS = MARS_SPHERE
@@ -55,24 +57,61 @@ const PROFILE_RASTERS = SAMPLED_RASTERS.filter((layer) => layer.id === 'mola-rou
 const RADIATION = OBSERVATIONS.find((record) => record.category === 'radiation')
 // Finer layers draw above coarser ones.
 const RANK = ['tes-albedo', 'mola-roughness', 'mola-color', 'themis-day', 'themis-night']
+// Every overlay starts off. Two that were on by default made up half of the
+// tile requests of a zoom, and held back the imagery and terrain under them.
+// The layer switcher turns them on.
 const DEFAULT_OVERLAYS = Object.fromEntries(SCIENCE_RASTERS.map((layer) => [layer.id, {
-  on: layer.id === 'mola-color' || layer.id === 'themis-night',
+  on: false,
   opacity: layer.id === 'mola-color' ? 0.45 : 0.6,
 }]))
 // A new start this far from the old target starts a new plan.
 const NEW_PLAN_DISTANCE = 20_000
 const PLAN_KEY = 'nimbs.eva-plan'
+// How a mission's points are joined. The four searches are the route
+// strategies of the algorithms branch. A straight line is no search at all.
+const ROUTE_METHODS = [
+  ...STRATEGIES,
+  { id: 'direct', name: 'Straight lines', note: 'No search. Legs may cross ground over the slope limit' },
+]
+const DEFAULT_METHOD = 'fast'
+const HOVER_MS = 50
+const REROUTE_MS = 200
 
 function loadPlan() {
   try {
     const saved = JSON.parse(localStorage.getItem(PLAN_KEY) ?? 'null')
     if (saved?.plan && Array.isArray(saved.plan.waypoints) && saved.limits) {
-      return { plan: saved.plan, limits: { ...DEFAULT_LIMITS, ...saved.limits } }
+      return {
+        plan: saved.plan,
+        limits: { ...DEFAULT_LIMITS, ...saved.limits },
+        strategy: ROUTE_METHODS.some((method) => method.id === saved.strategy) ? saved.strategy : DEFAULT_METHOD,
+      }
     }
   } catch {
     // Private mode or bad JSON: start empty.
   }
-  return { plan: EMPTY_PLAN, limits: DEFAULT_LIMITS }
+  return { plan: EMPTY_PLAN, limits: DEFAULT_LIMITS, strategy: DEFAULT_METHOD }
+}
+
+// Terrain and night IR on a grid between two points, for the route search.
+// The mesh is read at a level about ten times finer than a grid cell, so the
+// slope measured at each node is the ground's and not the grid's. Level 14
+// is about 10 m between mesh points, and each level down doubles that.
+function gridLevel(cell) {
+  return Math.max(9, Math.min(14, Math.round(14 - Math.log2(Math.max(1, cell / 100)))))
+}
+
+async function sampleRouteField(provider, from, to) {
+  const grid = buildGrid(from, to)
+  const night = SAMPLED_RASTERS.find((layer) => layer.id === 'themis-night')
+  const [surface, thermal] = await Promise.all([
+    sampleSurface(provider, grid.points, gridLevel(grid.cell)),
+    night ? sampleRaster(night, grid.points) : grid.points.map(() => null),
+  ])
+  const elevation = surface.map((s) => s.elevation)
+  if (!elevation.some((e) => e !== null)) return null
+  const coarse = gridSlopes(grid, elevation)
+  return { grid, field: { elevation, slope: surface.map((s, i) => s.slope ?? coarse[i]), thermal } }
 }
 
 // Opening view looks at Tharsis and Valles Marineris, where the relief is
@@ -81,6 +120,11 @@ const HOME = { lon: -85, lat: 0, height: 9_000_000 }
 const SITE_RANGE = 120_000
 const FLY_PITCH = CesiumMath.toRadians(-35)
 const RELIEF_STEPS = [1, 3]
+// The suit view looks down at the walker from behind at this angle, from at
+// least this far.
+const WALK_PITCH = CesiumMath.toRadians(-35)
+const WALK_RANGE = 900
+const WALK_HEADROOM = 1.15
 
 // Light comes from the top left of the screen, low over the horizon, the
 // convention for shaded relief maps. Low light makes slopes cast contrast.
@@ -219,42 +263,21 @@ function createViewer(container, ctxOptions) {
     skyAtmosphere: false,
     // Sources are credited in the status bar.
     creditContainer: document.createElement('div'),
-    requestRenderMode: true,
-    maximumRenderTimeChange: Infinity,
+    ...FAST_VIEWER_OPTIONS,
   })
 
   const stopCtx = addCtxLayer(viewer, ctxOptions)
 
   const { scene } = viewer
   scene.backgroundColor = cssColor('--color-bg')
-  scene.fog.enabled = false
   scene.globe.showGroundAtmosphere = false
   scene.globe.baseColor = cssColor('--color-surface')
   scene.globe.enableLighting = true
   // Let terrain hide markers and labels on slopes and the far side of Mars.
   scene.globe.depthTestAgainstTerrain = true
-  // Keep decoded terrain and imagery when zooming away and back.
-  scene.globe.tileCacheSize = 512
-  // Avoid fetching every intermediate close-up during a flight or scroll.
-  // Once motion stops, return to the original full-detail error threshold.
-  let refinementTimer
-  const removeMoveStart = viewer.camera.moveStart.addEventListener(() => {
-    clearTimeout(refinementTimer)
-    scene.globe.maximumScreenSpaceError = 8
-    scene.requestRender()
-  })
-  const removeMoveEnd = viewer.camera.moveEnd.addEventListener(() => {
-    refinementTimer = setTimeout(() => {
-      if (viewer.isDestroyed()) return
-      scene.globe.maximumScreenSpaceError = 2
-      scene.requestRender()
-    }, 150)
-  })
-  const stopRefinement = () => {
-    clearTimeout(refinementTimer)
-    removeMoveStart()
-    removeMoveEnd()
-  }
+  // Coarser tiles while the camera moves, and the rest of what keeps
+  // drawing cheap. See src/data/performance.js.
+  const stopRefinement = tuneViewer(viewer)
   scene.globe.dynamicAtmosphereLighting = false
   scene.light = new DirectionalLight({ direction: new Cartesian3(0, 0, -1), intensity: 2 })
   scene.preUpdate.addEventListener(() => aimLight(scene))
@@ -351,8 +374,44 @@ function squareMarkerImage() {
   return canvas
 }
 
+// The walker in the suit view: a standing figure, light on a dark outline so
+// it shows on any ground. Its feet are on the position.
+function walkerMarkerImage() {
+  const canvas = document.createElement('canvas')
+  canvas.width = 30
+  canvas.height = 40
+  const context = canvas.getContext('2d')
+  context.lineCap = 'round'
+  context.lineJoin = 'round'
+  const figure = () => {
+    context.beginPath()
+    context.arc(15, 8, 4.5, 0, Math.PI * 2)
+    context.moveTo(15, 13)
+    context.lineTo(15, 25)
+    context.moveTo(6, 18)
+    context.lineTo(24, 18)
+    context.moveTo(15, 25)
+    context.lineTo(8, 37)
+    context.moveTo(15, 25)
+    context.lineTo(22, 37)
+  }
+  figure()
+  context.strokeStyle = cssValue('--color-bg')
+  context.lineWidth = 8
+  context.stroke()
+  figure()
+  context.strokeStyle = cssValue('--color-accent')
+  context.lineWidth = 5
+  context.stroke()
+  figure()
+  context.strokeStyle = cssValue('--color-text')
+  context.lineWidth = 2.5
+  context.stroke()
+  return canvas
+}
+
 function addMarker(viewer) {
-  return viewer.entities.add({
+  const marker = viewer.entities.add({
     show: false,
     position: Cartesian3.ZERO,
     billboard: {
@@ -361,11 +420,15 @@ function addMarker(viewer) {
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
     },
   })
+  marker.looks = { dot: marker.billboard.image, walker: walkerMarkerImage() }
+  return marker
 }
 
-function placeMarker(viewer, marker, point) {
+function placeMarker(viewer, marker, point, walking = false) {
   if (!viewer || !marker) return
   marker.show = Boolean(point)
+  marker.billboard.image = walking ? marker.looks.walker : marker.looks.dot
+  marker.billboard.verticalOrigin = walking ? VerticalOrigin.BOTTOM : VerticalOrigin.CENTER
   if (point) {
     const location = Cartographic.fromDegrees(point[1], point[0], DATUM_OFFSET)
     location.height = viewer.scene.globe.getHeight(location) ?? exaggerate(viewer.scene, DATUM_OFFSET)
@@ -374,30 +437,55 @@ function placeMarker(viewer, marker, point) {
   viewer.scene.requestRender()
 }
 
-// Camera behind the walker, looking along the heading.
-function followWalker(viewer, point, heading) {
+// Camera behind the walker, looking along the heading, with the walker in
+// the middle of the view. During playback the move takes one playback step
+// at an even speed, so steps join into one walk.
+//
+// The camera aims at the ground under the walker. `elevation` is the sampled
+// height there, in meters above the areoid. Without it the aim falls back to
+// loaded terrain and then to the datum, which in a crater is kilometers above
+// the floor and leaves the walker below the bottom of the screen.
+function followWalker(viewer, point, heading, playing, elevation) {
   const location = Cartographic.fromDegrees(point[1], point[0], DATUM_OFFSET)
-  location.height = viewer.scene.globe.getHeight(location) ?? exaggerate(viewer.scene, DATUM_OFFSET)
+  location.height = elevation === null || elevation === undefined
+    ? viewer.scene.globe.getHeight(location) ?? exaggerate(viewer.scene, DATUM_OFFSET)
+    : exaggerate(viewer.scene, elevation + DATUM_OFFSET)
   const target = Cartographic.toCartesian(location, MARS)
+  // The camera may not come closer to the ground than the zoom limit, which
+  // keeps imagery from being magnified into a blur. Asked to, it is pushed
+  // back up after the move and the walker drops off the bottom of the
+  // screen. So stand far enough back to be above the limit, with headroom
+  // for ground that rises behind the walker.
+  const floor = viewer.scene.screenSpaceCameraController.minimumZoomDistance * WALK_HEADROOM
+  const range = Math.max(WALK_RANGE, floor / Math.sin(-WALK_PITCH))
   viewer.camera.flyToBoundingSphere(new BoundingSphere(target, 1), {
-    offset: new HeadingPitchRange(CesiumMath.toRadians(heading ?? 0), CesiumMath.toRadians(-22), 900),
-    duration: 0.6,
+    offset: new HeadingPitchRange(CesiumMath.toRadians(heading ?? 0), WALK_PITCH, range),
+    duration: playing ? PLAY_TICK_MS / 1000 : 0.6,
+    easingFunction: playing ? EasingFunction.LINEAR_NONE : undefined,
   })
 }
 
 /*
  * `mission` ties the map to the mission being planned. It is optional:
  *   { sites, taskCounts, selected, onSelect(index), onAddSite([lat, lon]),
- *     onAddEva({ target, seconds, distance, maxSlope, verdict }) }
+ *     onAddEva({ target, seconds, distance, maxSlope, verdict }),
+ *     route, routeNote, onMovePoint(index, [lat, lon]) }
+ * With a mission its points are the route: `route` lists them as [lat, lon]
+ * in order, the first is the start and the last the target. It is null when
+ * they cannot be routed, and `routeNote` then says why.
  * Sites are { name, lat, lon } in planetocentric latitude and east longitude,
- * -180 to 180. `aside` renders a panel on the right of the map and gets
- * { placing, onPlacing, canTarget, onTarget } to drive map clicks from it.
+ * -180 to 180. `mission.flag` puts a caution dot on the mission tab.
+ * `missionPanel` renders the mission's sites and tasks as a tab of the plan
+ * panel and gets { placing, onPlacing } to drive the map from it.
+ * While placing is 'site' every click adds a point, until Esc or onPlacing(null).
  */
-export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onScienceSource, onViewer, mission = null, aside = null }) {
+export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onScienceSource, onViewer, mission = null, missionPanel = null }) {
   const container = useRef(null)
   const [viewer, setViewer] = useState(null)
   const labels = useRef(null)
   const [relief, setRelief] = useState(RELIEF_STEPS[0])
+  // False until the first tiles are on screen. Until then the map is black.
+  const [planetShown, setPlanetShown] = useState(false)
   const [imagerySource, setImagerySource] = useState('v01')
   const [overlays, setOverlays] = useState(DEFAULT_OVERLAYS)
   const [statuses, setStatuses] = useState({})
@@ -420,6 +508,12 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   const [saved] = useState(loadPlan)
   const [plan, setPlan] = useState(saved.plan)
   const [limits, setLimits] = useState(saved.limits)
+  // How mission points are joined: one of ROUTE_METHODS.
+  const [strategy, setStrategy] = useState(saved.strategy)
+  // Terrain grids for each leg of a mission route, for the route search.
+  const [legs, setLegs] = useState({ status: 'idle', data: [] })
+  const [legAttempt, setLegAttempt] = useState(0)
+  const legFields = useRef(new Map())
   // What the next map click does: 'start', 'target', 'waypoint' or null to probe.
   const [placing, setPlacingState] = useState(null)
   // Map tool in use: 'ruler', 'range', 'sight' or null. It takes map clicks
@@ -435,8 +529,9 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     setToolState(id)
     if (id) setPlacingState(null)
   }, [])
-  // Where to fly after the site flight. A saved plan opens on its start.
-  const [focus, setFocus] = useState(() => (saved.plan.start ? { point: saved.plan.start } : null))
+  // Where to fly after the site flight. The map opens on the whole planet,
+  // also with a saved plan: Fit route goes to it.
+  const [focus, setFocus] = useState(null)
   const marker = useRef(null)
   const planOverlay = useRef(null)
   const [terrainProvider, setTerrainProvider] = useState(null)
@@ -486,6 +581,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       bg: cssColor('--color-bg').toCssColorString(),
       surface: cssColor('--color-surface').toCssColorString(),
       dim: cssColor('--color-text-dim').toCssColorString(),
+      pending: cssColor('--color-text-muted').toCssColorString(),
       hazard: cssColor('--color-hazard').toCssColorString(),
       accent: cssColor('--color-accent').toCssColorString(),
       ok: cssColor('--color-ok').toCssColorString(),
@@ -497,6 +593,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
         onStatusRef.current('loading')
       } else {
         onStatusRef.current(failed ? 'error' : 'ready')
+        setPlanetShown(true)
       }
     })
 
@@ -561,15 +658,15 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     viewer.scene.canvas.addEventListener('contextmenu', noMenu)
     // Moving the map leaves the menu pointing at the wrong spot, so close it.
     const removeMoveClose = viewer.camera.moveStart.addEventListener(() => onContextRef.current(null))
-    handler.setInputAction(({ endPosition }) => {
-      if (drag) {
-        const point = toLatLon(endPosition)
-        if (point) {
-          drag.point = point
-          planOverlay.current.drag(drag.index, point)
-        }
-        return
-      }
+    // Hovering picks against the scene, which is a draw and a read back
+    // from the GPU. A mouse sends hundreds of moves a second, so only the
+    // latest one is looked at, every HOVER_MS.
+    let hoverAt = null
+    let hoverTimer
+    const hover = () => {
+      hoverTimer = undefined
+      if (drag || viewer.isDestroyed()) return
+      const endPosition = hoverAt
       const overHandle = planOverlay.current.handleAt(endPosition) !== null
       const free = !placingRef.current && !toolRef.current
       const line = !overHandle && free ? planOverlay.current.alternativeAt(endPosition) : null
@@ -582,6 +679,18 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       hovered = id
       viewer.scene.requestRender()
       for (const [siteId, label] of labels.current) label.show = siteId === id || label.pinned === true
+    }
+    handler.setInputAction(({ endPosition }) => {
+      if (drag) {
+        const point = toLatLon(endPosition)
+        if (point) {
+          drag.point = point
+          planOverlay.current.drag(drag.index, point)
+        }
+        return
+      }
+      hoverAt = Cartesian2.clone(endPosition, hoverAt ?? new Cartesian2())
+      hoverTimer ??= setTimeout(hover, HOVER_MS)
     }, ScreenSpaceEventType.MOUSE_MOVE)
 
     // Lets the browser console poke at the scene while developing.
@@ -600,6 +709,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       stopRoutes()
       viewer.scene.canvas.removeEventListener('contextmenu', noMenu)
       removeMoveClose()
+      clearTimeout(hoverTimer)
       planOverlay.current.destroy()
       planOverlay.current = null
       handler.destroy()
@@ -708,18 +818,101 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   // The plan survives a reload. Storage can be missing, so failures are ignored.
   useEffect(() => {
     try {
-      localStorage.setItem(PLAN_KEY, JSON.stringify({ plan, limits }))
+      localStorage.setItem(PLAN_KEY, JSON.stringify({ plan, limits, strategy }))
     } catch {
       // Nothing to do without storage.
     }
-  }, [plan, limits])
+  }, [plan, limits, strategy])
 
-  // Route from start through waypoints to target, once both ends exist.
+  // With a mission, its points are the plan. Picking a suggested route adds
+  // waypoints of its own, which last until the points change again.
+  const missionRoute = mission ? mission.route : undefined
+  useEffect(() => {
+    if (missionRoute === undefined) return
+    setChosenRoute(null)
+    setPlan(missionRoute && missionRoute.length > 0
+      ? {
+          start: missionRoute[0],
+          startName: null,
+          target: missionRoute.length > 1 ? missionRoute.at(-1) : null,
+          waypoints: missionRoute.slice(1, -1),
+        }
+      : EMPTY_PLAN)
+  }, [missionRoute])
+  // True while the plan is exactly the mission's points, so vertex i is point i.
+  const followsMission = Boolean(missionRoute) && planPath(plan).length === missionRoute.length &&
+    planPath(plan).every((point, i) => point === missionRoute[i])
+
+  // A mission route is searched for leg by leg, unless it is set to straight
+  // lines. Each leg gets a terrain grid between its two points. Grids are
+  // kept by their end points, so a route that changes at one point samples
+  // only the legs that touch it.
+  const searching = Boolean(missionRoute) && missionRoute.length > 1 && strategy !== 'direct'
+  useEffect(() => {
+    if (!terrainProvider || !searching) {
+      setLegs({ status: 'idle', data: [] })
+      return
+    }
+    let cancelled = false
+    setLegs({ status: 'loading', data: [] })
+    const timer = setTimeout(() => {
+      const cache = legFields.current
+      const pending = missionRoute.slice(1).map((to, i) => {
+        const from = missionRoute[i]
+        const key = `${from}|${to}`
+        if (!cache.has(key)) {
+          const field = sampleRouteField(terrainProvider, from, to).catch(() => null)
+          cache.set(key, field)
+          // A leg that failed is sampled again next time.
+          field.then((result) => { if (!result) cache.delete(key) })
+          if (cache.size > 32) cache.delete(cache.keys().next().value)
+        }
+        return cache.get(key)
+      })
+      Promise.all(pending).then((data) => {
+        if (!cancelled) setLegs({ status: 'ready', data })
+      })
+    }, REROUTE_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [terrainProvider, missionRoute, searching, legAttempt])
+
+  const legPlans = useMemo(
+    () => (legs.status === 'ready' ? legs.data.map((leg) => (leg ? routeOptions(leg.grid, leg.field, limits) : null)) : null),
+    [legs, limits],
+  )
+  // The route the search found: every mission point, with the turns of each
+  // leg's path between them. `stops` are the positions of the mission points
+  // in it. A leg with no path under the slope limit, or with no terrain to
+  // search, stays a straight line and is listed in `blocked`.
+  const searched = useMemo(() => {
+    if (!legPlans || !missionRoute || legPlans.length !== missionRoute.length - 1) return null
+    const path = [missionRoute[0]]
+    const stops = [0]
+    const blocked = []
+    legPlans.forEach((legPlan, i) => {
+      const option = legPlan?.status === 'ok' ? legPlan.options.find((o) => o.id === strategy) ?? legPlan.options[0] : null
+      if (option) path.push(...option.waypoints)
+      else blocked.push({ leg: i + 1, needs: legPlan?.status === 'blocked' ? legPlan.needs : null, failed: !legPlan })
+      path.push(missionRoute[i + 1])
+      stops.push(path.length - 1)
+    })
+    return { path, stops, blocked }
+  }, [legPlans, missionRoute, strategy])
+
+  // Route from start through waypoints to target, once both ends exist. While
+  // a mission route is being searched for there is none yet, and the map
+  // shows grey lines between the points.
   const routePath = useMemo(() => {
+    if (searching) return searched?.path ?? null
     const path = planPath(plan)
     return plan.start && plan.target ? path : null
-  }, [plan])
+  }, [plan, searching, searched])
+  const routing = (searching && legs.status === 'loading') || (Boolean(routePath) && profile.status === 'loading')
 
+  const sampledOnce = useRef(false)
   // Samples every layer, not only the visible ones, so the profile strip
   // always shows the full stack. Long routes sample coarser terrain tiles.
   useEffect(() => {
@@ -731,7 +924,9 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     let cancelled = false
     const length = cumulative(routePath).at(-1)
     setProfile({ status: 'loading', samples: null })
-    buildProfile(routePath, {
+    // A coordinate being typed changes the route on every key. The grey legs
+    // follow at once. Terrain is sampled when the route has settled.
+    const timer = setTimeout(() => buildProfile(routePath, {
       provider: terrainProvider,
       rasters: SAMPLED_RASTERS,
       count: 200,
@@ -742,8 +937,12 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       setProfile({ status: known ? 'ready' : 'error', samples })
     }, () => {
       if (!cancelled) setProfile({ status: 'error', samples: null })
-    })
-    return () => { cancelled = true }
+    }), sampledOnce.current ? REROUTE_MS : 0)
+    sampledOnce.current = true
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
   }, [terrainProvider, routePath, profileAttempt])
 
   useEffect(() => {
@@ -752,51 +951,63 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
 
   const summary = useMemo(() => (profile.samples ? summarize(profile.samples) : null), [profile.samples])
   const doseRate = RADIATION?.measurements[0]?.unit === 'Sv/day' ? RADIATION.measurements[0].value : null
-  const assessment = useMemo(
-    () => (profile.status === 'ready' && routePath ? assess(profile.samples, routePath, limits, doseRate) : null),
-    [profile, routePath, limits, doseRate],
-  )
+  const assessment = useMemo(() => {
+    if (profile.status !== 'ready' || !routePath) return null
+    const found = searching && searched?.path === routePath ? searched : null
+    const result = assess(profile.samples, routePath, limits, doseRate, found?.stops)
+    if (!found?.blocked.length) return result
+    // A leg the search could not join is drawn straight. Say so first.
+    const reasons = found.blocked.map((leg) => ({
+      level: 'no-go',
+      text: leg.failed
+        ? `Leg ${leg.leg}: no terrain to search`
+        : `Leg ${leg.leg}: no route under ${limits.slope}°${leg.needs === null ? '' : `, ${leg.needs}° would work`}`,
+    }))
+    return { ...result, verdict: 'no-go', reasons: [...reasons, ...result.reasons] }
+  }, [profile, routePath, limits, doseRate, searching, searched])
 
   // Sample the grid once per start and target. Limits only rerun the search.
   const routeStart = plan.start
   const routeTarget = plan.target
+  // With a mission the legs above do the search. This grid serves the plan
+  // made by hand, from a start to a target.
+  const offerOptions = !mission
   useEffect(() => {
-    if (!terrainProvider || !routeStart || !routeTarget) {
+    if (!terrainProvider || !routeStart || !routeTarget || !offerOptions) {
       setRouteField({ status: 'idle' })
       return
     }
     let cancelled = false
     setRouteField({ status: 'loading' })
-    const grid = buildGrid(routeStart, routeTarget)
-    const night = SAMPLED_RASTERS.find((layer) => layer.id === 'themis-night')
-    Promise.all([
-      sampleSurface(terrainProvider, grid.points, distance(routeStart, routeTarget) > 20_000 ? 12 : 14),
-      night ? sampleRaster(night, grid.points) : grid.points.map(() => null),
-    ]).then(([surface, thermal]) => {
-      if (cancelled) return
-      const elevation = surface.map((s) => s.elevation)
-      if (!elevation.some((e) => e !== null)) return setRouteField({ status: 'error' })
-      const coarse = gridSlopes(grid, elevation)
-      setRouteField({
-        status: 'ready',
-        grid,
-        field: { elevation, slope: surface.map((s, i) => s.slope ?? coarse[i]), thermal },
-      })
+    // Like the profile, the grid waits until the two ends have settled.
+    const timer = setTimeout(() => sampleRouteField(terrainProvider, routeStart, routeTarget).then((sampled) => {
+      if (!cancelled) setRouteField(sampled ? { status: 'ready', ...sampled } : { status: 'error' })
     }, () => {
       if (!cancelled) setRouteField({ status: 'error' })
-    })
-    return () => { cancelled = true }
-  }, [terrainProvider, routeStart, routeTarget, routeAttempt])
+    }), REROUTE_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [terrainProvider, routeStart, routeTarget, routeAttempt, offerOptions])
 
   const routePlan = useMemo(
     () => (routeField.status === 'ready' ? routeOptions(routeField.grid, routeField.field, limits) : null),
     [routeField, limits],
   )
-  const options = routePlan?.options ?? []
+  // The alternatives to compare: those of the hand-made plan, or of a
+  // mission route with a single leg. A route with stops has one path per leg
+  // and no list.
+  const oneLeg = searching && missionRoute.length === 2
+  const optionPlan = mission ? (oneLeg ? legPlans?.[0] ?? null : null) : routePlan
+  const optionField = mission ? legs.data[0]?.field : routeField.field
+  const options = optionPlan?.status === 'ok' ? optionPlan.options : []
   // Why every strategy found the same path, shown when they all agree.
   const allSame = options.length > 1 && options.slice(1).every((option) => option.sameAs)
-  const sameNote = allSame ? sameReason(areaStats(routeField.field)) ?? 'All four strategies agree here.' : null
-  const chosenId = chosenRoute && chosenRoute.waypoints === plan.waypoints ? chosenRoute.id : null
+  const sameNote = allSame && optionField ? sameReason(areaStats(optionField)) ?? 'All four strategies agree here.' : null
+  const chosenId = mission
+    ? options.find((option) => option.id === strategy)?.id ?? options[0]?.id ?? null
+    : chosenRoute && chosenRoute.waypoints === plan.waypoints ? chosenRoute.id : null
   onLineRef.current = (hit) => {
     if (hit?.pick) {
       const option = options.find((o) => o.id === hit.id)
@@ -807,7 +1018,9 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     setLineTip((current) => (current?.id === hit?.id && current?.x === hit?.x ? current : hit))
     setRouteHover((current) => (hit ? hit.id : current === lineTip?.id ? null : current))
   }
+  // For a mission, picking a route picks the method that found it.
   const chooseRoute = (option) => {
+    if (mission) return setStrategy(option.id)
     setPlan((current) => ({ ...current, waypoints: option.waypoints }))
     setChosenRoute({ id: option.id, waypoints: option.waypoints })
   }
@@ -822,13 +1035,14 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   useEffect(() => {
     const vertices = planPath(plan).map((point, i, all) => {
       const kind = i === 0 && plan.start ? 'start' : i === all.length - 1 && plan.target ? 'target' : 'waypoint'
-      return { point, kind, label: kind === 'start' ? 'A' : kind === 'target' ? 'B' : String(i) }
+      // Mission points keep the numbers they have in the list.
+      return { point, kind, label: followsMission ? String(i + 1) : kind === 'start' ? 'A' : kind === 'target' ? 'B' : String(i) }
     })
     const route = profile.status === 'ready'
       ? profile.samples.map((s) => ({ point: s.point, level: slopeLevel(s.slope, limits.slope) }))
       : null
     planOverlay.current?.set(vertices, route)
-  }, [viewer, plan, profile, limits.slope])
+  }, [viewer, plan, profile, limits.slope, followsMission])
 
   const startAt = (point, startName = null) => {
     setPlan((current) => {
@@ -848,10 +1062,8 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       setPlacing(null)
     },
     waypoint: (point) => setPlan((current) => insertWaypoint(current, point)),
-    site: (point) => {
-      mission?.onAddSite(point)
-      setPlacing(null)
-    },
+    // Stays on, so several points can be added in a row.
+    site: (point) => mission?.onAddSite(point),
   }
 
   onMapClickRef.current = ({ siteId, point }) => {
@@ -862,7 +1074,10 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   }
   onContextRef.current = (opened) => setProbe(opened ? { ...opened, status: 'loading' } : null)
   const closeProbe = useCallback(() => setProbe(null), [])
-  onMoveVertexRef.current = (index, point) => setPlan((current) => moveVertex(current, index, point))
+  // Dragging a mission point moves the point in the mission, and the plan follows.
+  onMoveVertexRef.current = (index, point) => (followsMission
+    ? mission.onMovePoint(index, point)
+    : setPlan((current) => moveVertex(current, index, point)))
 
   // A site sets the start: the rover's last position, or the landing point.
   const chooseSite = (id) => {
@@ -906,10 +1121,10 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   }, [terrainProvider, probePoint])
 
   const probeActions = probePoint ? [
-    { label: 'Start here', run: () => actions.start(probePoint) },
-    plan.start && { label: 'Target here', run: () => actions.target(probePoint) },
-    plan.start && plan.target && { label: 'Add waypoint', run: () => actions.waypoint(probePoint) },
-    mission && { label: 'Add mission site here', run: () => mission.onAddSite(probePoint) },
+    !mission && { label: 'Start here', run: () => actions.start(probePoint) },
+    !mission && plan.start && { label: 'Target here', run: () => actions.target(probePoint) },
+    !mission && plan.start && plan.target && { label: 'Add waypoint', run: () => actions.waypoint(probePoint) },
+    mission && { label: 'Add mission point here', run: () => mission.onAddSite(probePoint) },
     { group: 'tools', label: 'Measure from here', run: () => { setTool('ruler'); setToolSeed({ tool: 'ruler', point: probePoint }) } },
     { group: 'tools', label: 'Range rings here', run: () => { setTool('range'); setToolSeed({ tool: 'range', point: probePoint }) } },
     { group: 'tools', label: 'Line of sight from here', run: () => { setTool('sight'); setToolSeed({ tool: 'sight', point: probePoint }) } },
@@ -918,9 +1133,10 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   // One marker: the suit position, else the profile hover, else the probe.
   const suitSample = suit && profile.samples ? profile.samples.reduce((best, s) => (Math.abs(s.d - suit.position) < Math.abs(best.d - suit.position) ? s : best)) : null
   const markerPoint = suitSample?.point ?? (hoverIndex !== null ? profile.samples?.[hoverIndex]?.point : null) ?? probePoint ?? null
+  const walking = Boolean(suitSample)
   useEffect(() => {
-    placeMarker(viewer, marker.current, markerPoint)
-  }, [viewer, markerPoint])
+    placeMarker(viewer, marker.current, markerPoint, walking)
+  }, [viewer, markerPoint, walking])
 
   // Changing the route ends the suit view.
   useEffect(() => {
@@ -935,7 +1151,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     const ahead = samples.find((s) => s.d > suitPosition + 80) ?? samples.at(-1)
     const dLon = (ahead.point[1] - here.point[1]) * Math.cos(here.point[0] * Math.PI / 180)
     const heading = (Math.atan2(dLon, ahead.point[0] - here.point[0]) * 180) / Math.PI
-    followWalker(viewer, here.point, heading)
+    followWalker(viewer, here.point, heading, suit?.playing, here.elevation)
   }, [viewer, suitPosition, profile.samples])
 
   const walk = () => {
@@ -959,12 +1175,12 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   const nextRelief = RELIEF_STEPS[(RELIEF_STEPS.indexOf(relief) + 1) % RELIEF_STEPS.length]
 
   return (
-    <div className={`workspace${aside ? ' workspace--aside' : ''}`}>
+    <div className="workspace">
       <PlanPanel
         plan={plan}
         limits={limits}
         assessment={assessment}
-        status={profile.status}
+        status={routing ? 'loading' : profile.status}
         placing={placing}
         dose={dose}
         onPlacing={setPlacing}
@@ -981,6 +1197,13 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
           maxSlope: assessment.maxSlope,
           verdict: assessment.verdict,
         }) : null}
+        missionSites={missionPanel?.({ placing, onPlacing: setPlacing })}
+        routeNote={mission?.routeNote ?? null}
+        methods={mission ? ROUTE_METHODS : undefined}
+        method={strategy}
+        onMethod={setStrategy}
+        missionFlag={mission?.flag ?? null}
+        missionFocus={missionSelected}
       />
       <main className={`stage${placing ? ' is-placing' : ''}`}>
         <div ref={container} className="stage__map" />
@@ -990,6 +1213,19 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
           <span className="hud__corner hud__corner--tr" aria-hidden="true" />
           <span className="hud__corner hud__corner--bl" aria-hidden="true" />
           <span className="hud__corner hud__corner--br" aria-hidden="true" />
+
+          {!planetShown && (
+            <p className="stage__loading" role="status">
+              <span className="spinner spinner--large" aria-hidden="true" />
+              Loading Mars
+            </p>
+          )}
+          {routing && (
+            <p className="stage__routing" role="status">
+              <span className="spinner" aria-hidden="true" />
+              Routing {planPath(plan).length} points
+            </p>
+          )}
 
           {site && (
             <div className="readout readout--tr">
@@ -1051,10 +1287,10 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
             }}
           />
 
-          {routePath && !suit && (
+          {!suit && (mission ? oneLeg : routePath) && (
             <RouteOptions
-              status={routePlan?.status === 'blocked' ? 'blocked' : routeField.status}
-              needs={routePlan?.status === 'blocked' ? routePlan.needs : null}
+              status={optionPlan?.status === 'blocked' ? 'blocked' : mission ? (legs.status === 'ready' && !optionPlan ? 'error' : legs.status) : routeField.status}
+              needs={optionPlan?.status === 'blocked' ? optionPlan.needs : null}
               onRaise={(slope) => setLimits((current) => ({ ...current, slope }))}
               options={options}
               chosen={chosenId}
@@ -1063,7 +1299,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
               onHover={setRouteHover}
               onChoose={chooseRoute}
               note={sameNote}
-              onRetry={() => setRouteAttempt((attempt) => attempt + 1)}
+              onRetry={() => (mission ? setLegAttempt((attempt) => attempt + 1) : setRouteAttempt((attempt) => attempt + 1))}
             />
           )}
 
@@ -1136,7 +1372,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
               samples={profile.samples}
               routeName="EVA plan"
               position={suit.position}
-              onPosition={(position) => setSuit({ position })}
+              onPosition={(position, playing = false) => setSuit({ position, playing })}
               dose={dose}
               limit={limits.slope}
               marks={marks}
@@ -1156,12 +1392,6 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
           ))}
         </div>
       </main>
-      {aside?.({
-        placing,
-        onPlacing: setPlacing,
-        canTarget: Boolean(plan.start),
-        onTarget: (point) => actions.target(point),
-      })}
     </div>
   )
 }

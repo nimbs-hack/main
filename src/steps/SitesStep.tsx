@@ -1,6 +1,7 @@
 import { formatLatLon } from '../format.js'
 import type { Catalog, MissionPlan, Phase, Site, Task } from '../api'
-import { num } from '../numbers'
+import { meters, num } from '../numbers'
+import { siteLegs, totalLegs } from './legs'
 import type { Draft, Selection } from '../state'
 import { Button, NumberField, Segmented, Select, TextField } from '../components/controls'
 import { FactRow, isOpen, Row } from './parts'
@@ -16,7 +17,6 @@ export function SitesStep({
   onSelect,
   placing,
   onPlacing,
-  onTarget,
   onUpdateSite,
   onRemoveSite,
   onAddTask,
@@ -30,8 +30,6 @@ export function SitesStep({
   onSelect: (selection: Selection) => void
   placing: boolean
   onPlacing: (placing: boolean) => void
-  // Makes a site the target of the EVA route on the map. Null until the route has a start.
-  onTarget: ((index: number) => void) | null
   onUpdateSite: (index: number, patch: Partial<Site>, field: string) => void
   onRemoveSite: (index: number) => void
   onAddTask: (site: number) => void
@@ -40,17 +38,16 @@ export function SitesStep({
 }) {
   const crewNames = draft.crew.map((person) => person.name || 'Unnamed')
   const phaseNames = draft.phases.map((phase, i) => `${i + 1} ${phase.kind}`)
+  const legs = siteLegs(draft.sites)
+  const placed = draft.sites.filter((site) => !Number.isNaN(site.lat + site.lon)).length
 
   return (
     <>
       <Button aria-pressed={placing} onClick={() => onPlacing(!placing)}>
-        {placing ? 'Cancel: click the map to place it' : 'Add site'}
+        {placing ? 'Done. Each click on the map adds a point' : 'Add points'}
       </Button>
       {draft.sites.length === 0 && !placing && (
-        <p className="note">
-          No sites yet. Press Add site and click the map, right-click a spot, or plan an EVA on the left and add it to the
-          mission.
-        </p>
+        <p className="note">No points yet. Press Add points and click the map once for each.</p>
       )}
 
       <ol className="items">
@@ -63,14 +60,44 @@ export function SitesStep({
               key={i}
               index={i + 1}
               name={site.name || 'Unnamed'}
-              meta={tasks.length === 0 ? 'no tasks' : `${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}, ${num(hours, 1)} h`}
+              meta={[
+                legs[i] === null || legs[i] === undefined
+                  ? ''
+                  : `${meters(legs[i]!)} from ${String(i).padStart(2, '0')}`,
+                tasks.length === 0
+                  ? 'no task'
+                  : `${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}, ${num(hours, 1)} h`,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
               open={isOpen(selection, 'site', i)}
               onToggle={() => onSelect(isOpen(selection, 'site', i) ? null : { list: 'site', index: i })}
             >
-              <TextField label="Site name" value={site.name} maxLength={31} onChange={(name) => onUpdateSite(i, { name }, 'name')} />
+              <TextField
+                label="Name"
+                value={site.name}
+                maxLength={31}
+                onChange={(name) => onUpdateSite(i, { name }, 'name')}
+              />
               <div className="fields fields--2">
-                <NumberField label="Latitude, north +" value={site.lat} min={-90} max={90} step={0.0001} unit="°" onChange={(lat) => onUpdateSite(i, { lat }, 'lat')} />
-                <NumberField label="Longitude, east +" value={site.lon} min={-180} max={180} step={0.0001} unit="°" onChange={(lon) => onUpdateSite(i, { lon }, 'lon')} />
+                <NumberField
+                  label="Latitude, north +"
+                  value={site.lat}
+                  min={-90}
+                  max={90}
+                  step={0.0001}
+                  unit="°"
+                  onChange={(lat) => onUpdateSite(i, { lat }, 'lat')}
+                />
+                <NumberField
+                  label="Longitude, east +"
+                  value={site.lon}
+                  min={-180}
+                  max={180}
+                  step={0.0001}
+                  unit="°"
+                  onChange={(lon) => onUpdateSite(i, { lon }, 'lon')}
+                />
               </div>
               {validPosition && <p className="note">{formatLatLon(site.lat, site.lon)}, planetocentric.</p>}
 
@@ -82,8 +109,21 @@ export function SitesStep({
                     <li key={index} className="task">
                       <span className="label">Task {n + 1}</span>
                       <div className="fields fields--2">
-                        <Select label="Kind" value={task.kind} options={catalog.taskKinds} onChange={(v) => set('kind', v)} />
-                        <NumberField label="Length" value={task.hours} min={0.5} max={127.5} step={0.5} unit="h" onChange={(v) => set('hours', v)} />
+                        <Select
+                          label="Kind"
+                          value={task.kind}
+                          options={catalog.taskKinds}
+                          onChange={(v) => set('kind', v)}
+                        />
+                        <NumberField
+                          label="Length"
+                          value={task.hours}
+                          min={0.5}
+                          max={127.5}
+                          step={0.5}
+                          unit="h"
+                          onChange={(v) => set('hours', v)}
+                        />
                       </div>
                       <div className="fields fields--2">
                         <Select
@@ -119,21 +159,22 @@ export function SitesStep({
 
               <div className="actions">
                 <Button onClick={() => onAddTask(i)}>Add task</Button>
-                <Button
-                  disabled={!onTarget || !validPosition}
-                  title={onTarget ? 'Routes the EVA on the left to this site' : 'Choose a start for the EVA first'}
-                  onClick={() => onTarget?.(i)}
-                >
-                  Route EVA here
-                </Button>
                 <Button className="button--remove" onClick={() => onRemoveSite(i)}>
-                  Remove site{tasks.length > 0 ? ` and ${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}` : ''}
+                  Remove point{tasks.length > 0 ? ` and ${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}` : ''}
                 </Button>
               </div>
             </Row>
           )
         })}
       </ol>
+
+      {placed > 1 && (
+        <section>
+          <dl className="facts">
+            <FactRow label="Through all points, straight lines">{meters(totalLegs(legs))}</FactRow>
+          </dl>
+        </section>
+      )}
 
       {plan && draft.tasks.length > 0 && (
         <section>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Math as CesiumMath, ScreenSpaceEventHandler, ScreenSpaceEventType } from 'cesium'
 import { distance, resample } from '../data/geo'
-import { formatDuration, walkTime } from '../data/plan'
+import { formatDuration, traverseTime } from '../data/plan'
 import { slopeLevel } from '../data/route-profile'
 import { sampleSurface } from '../data/terrain-sample'
 import { flatReach, lastBearing, lineOfSight, pathLength, ring, terrainAlong } from '../data/tools'
@@ -231,7 +231,7 @@ export default function MapTools({ viewer, terrainProvider, tool, onTool, seed, 
               <Row label="Max slope" className={rulerTerrain ? `is-${slopeLevel(rulerTerrain.maxSlope, limits.slope)}` : ''}>
                 {rulerTerrain ? formatSlope(rulerTerrain.maxSlope) : '…'}
               </Row>
-              <Row label="Walk one way">{rulerSamples ? formatDuration(walkTime(rulerSamples, limits.pace)) : '…'}</Row>
+              <Row label="Walk one way">{rulerSamples ? formatDuration(traverseTime(rulerSamples, limits)) : '…'}</Row>
               <Row label="Bearing">{heading === null ? '—' : `${String(Math.round(heading) % 360).padStart(3, '0')}°`}</Row>
             </dl>
           )}

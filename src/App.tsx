@@ -1,22 +1,22 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { type ReactNode, Suspense, lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import MapStatus from './globe/MapStatus.jsx'
 import { INITIAL_MAP_STATUS, mapStatusReducer } from './globe/map-status.ts'
 import { type Astronaut, type Catalog, type Planned, PlannerError, fetchCatalog, fileBytes, requestPlan } from './api'
-import { GlobeCanvas } from './globe/GlobeCanvas'
-import { PlanBar } from './components/PlanBar'
 import { StageIcon } from './components/icons'
 import { CrewStep } from './steps/CrewStep'
+import { HomeStep } from './steps/HomeStep'
 import { MissionStep } from './steps/MissionStep'
 import { PhasesStep } from './steps/PhasesStep'
 import { ReviewStep } from './steps/ReviewStep'
-import { SitesPage } from './steps/SitesPage'
 import { download, fileStem, readMissionFile } from './files'
 import {
   type Draft,
   STEPS,
   type Selection,
   type StepId,
+  type LibraryEntry,
   createEdits,
+  loadLibrary,
   loadRoster,
   movedIndex,
   stepFromHash,
@@ -24,7 +24,38 @@ import {
   store,
   storedDraft,
   useHistory,
+  withEntry,
 } from './state'
+
+// The map library is tens of megabytes. Only the two pages with a map need
+// it, so they load on their own and the first page does not wait for them.
+const loadSites = () => import('./steps/SitesPage')
+const loadGlobe = () => import('./globe/GlobeCanvas')
+const SitesPage = lazy(() => loadSites().then((module) => ({ default: module.SitesPage })))
+const GlobeCanvas = lazy(() => loadGlobe().then((module) => ({ default: module.GlobeCanvas })))
+
+const mapLoading = (
+  <main className="stage stage--loading">
+    <p className="loading" role="status">
+      <span className="spinner spinner--large" aria-hidden="true" />
+      Loading the map
+    </p>
+  </main>
+)
+
+// A page that stays mounted once opened. A Cesium viewer takes seconds to
+// build and then loads its tiles again, so a map page is hidden, not thrown
+// away, when another stage is shown. While hidden it keeps its last content
+// and does not render again, so edits elsewhere cost it nothing.
+function KeepAlive({ active, children }: { active: boolean; children: ReactNode }) {
+  const last = useRef(children)
+  if (active) last.current = children
+  return (
+    <div className="keep" hidden={!active}>
+      {last.current}
+    </div>
+  )
+}
 
 // Compares values, not key order: the planner's JSON and the editor's
 // objects list the same fields in different orders.
@@ -61,6 +92,15 @@ const plainWords = (message: string): string =>
   FIELD_WORDS.reduce((text, [field, words]) => text.replace(field, words), message)
 
 const count = (n: number, thing: string) => `${n} ${thing}${n === 1 ? '' : 's'}`
+
+// Keeps people where they were in the roster. Someone new to it goes last.
+const byRosterOrder = (roster: Astronaut[]) => {
+  const place = (person: Astronaut) => {
+    const at = roster.findIndex((entry) => entry.name === person.name)
+    return at < 0 ? roster.length : at
+  }
+  return (a: Astronaut, b: Astronaut) => place(a) - place(b)
+}
 
 interface Start {
   catalog: Catalog
@@ -114,12 +154,13 @@ export default function App() {
   if (state !== null && typeof state !== 'string') return <Editor catalog={state.catalog} opening={state.planned} />
   return (
     <div className="console console--mission">
-      <header className="topbar">
-        <strong className="topbar__title">Mission planner</strong>
-      </header>
+      <header className="topbar"></header>
       <main className="startup">
         {state === null ? (
-          <p role="status">Starting the planner</p>
+          <p className="loading" role="status">
+            <span className="spinner spinner--large" aria-hidden="true" />
+            Starting the planner
+          </p>
         ) : (
           <div className="problem" role="alert">
             <b>Planner not available</b>
@@ -164,9 +205,15 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
   // Why the planner did not answer, when it did not.
   const [offline, setOffline] = useState<string | null>(null)
   const [planAttempt, setPlanAttempt] = useState(0)
-  // Every plan the planner has returned, by the draft it was for. Lets the
-  // plan bar compare with the draft before the last edit.
-  const plans = useRef(new WeakMap<Draft, Planned>([[opening.mission, opening]]))
+
+  // Fetch the map pages once the first page is up, so their tabs open fast.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void loadSites()
+      void loadGlobe()
+    }, 2000)
+    return () => clearTimeout(timer)
+  }, [])
 
   // Ask the planner about every new draft. An older request still in flight
   // is cancelled, so answers cannot arrive out of order.
@@ -175,7 +222,6 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
     const controller = new AbortController()
     requestPlan(draft, undefined, controller.signal).then(
       (planned) => {
-        plans.current.set(draft, planned)
         setOffline(null)
         setAnswer({ draft, planned })
       },
@@ -199,7 +245,6 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
   const lastGood = useRef(opening)
   if (valid) lastGood.current = valid
   const shown = lastGood.current
-  const before = history.previous ? (plans.current.get(history.previous) ?? null) : null
   const stale = problem !== null || offline !== null
 
   useEffect(() => {
@@ -217,6 +262,9 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
     location.hash = next
     setStep(next)
   }
+  // The map pages that have been opened. They stay mounted from then on.
+  const opened = useRef(new Set<StepId>())
+  opened.current.add(step)
   const stepIndex = STEPS.findIndex((entry) => entry.id === step)
   const next = STEPS[stepIndex + 1]
   const previous = STEPS[stepIndex - 1]
@@ -228,10 +276,18 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
     store('roster', entries)
   }
 
+  // Missions saved from here or received as files, listed on the home page.
+  const [library, setLibrary] = useState(loadLibrary)
+  const updateLibrary = (entries: LibraryEntry[]) => {
+    setLibrary(entries)
+    store('library', entries)
+  }
+
   const open = async (file: File | undefined) => {
     if (!file) return
     try {
       const mission = await readMissionFile(file, roster)
+      updateLibrary(withEntry(library, mission, 'received', file.name))
       commit(() => mission)
       setSelection(null)
       setFileProblem(null)
@@ -243,7 +299,19 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
     }
   }
 
-  const save = () => valid && download(`${fileStem(valid.mission)}.mhr`, fileBytes(valid), 'application/octet-stream')
+  // Saving writes the mission file and keeps a copy on the home page.
+  const save = () => {
+    if (!valid) return
+    download(`${fileStem(valid.mission)}.mhr`, fileBytes(valid), 'application/octet-stream')
+    updateLibrary(withEntry(library, valid.mission, 'saved'))
+  }
+
+  const openEntry = (entry: LibraryEntry) => {
+    commit(() => entry.mission)
+    setSelection(null)
+    goTo('mission')
+    setNotice(`Opened ${entry.mission.name || 'the mission'}. The mission you had before is one Undo away.`)
+  }
   const exportJson = () => {
     if (valid) download(`${fileStem(valid.mission)}.json`, JSON.stringify(valid.mission, null, 2), 'application/json')
   }
@@ -282,7 +350,6 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
   // planner's answer already holds for the snapped mission, so keep it.
   const settle = () => {
     if (!valid || same(valid.mission, draft)) return
-    plans.current.set(valid.mission, valid)
     setAnswer({ draft: valid.mission, planned: valid })
     history.amend(valid.mission)
   }
@@ -295,33 +362,44 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
     if (done) setNotice(done)
   }
 
+  // Off the crew, back to the roster as the mission had them, so edits made
+  // while they were selected are kept.
+  const deselect = (i: number, keep = true) => {
+    const person = draft.crew[i]!
+    if (keep)
+      updateRoster([...roster.filter((entry) => entry.name !== person.name), person].sort(byRosterOrder(roster)))
+    const orphaned = draft.tasks.filter((task) => task.crew === i).length
+    structural(
+      (d) => edits.removeCrew(d, i),
+      selection?.list === 'crew' ? null : selection,
+      `${person.name} is off the crew.${orphaned > 0 ? ` ${count(orphaned, 'task')} of theirs now ${orphaned === 1 ? 'has' : 'have'} nobody assigned.` : ''}`,
+    )
+  }
+
   const taskCounts = useMemo(
     () => draft.sites.map((_, i) => draft.tasks.filter((task) => task.site === i).length),
     [draft.sites, draft.tasks],
   )
 
-  // A page that is one column of cards, with the plan under it.
+  // A page that is one column of cards.
   const column = (children: ReactNode) => (
-    <>
-      <main className="page" onBlur={settle}>
-        <div className="page__column">
-          {children}
-          <div className="page__next">
-            {previous && (
-              <button type="button" className="plan__button" onClick={() => goTo(previous.id)}>
-                Back
-              </button>
-            )}
-            {next && (
-              <button type="button" className="plan__button page__forward" onClick={() => goTo(next.id)}>
-                Next: {next.label}
-              </button>
-            )}
-          </div>
+    <main className="page" onBlur={settle}>
+      <div className="page__column">
+        {children}
+        <div className="page__next">
+          {previous && (
+            <button type="button" className="plan__button" onClick={() => goTo(previous.id)}>
+              Back
+            </button>
+          )}
+          {next && (
+            <button type="button" className="plan__button page__forward" onClick={() => goTo(next.id)}>
+              Next: {next.label}
+            </button>
+          )}
         </div>
-      </main>
-      <PlanBar shown={shown} before={valid ? before : null} stale={stale} />
-    </>
+      </div>
+    </main>
   )
 
   return (
@@ -334,7 +412,6 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
       }}
     >
       <header className="topbar">
-        <strong className="topbar__title">Mission planner</strong>
         <nav className="tabs" aria-label="Stages">
           {STEPS.map((entry) => {
             const flag =
@@ -362,14 +439,23 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
           <span className="topbar__item">
             Mission <b>{draft.name || 'Unnamed'}</b>
           </span>
-          <button type="button" className="topbar__action" disabled={!history.canUndo} onClick={history.undo} title="Ctrl+Z">
+          <button
+            type="button"
+            className="topbar__action"
+            disabled={!history.canUndo}
+            onClick={history.undo}
+            title="Ctrl+Z"
+          >
             Undo
           </button>
-          <button type="button" className="topbar__action" disabled={!history.canRedo} onClick={history.redo} title="Ctrl+Shift+Z">
+          <button
+            type="button"
+            className="topbar__action"
+            disabled={!history.canRedo}
+            onClick={history.redo}
+            title="Ctrl+Shift+Z"
+          >
             Redo
-          </button>
-          <button type="button" className="topbar__action" onClick={() => fileInput.current?.click()} title="Ctrl+O">
-            Open
           </button>
           <button type="button" className="topbar__action" disabled={!valid} onClick={save} title="Ctrl+S">
             Save
@@ -434,6 +520,19 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
         )}
       </div>
 
+      {step === 'home' &&
+        column(
+          <HomeStep
+            draft={draft}
+            library={library}
+            onContinue={() => goTo('mission')}
+            onOpen={openEntry}
+            onDelete={(entry) => updateLibrary(library.filter((other) => other.id !== entry.id))}
+            onOpenFile={() => fileInput.current?.click()}
+            onNew={startNew}
+          />,
+        )}
+
       {step === 'mission' &&
         column(
           <MissionStep
@@ -454,8 +553,6 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
               )
             }}
             onMargin={(marginPercent) => commit((d) => ({ ...d, marginPercent }), 'margin')}
-            onOpen={() => fileInput.current?.click()}
-            onNew={startNew}
           />,
         )}
 
@@ -465,24 +562,35 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
             catalog={catalog}
             crew={draft.crew}
             plan={valid?.plan ?? null}
-            selection={selection}
-            onSelect={setSelection}
             roster={roster}
-            onAdd={(person) => structural((d) => edits.addCrew(d, person), { list: 'crew', index: draft.crew.length })}
-            onUpdate={(i, patch, field) => commit((d) => edits.updateCrew(d, i, patch), `crew ${i} ${field}`)}
-            onDuplicate={(i) => structural((d) => edits.duplicateCrew(d, i), { list: 'crew', index: draft.crew.length })}
-            onRemove={(i) => {
-              const orphaned = draft.tasks.filter((task) => task.crew === i).length
-              structural(
-                (d) => edits.removeCrew(d, i),
-                null,
-                `${draft.crew[i]!.name} removed.${orphaned > 0 ? ` ${count(orphaned, 'task')} of theirs now ${orphaned === 1 ? 'has' : 'have'} nobody assigned.` : ''}`,
-              )
+            onNew={() => {
+              // Counted once each, so the new call sign follows the size of the list.
+              const person = edits.newPerson([
+                ...roster,
+                ...draft.crew.filter((member) => !roster.some((entry) => entry.name === member.name)),
+              ])
+              updateRoster([...roster, person])
+              commit((d) => edits.addCrew(d, person))
+              return person.name
             }}
-            onSaveToRoster={(person) =>
-              updateRoster([...roster.filter((entry) => entry.name !== person.name), person])
+            onSelect={(person) => commit((d) => edits.addCrew(d, person))}
+            onDeselect={deselect}
+            onUpdate={(i, patch, field) => {
+              // A new call sign goes to the roster too, or the old one would stay behind as a second person.
+              const old = draft.crew[i]!.name
+              if (patch.name !== undefined && !roster.some((entry) => entry.name === patch.name)) {
+                updateRoster(roster.map((entry) => (entry.name === old ? { ...entry, name: patch.name! } : entry)))
+              }
+              commit((d) => edits.updateCrew(d, i, patch), `crew ${i} ${field}`)
+            }}
+            onUpdateRoster={(name, patch) =>
+              updateRoster(roster.map((entry) => (entry.name === name ? { ...entry, ...patch } : entry)))
             }
-            onDropFromRoster={(name) => updateRoster(roster.filter((entry) => entry.name !== name))}
+            onDelete={(name) => {
+              const at = draft.crew.findIndex((member) => member.name === name)
+              if (at >= 0) deselect(at, false)
+              updateRoster(roster.filter((entry) => entry.name !== name))
+            }}
           />,
         )}
 
@@ -497,7 +605,9 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
               const after = selection?.list === 'phase' ? selection.index : draft.phases.length - 1
               structural((d) => edits.addPhase(d, kind, after), { list: 'phase', index: after + 1 })
             }}
-            onUpdate={(i, patch, field) => commit((d) => edits.updatePhase(d, i, patch), field && `phase ${i} ${field}`)}
+            onUpdate={(i, patch, field) =>
+              commit((d) => edits.updatePhase(d, i, patch), field && `phase ${i} ${field}`)
+            }
             onKind={(i, kind) => commit((d) => edits.setPhaseKind(d, i, kind))}
             onMove={(from, to) =>
               structural(
@@ -520,44 +630,54 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
           />,
         )}
 
-      {step === 'sites' && (
-        <SitesPage
-          catalog={catalog}
-          draft={draft}
-          plan={valid?.plan ?? null}
-          taskCounts={taskCounts}
-          selection={selection}
-          onSelect={setSelection}
-          onSettle={settle}
-          onAddSite={(lat, lon) =>
-            structural((d) => edits.addSite(d, degrees(lat), degrees(lon)), { list: 'site', index: draft.sites.length })
-          }
-          onAddEva={(lat, lon, hours, note) => {
-            const after = edits.addEva(draft, degrees(lat), degrees(lon), hours, note)
-            const task = after.tasks[after.tasks.length - 1]!
-            structural(
-              (d) => edits.addEva(d, degrees(lat), degrees(lon), hours, note),
-              { list: 'site', index: task.site },
-              `${after.sites[task.site]!.name} has a new ${hours} h EVA task in phase ${task.phase + 1}. Nobody is assigned to it yet.`,
-            )
-          }}
-          onUpdateSite={(i, patch, field) => commit((d) => edits.updateSite(d, i, patch), `site ${i} ${field}`)}
-          onRemoveSite={(i) => {
-            const gone = draft.tasks.filter((task) => task.site === i).length
-            structural(
-              (d) => edits.removeSite(d, i),
-              null,
-              `${draft.sites[i]!.name} removed${gone > 0 ? ` with its ${count(gone, 'task')}` : ''}.`,
-            )
-          }}
-          onAddTask={(site) => commit((d) => edits.addTask(d, site))}
-          onUpdateTask={(i, patch, field) => commit((d) => edits.updateTask(d, i, patch), `task ${i} ${field}`)}
-          onRemoveTask={(i) => commit((d) => edits.removeTask(d, i))}
-        />
+      {opened.current.has('sites') && (
+        <KeepAlive active={step === 'sites'}>
+          <Suspense fallback={mapLoading}>
+            <SitesPage
+              catalog={catalog}
+              draft={draft}
+              plan={valid?.plan ?? null}
+              taskCounts={taskCounts}
+              selection={selection}
+              onSelect={setSelection}
+              onSettle={settle}
+              onAddSite={(lat, lon) =>
+                structural((d) => edits.addSite(d, degrees(lat), degrees(lon)), {
+                  list: 'site',
+                  index: draft.sites.length,
+                })
+              }
+              onAddEva={(lat, lon, hours, note) => {
+                const after = edits.addEva(draft, degrees(lat), degrees(lon), hours, note)
+                const task = after.tasks[after.tasks.length - 1]!
+                structural(
+                  (d) => edits.addEva(d, degrees(lat), degrees(lon), hours, note),
+                  { list: 'site', index: task.site },
+                  `${after.sites[task.site]!.name} has a new ${hours} h EVA task in phase ${task.phase + 1}. Nobody is assigned to it yet.`,
+                )
+              }}
+              onMoveSite={(i, lat, lon) =>
+                commit((d) => edits.updateSite(d, i, { lat: degrees(lat), lon: degrees(lon) }))
+              }
+              onUpdateSite={(i, patch, field) => commit((d) => edits.updateSite(d, i, patch), `site ${i} ${field}`)}
+              onRemoveSite={(i) => {
+                const gone = draft.tasks.filter((task) => task.site === i).length
+                structural(
+                  (d) => edits.removeSite(d, i),
+                  null,
+                  `${draft.sites[i]!.name} removed${gone > 0 ? ` with its ${count(gone, 'task')}` : ''}.`,
+                )
+              }}
+              onAddTask={(site) => commit((d) => edits.addTask(d, site))}
+              onUpdateTask={(i, patch, field) => commit((d) => edits.updateTask(d, i, patch), `task ${i} ${field}`)}
+              onRemoveTask={(i) => commit((d) => edits.removeTask(d, i))}
+            />
+          </Suspense>
+        </KeepAlive>
       )}
 
-      {step === 'review' && (
-        <>
+      {opened.current.has('review') && (
+        <KeepAlive active={step === 'review'}>
           <div className="workspace workspace--review">
             <aside className={`review${valid ? '' : ' is-stale'}`} aria-label="Review">
               <ReviewStep
@@ -566,21 +686,25 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
                 stale={stale}
                 onSave={valid ? save : null}
                 onExportJson={exportJson}
+                selectedSite={selection?.list === 'site' ? selection.index : -1}
+                onSite={(index) => setSelection({ list: 'site', index })}
               />
             </aside>
-            <GlobeCanvas
-              sites={draft.sites}
-              taskCounts={taskCounts}
-              selected={selection?.list === 'site' ? selection.index : -1}
-              editable={false}
-              placing={false}
-              onPlace={() => {}}
-              onSelect={(index) => setSelection({ list: 'site', index })}
-              onMove={() => {}}
-              onStatus={dispatchMapStatus}
-              onImagerySource={setImagerySource}
-              retryKey={retryKey}
-            />
+            <Suspense fallback={mapLoading}>
+              <GlobeCanvas
+                sites={draft.sites}
+                taskCounts={taskCounts}
+                selected={selection?.list === 'site' ? selection.index : -1}
+                editable={false}
+                placing={false}
+                onPlace={() => {}}
+                onSelect={(index) => setSelection({ list: 'site', index })}
+                onMove={() => {}}
+                onStatus={dispatchMapStatus}
+                onImagerySource={setImagerySource}
+                retryKey={retryKey}
+              />
+            </Suspense>
           </div>
           <footer className="statusbar">
             <MapStatus status={mapStatus} imagerySource={imagerySource} onRetry={() => setRetryKey((key) => key + 1)} />
@@ -588,7 +712,7 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
               Viking / CTX · NASA / JPL / USGS / MSSS / The Murray Lab / Esri · Terrain NASA Mars Trek
             </span>
           </footer>
-        </>
+        </KeepAlive>
       )}
     </div>
   )

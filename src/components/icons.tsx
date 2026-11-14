@@ -3,6 +3,7 @@ import type { StepId } from '../state'
 
 // One line icon per stage, drawn like the ones on the plan panel's rail.
 const STAGE: Record<StepId, ReactNode> = {
+  home: <path d="M4 11.5 12 4l8 7.5M6 10v10h12V10M10 20v-6h4v6" />,
   mission: <path d="M6 21V4m0 1h11l-2.5 4L17 13H6" />,
   crew: (
     <>

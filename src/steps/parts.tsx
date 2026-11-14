@@ -69,7 +69,9 @@ export function Row({
             }}
             onDragEnd={drag.onEnd}
           >
-            ⋮⋮
+            <svg viewBox="0 0 10 16" aria-hidden="true">
+              <path d="M2 3h.01M8 3h.01M2 8h.01M8 8h.01M2 13h.01M8 13h.01" />
+            </svg>
           </span>
           {line}
         </div>

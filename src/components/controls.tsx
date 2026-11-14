@@ -18,6 +18,7 @@ export function ConfirmButton({
   label,
   confirmLabel,
   onConfirm,
+  className = '',
   ...props
 }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClick'> & {
   label: string
@@ -28,7 +29,7 @@ export function ConfirmButton({
   return (
     <Button
       variant="quiet"
-      className={armed ? 'is-armed' : ''}
+      className={`${className}${armed ? ' is-armed' : ''}`}
       onBlur={() => setArmed(false)}
       onClick={() => {
         if (armed) onConfirm()

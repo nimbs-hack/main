@@ -6,6 +6,7 @@ import {
   Cartographic,
   Color,
   DirectionalLight,
+  DistanceDisplayCondition,
   type Entity,
   GeographicTilingScheme,
   HeadingPitchRange,
@@ -27,6 +28,7 @@ import { pickGround, setupControls } from '../components/camera.js'
 import { LOCAL_MAX_ZOOM, MAX_NATIVE_ZOOM, localTilePath, remoteTileUrl } from '../data/basemap.js'
 import { addCtxLayer } from '../data/ctx-layer.ts'
 import { DATUM_OFFSET, MARS_SPHERE, createTerrain } from '../data/terrain.js'
+import { FAST_VIEWER_OPTIONS, tuneViewer } from '../data/performance.js'
 import { formatAltitude, formatElevation, formatLatLon } from '../format.js'
 
 export type MapStatusEvent =
@@ -44,6 +46,9 @@ const SITE_RANGE = 40_000
 const RELIEF_STEPS = [1, 3]
 const LIGHT_ELEVATION = CesiumMath.toRadians(35)
 const LABEL_FONT = '500 11px "JetBrains Mono Variable", ui-monospace, monospace'
+// From farther than this the labels of neighbouring sites pile up, so only
+// the points and the selected site's label stay.
+const LABELS_WITHIN = 2_000_000
 
 function cssColor(name: string): Color {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -124,20 +129,20 @@ function createViewer(container: HTMLElement, ctx: Parameters<typeof addCtxLayer
     skyAtmosphere: false,
     // Sources are credited in the status bar.
     creditContainer: document.createElement('div'),
-    requestRenderMode: true,
-    maximumRenderTimeChange: Infinity,
+    ...FAST_VIEWER_OPTIONS,
   })
   const stopCtx = addCtxLayer(viewer, ctx)
 
   const { scene } = viewer
   scene.backgroundColor = cssColor('--color-bg')
-  scene.fog.enabled = false
   scene.globe.showGroundAtmosphere = false
   scene.globe.baseColor = cssColor('--color-surface')
   scene.globe.enableLighting = true
   // Let terrain hide markers on slopes and on the far side of Mars.
   scene.globe.depthTestAgainstTerrain = true
-  scene.globe.tileCacheSize = 512
+  // Coarser tiles while the camera moves, and the rest of what keeps
+  // drawing cheap.
+  const stopTuning = tuneViewer(viewer)
   scene.globe.dynamicAtmosphereLighting = false
   scene.light = new DirectionalLight({ direction: new Cartesian3(0, 0, -1), intensity: 2 })
   const removeLight = scene.preUpdate.addEventListener(() => aimLight(viewer))
@@ -147,7 +152,7 @@ function createViewer(container: HTMLElement, ctx: Parameters<typeof addCtxLayer
   const stopControls = setupControls(viewer)
   viewer.camera.setView({ destination: Cartesian3.fromDegrees(HOME.lon, HOME.lat, HOME.height, MARS_SPHERE) })
 
-  return { viewer, imagery, terrain, stop: () => (stopCtx(), removeLight(), stopControls()) }
+  return { viewer, imagery, terrain, stop: () => (stopCtx(), stopTuning(), removeLight(), stopControls()) }
 }
 
 function frameSites(viewer: Viewer, sites: Site[]): void {
@@ -159,6 +164,14 @@ function frameSites(viewer: Viewer, sites: Site[]): void {
   viewer.camera.flyToBoundingSphere(sphere, {
     offset: new HeadingPitchRange(0, FLY_PITCH, Math.max(sphere.radius * 3, SITE_RANGE)),
   })
+}
+
+// The whole planet, turned to face the mission's sites.
+function showPlanet(viewer: Viewer, sites: Site[], fly: boolean): void {
+  const first = sites[0]
+  const destination = Cartesian3.fromDegrees(first?.lon ?? HOME.lon, first?.lat ?? HOME.lat, HOME.height, MARS_SPHERE)
+  if (fly) viewer.camera.flyTo({ destination })
+  else viewer.camera.setView({ destination })
 }
 
 interface Cursor {
@@ -265,6 +278,8 @@ export function GlobeCanvas({
   const container = useRef<HTMLDivElement>(null)
   const [viewer, setViewer] = useState<Viewer | null>(null)
   const [relief, setRelief] = useState(RELIEF_STEPS[0]!)
+  // False until the first tiles are on screen. Until then the globe is black.
+  const [planetShown, setPlanetShown] = useState(false)
 
   // Handlers registered once read the latest props through this ref.
   const live = useRef({ sites, editable, placing, onPlace, onSelect, onMove, onStatus, onImagerySource })
@@ -272,6 +287,7 @@ export function GlobeCanvas({
 
   useEffect(() => {
     live.current.onStatus({ type: 'reset' })
+    setPlanetShown(false)
     const failed = (source: Extract<MapStatusEvent, { type: 'failure' }>['source']) =>
       live.current.onStatus({ type: 'failure', source })
     let resources: ReturnType<typeof createViewer>
@@ -290,9 +306,10 @@ export function GlobeCanvas({
     const removers = [
       imagery.errorEvent.addEventListener(() => failed('Viking imagery')),
       terrain.errorEvent.addEventListener(() => failed('Terrain')),
-      scene.globe.tileLoadProgressEvent.addEventListener((queued: number) =>
-        live.current.onStatus({ type: 'progress', queued }),
-      ),
+      scene.globe.tileLoadProgressEvent.addEventListener((queued: number) => {
+        live.current.onStatus({ type: 'progress', queued })
+        if (queued === 0) setPlanetShown(true)
+      }),
     ]
     const terrainReady = () => live.current.onStatus({ type: 'terrain-ready' })
     removers.push(terrain.readyEvent.addEventListener(terrainReady))
@@ -354,8 +371,12 @@ export function GlobeCanvas({
     if (import.meta.env.DEV) (window as unknown as { viewer: Viewer }).viewer = viewer
 
     setViewer(viewer)
-    // Start on the mission's sites when it has some.
-    frameSites(viewer, live.current.sites.filter((site) => !Number.isNaN(site.lat + site.lon)))
+    // Start on the planet, with the mission's sites facing the camera.
+    showPlanet(
+      viewer,
+      live.current.sites.filter((site) => !Number.isNaN(site.lat + site.lon)),
+      false,
+    )
 
     return () => {
       for (const remove of removers) remove()
@@ -400,6 +421,7 @@ export function GlobeCanvas({
           pixelOffset: new Cartesian2(0, -14),
           heightReference: HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: 0,
+          distanceDisplayCondition: isSelected ? undefined : new DistanceDisplayCondition(0, LABELS_WITHIN),
         },
       })
       entity.siteIndex = index
@@ -413,10 +435,20 @@ export function GlobeCanvas({
   }, [viewer, sites, taskCounts, selected])
 
   // Bring a site picked in the list into view. Keyed on which site is
-  // selected, so editing its coordinates does not move the camera.
+  // selected, so editing its coordinates does not move the camera. A site
+  // that was already selected when the globe opened does not count: the
+  // globe opens on the whole planet.
   const target = sites[selected]
+  const opened = useRef<{ viewer: Viewer; selected: number } | null>(null)
   useEffect(() => {
-    if (!viewer || !target || Number.isNaN(target.lat + target.lon)) return
+    if (!viewer) return
+    if (opened.current?.viewer !== viewer) {
+      opened.current = { viewer, selected }
+      return
+    }
+    if (opened.current.selected === selected) return
+    opened.current.selected = selected
+    if (!target || Number.isNaN(target.lat + target.lon)) return
     const point = surfacePoint(viewer, target.lat, target.lon)
     const onScreen = viewer.scene.cartesianToCanvasCoordinates(point)
     const { clientWidth, clientHeight } = viewer.scene.canvas
@@ -449,6 +481,12 @@ export function GlobeCanvas({
         <span className="hud__corner hud__corner--bl" aria-hidden="true" />
         <span className="hud__corner hud__corner--br" aria-hidden="true" />
 
+        {!planetShown && (
+          <p className="stage__loading" role="status">
+            <span className="spinner spinner--large" aria-hidden="true" />
+            Loading Mars
+          </p>
+        )}
         <CursorReadout viewer={viewer} />
         <div className="readout readout--tr">
           <span className="readout__label">Selected site</span>
@@ -477,7 +515,7 @@ export function GlobeCanvas({
               <path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M9 10h.01M15 9h.01M12 15h.01" />
             </svg>
           </button>
-          <button type="button" aria-label="Global view" title="Global view" onClick={() => viewer && frameSites(viewer, [])}>
+          <button type="button" aria-label="Whole planet" title="Whole planet" onClick={() => viewer && showPlanet(viewer, drawable, true)}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <circle cx="12" cy="12" r="8" />
               <ellipse cx="12" cy="12" rx="3.5" ry="8" />

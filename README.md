@@ -5,7 +5,7 @@ Plans what a crew needs for a mission: food energy and nutrients, water, oxygen 
 It has three parts:
 
 - The planner, in Go, in `apps/api/internal/planner`. It has a command line and an HTTP API. Its [README](apps/api/internal/planner/README.md) covers the model, the mission file format, the sources of every rate and the limits.
-- The editor, in React and TypeScript, in `src`. A mission is made in five stages, each its own page with a tab in the top bar: Mission, Crew, Phases, Sites and Review. Sites is the 3D Mars map with EVA route planning, map tools and science layers.
+- The editor, in React and TypeScript, in `src`. It opens on Home, which lists the missions saved here or received as files. A mission is then made in five stages, each its own page with a tab in the top bar: Mission, Crew, Phases, Sites and Review. Sites is the 3D Mars map with EVA route planning, map tools and science layers.
 - The API server, in Go, in `apps/api`. It serves the planner and proxies and caches the globe's imagery and terrain tiles.
 
 Everything the planner reports is a planning estimate built from published NASA rates.
@@ -52,27 +52,31 @@ Typecheck runs `tsc` on the editor and compiles the Go packages. Lint runs `go v
 
 ## Making a mission
 
-The Mission page is where a mission starts: name it, or press **Start a new mission** or **Open mission file**. **Next** at the bottom of a page goes to the next stage, and the tabs in the top bar go to any of them. The address keeps the stage, so reload and the back button work.
+The app opens on Home. **Open mission file** reads a `.mhr` or JSON file, **New mission** starts an empty one, and every mission saved here or received as a file is listed with an **Open** button. **Next** at the bottom of a page goes to the next stage, and the tabs in the top bar go to any of them. The address keeps the stage, so reload and the back button work.
 
 | Stage | What you do |
 | --- | --- |
+| Home | The mission in progress, then saved and received missions, newest first. Saving a mission file keeps a copy here. Opening a file adds it as received. The list lives in this browser and holds 50 missions. |
 | Mission | Name it, pick the type, set the margin on supplies. The type fills in the phases. The second card says what the mission holds and links to each stage. |
-| Crew | Add people, by hand or from the roster. Open a row to edit a profile and see that person's needs per day. A portrait shows when `src/assets/crew` has a file named after the call sign. |
+| Crew | One list of people. **Select** puts someone on the crew, and those on it are outlined in red. The arrow opens a person's information to read or edit. **+** beside the title adds a new person. A portrait shows when `src/assets/crew` has a file named after the call sign. |
 | Phases | Set each phase's length, recycling, EVA hours and power. Drag a phase by its grip to reorder. A changed value turns blue and offers the preset back. |
-| Sites | Plan an EVA on the map: start, target, waypoints, limits, a go or no-go verdict. **Add EVA to mission** makes a site at the target with one EVA task as long as the walk and the work. Sites and tasks are listed on the right. |
-| Review | Cautions, totals, loads on the vehicle, tables by phase and by crew, with the mission's sites on Mars beside them. Save the mission file here. |
+| Sites | The first tab of the left panel holds the mission's points. **Add points** and click the map once for each; open a point to name it and give it tasks. The points are the EVA route, in list order. **Method** on the Route tab picks how each leg is found: Fast, Flat, Thermal or Detour search the terrain for a path under the slope limit, and Straight lines does no search. While the route is worked out, grey lines join the points and the map and the panel both say Routing. Then the panel gives a go or no-go verdict. Drag a numbered pin to move its point. Points more than 100 km apart in total are not routed. **Add EVA to mission** gives the last point one EVA task as long as the travel and the work. |
+| Review | The only page with results: cautions, totals, loads on the vehicle, tables by phase, by site with distances, and by crew, with the mission's sites on the planet beside them. Save the mission file here. |
 
 A stage with a problem in it is marked **Fix** on its tab. The Review tab shows how many cautions are waiting.
 
 ### How the stages fit together
 
-One mission is shared by every page, with one undo history. The plan under the Mission, Crew and Phases pages shows what each edit did to the supplies. An EVA assessed on the Sites map becomes a task, and its hours are checked against the EVA hours of its phase, so a route that is too long shows up as a caution in Review. The task note carries the route's verdict, distance and steepest slope.
+One mission is shared by every page, with one undo history. Results are worked out after every edit and shown on Review. An EVA assessed on the Sites map becomes a task, and its hours are checked against the EVA hours of its phase, so a route that is too long shows up as a caution in Review. The task note carries the route's verdict, distance and steepest slope. Review lists the sites with the same point-to-point distances the Sites page shows.
 
 ## The globe
 
 - Terrain is NASA Mars Trek's elevation tileset. The cursor readout gives elevation above the MOLA areoid.
 - Imagery is the Viking colour mosaic far out and CTX at about 5 m per pixel close in. The low zoom levels of Viking are in `public/tiles`; `bun run tiles` downloads any that are missing. CTX and terrain come through the caching proxy in `apps/api`. `data/SOURCES.md` describes each dataset.
 - Drag to pan, scroll to zoom, right-drag to tilt. The buttons on the right face north, switch between tilted and straight down, and zoom.
+- The colour overlays (elevation, night infrared and the rest) start off. Turn them on from the layer switcher at the bottom left of the Sites map.
+- The API server reads ahead: for each close-up tile it serves, it fetches the four tiles beside it and the four under it into the disk cache, so a pan or a zoom finds them there. `apps/api/internal/tiles/readahead.go` has the limits.
+- Both map pages open on the whole planet. Once opened they stay loaded, so switching tabs does not rebuild the globe. The map library loads only for these two pages. `src/data/performance.js` holds the settings that keep drawing cheap.
 - Elevation scale switches between 1× and 3×. The 3× view exaggerates slopes and is for looking, not for judging them.
 
 The status bar reports loading, missing terrain or imagery, and when the older CTX mosaic has been swapped in. Retry rebuilds the globe and keeps the mission.
@@ -80,6 +84,23 @@ The status bar reports loading, missing terrain or imagery, and when the older C
 Coordinates are planetocentric latitude and east-positive longitude on the sphere the terrain tiles use. Sites are stored with longitude from -180 to 180; the screen shows 0 to 360 east, the usual convention for Mars.
 
 Mission sites are points with a label: number, name, task count. The selected one is larger, red, and its label starts with a check mark. On the Review globe the readout says "Terrain safety not assessed" for every site. Slope is checked only along an EVA route planned on the Sites page.
+
+## Route search
+
+The search comes from the `alghorims` branch (`apps/api/src/terrain/engine.ts` there, ported in `src/data/route-options.ts`): A* over a terrain grid with eight neighbours, a hard slope limit, and four strategies.
+
+| Method | What it minimises |
+| --- | --- |
+| Fast | Distance |
+| Flat | Distance, with steep steps costing up to 5.5 times more |
+| Thermal | Ground that reads cold in night infrared. Offered only where night infrared varies |
+| Detour | A corridor away from the routes already found |
+
+Each leg between two mission points gets its own grid of 61 by 29 nodes laid along the leg. A step is impassable when it is steeper than the limit, or when the ground measured at the node it leads to is. When no path exists under the limit, the leg is drawn straight, the verdict is no-go, and it names the lowest limit that would work.
+
+Travel time is that branch's model too: distance at the flat speed, plus height gained at the climb rate, plus height lost at the descent rate. The limit presets include its two, Human in an EVA suit (7°, 2.5 km/h, 350 m/h up, 800 m/h down, 4 h) and Rover (15°, 5 km/h, 700 m/h up, 1,200 m/h down, 8 h). Their work time and walk-back range are assumed here.
+
+Not ported: that branch's weather. Its temperature, pressure and wind limits need a weather field for the site, which comes from a 2,000-line generator and rover archives this app does not have. Thermal uses night infrared as the stand-in.
 
 ## Tasks and EVA hours
 
@@ -121,9 +142,9 @@ Requirement text is from [the standard's page on nasa.gov](https://www.nasa.gov/
 | --- | --- |
 | V2 10005 Consistency | One row pattern for crew, phases and sites. One place for the primary action. Same control for the same kind of value everywhere. |
 | V2 10006 Standard nomenclature | The words crew member, phase, site, task and EVA mean one thing each, in the app, the file and the planner. The lists of roles, kinds and types come from the planner, so the two cannot drift. |
-| V2 10020 Stale or missing data | When the mission cannot be planned, or the planner does not answer, the plan bar says "Stale" and strikes its numbers through. |
+| V2 10020 Stale or missing data | When the mission cannot be planned, or the planner does not answer, a message under the top bar says so on every page, and Review says "Stale" and strikes its numbers through. |
 | V2 10032 Grouping by sequence | The five stages are the order a mission is made in. |
-| V2 10037 Critical information together | The plan bar is under the Mission, Crew and Phases pages, and Review shows the same totals. |
+| V2 10037 Critical information together | Review holds every result on one page, beside the sites on the planet. |
 | V2 10045 Colour never the only cue | The current stage's tab is also bold and raised. Open rows show a check mark. Cautions start with the word. The selected site is larger and checked. Changes show a plus or minus. |
 | V2 10046 Units on every number | Every value shows its unit, or its column heading does. |
 | V2 10060, 10063 Labels, next to the item | Every control has a label directly above it. |
@@ -145,7 +166,7 @@ Contrast against Section 508 (WCAG AA, 4.5:1), which NASA sites have to meet: la
 
 | The guide asks | In the app |
 | --- | --- |
-| Keep the user informed of "controls issued" and "effects of controls issued" (4.2) | Under each number in the plan bar, the change the last edit made. |
+| Keep the user informed of "controls issued" and "effects of controls issued" (4.2) | A message with an Undo after every edit that changes more than the field edited. |
 | Tell the user what the system did on its own (4.2, 4.5) | A "Done" message whenever the planner changes something you did not touch: phases replaced by a new type, tasks left without a person, tasks moved or removed with a phase or site. It carries an Undo. |
 | "Making raw data continually available" (4.5) | Review has "How these numbers are worked out", with the rates. Each crew member shows their needs per day. |
 | The user can "override individual conclusions" and "take over" (5.2.2) | Every preset value can be changed. Nothing the planner fills in is locked. |
@@ -160,7 +181,7 @@ src/            Editor, in React and TypeScript
   api.ts        The planner's JSON shapes and its three calls
   state.ts      Edits to a draft, undo history, what is saved in the browser
   steps/        One file per stage: mission, crew, phases, sites, review
-  components/   The Sites map and its panels, form controls, the plan bar, portraits
+  components/   The Sites map and its panels, form controls, portraits
   data/         Map data: terrain, imagery, routes, science layers, landing sites
   cache/        Service worker registration for map tiles
   globe/        The Review globe: mission site markers, loading status

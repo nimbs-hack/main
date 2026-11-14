@@ -84,8 +84,14 @@ function Cursor({ viewer }) {
   useEffect(() => {
     if (!viewer) return
     const handler = new ScreenSpaceEventHandler(viewer.scene.canvas)
-    handler.setInputAction(({ endPosition }) => {
-      const hit = pickGround(viewer, endPosition)
+    // Finding the ground under the pointer is a ray cast against terrain.
+    // Do it once a frame for the latest position, not once per mouse event.
+    let latest = null
+    let frame = 0
+    const read = () => {
+      frame = 0
+      if (viewer.isDestroyed()) return
+      const hit = pickGround(viewer, latest)
       if (!hit) return setCursor(null)
       const c = MARS_SPHERE.cartesianToCartographic(hit)
       setCursor({
@@ -93,6 +99,10 @@ function Cursor({ viewer }) {
         lon: CesiumMath.toDegrees(c.longitude),
         elevation: unexaggerate(viewer.scene, c.height) - DATUM_OFFSET,
       })
+    }
+    handler.setInputAction(({ endPosition }) => {
+      latest = Cartesian2.clone(endPosition, latest ?? new Cartesian2())
+      frame ||= requestAnimationFrame(read)
     }, ScreenSpaceEventType.MOUSE_MOVE)
     const leave = () => setCursor(null)
     // Kept in a variable: by the time this cleans up, the viewer may be
@@ -100,6 +110,7 @@ function Cursor({ viewer }) {
     const { canvas } = viewer.scene
     canvas.addEventListener('pointerleave', leave)
     return () => {
+      cancelAnimationFrame(frame)
       handler.destroy()
       canvas.removeEventListener('pointerleave', leave)
     }
@@ -155,7 +166,12 @@ const STATUS_TEXT = { loading: 'Loading tiles', error: 'Some tiles failed' }
 export default function StatusBar({ viewer, status, credits }) {
   return (
     <footer className="statusbar">
-      {STATUS_TEXT[status] && <span role="status" className={`statusbar__state is-${status}`}>{STATUS_TEXT[status]}</span>}
+      {STATUS_TEXT[status] && (
+        <span role="status" className={`statusbar__state is-${status}`}>
+          {status === 'loading' && <span className="spinner" aria-hidden="true" />}
+          {STATUS_TEXT[status]}
+        </span>
+      )}
       <Attribution credits={credits} />
       <span className="statusbar__readouts">
         <ScaleBar viewer={viewer} />

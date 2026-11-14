@@ -2,12 +2,12 @@ import type { Catalog } from '../api'
 import { StageIcon } from '../components/icons'
 import { num, words } from '../numbers'
 import type { Draft, StepId } from '../state'
-import { Button, Select, Slider, TextField } from '../components/controls'
+import { Select, Slider, TextField } from '../components/controls'
 
 const count = (n: number, thing: string) => `${num(n)} ${thing}${n === 1 ? '' : 's'}`
 
-// Where a mission starts: its name, type and margin, or a file to open. The
-// second card says what the mission holds so far and leads to each stage.
+// Where a mission is set up: its name, type and margin. The second card
+// says what the mission holds so far and leads to each stage.
 export function MissionStep({
   catalog,
   draft,
@@ -17,8 +17,6 @@ export function MissionStep({
   onName,
   onType,
   onMargin,
-  onOpen,
-  onNew,
 }: {
   catalog: Catalog
   draft: Draft
@@ -29,8 +27,6 @@ export function MissionStep({
   onName: (name: string) => void
   onType: (type: string) => void
   onMargin: (percent: number) => void
-  onOpen: () => void
-  onNew: () => void
 }) {
   const contents: Array<[StepId, string, string]> = [
     ['crew', 'Crew', count(draft.crew.length, 'person').replace('persons', 'people')],
@@ -55,10 +51,6 @@ export function MissionStep({
           max={catalog.maxMarginPercent}
           unit="%"
         />
-        <div className="actions">
-          <Button onClick={onOpen}>Open mission file</Button>
-          <Button onClick={onNew}>Start a new mission</Button>
-        </div>
       </section>
 
       <section className="card">

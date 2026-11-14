@@ -1,6 +1,6 @@
 import { bearing, distance, offset } from './geo'
 import type { LatLon } from './geo'
-import { walkSpeed } from './plan'
+import { stepTime } from './plan'
 import type { Limits } from './plan'
 
 // Route alternatives between a start and a target. A grid is laid along the
@@ -198,6 +198,12 @@ type SearchOptions = { risk?: number[] | null, penalty?: Uint8Array }
  * A* from start to target. Steps steeper than the limit are impassable.
  * Every step costs at least its length, so the straight-line heuristic in
  * meters never overestimates.
+ *
+ * On deploy-v1 the grid is a 20 m elevation model, so the slope of a step
+ * is the slope of the ground. Here a cell can be 200 m, and a step between
+ * two nodes averages out a scarp that lies between them. So a node whose
+ * own measured slope is over the limit is impassable too. The start and the
+ * target are exempt: they are where the route has to go.
  */
 export function findPath(grid: Grid, field: Field, strategy: Strategy, limit: number, options: SearchOptions = {}) {
   const { cols, rows, cell } = grid
@@ -234,6 +240,7 @@ export function findPath(grid: Grid, field: Field, strategy: Strategy, limit: nu
       const v = nr * cols + nc
       const ev = elevation[v]
       if (closed[v] || ev === null) continue
+      if (v !== grid.target && (field.slope[v] ?? 0) > limit) continue
       const run = Math.hypot(dr, dc) * cell
       const dh = ev - eu
       if (Math.abs(dh) > run * tanMax + 1e-9) continue
@@ -284,7 +291,9 @@ export function minRequiredSlope(grid: Grid, field: Field) {
       const v = nr * cols + nc
       const ev = field.elevation[v]
       if (visited[v] || ev === null) continue
-      const slope = Math.max(best[u], edgeSlope(ev - field.elevation[u]!, Math.hypot(dr, dc) * cell))
+      // The ground at the node counts as well as the step to it, as in findPath.
+      const ground = v === grid.target ? 0 : field.slope[v] ?? 0
+      const slope = Math.max(best[u], ground, edgeSlope(ev - field.elevation[u]!, Math.hypot(dr, dc) * cell))
       if (slope < best[v]) {
         best[v] = slope
         heap.push(v, slope)
@@ -387,7 +396,7 @@ function summarize(grid: Grid, field: Field, nodes: number[], limits: Limits, st
     const run = distance(grid.points[a], grid.points[b])
     const rise = (field.elevation[b] ?? 0) - (field.elevation[a] ?? 0)
     length += run
-    time += run / walkSpeed(rise / run, limits.pace)
+    time += stepTime(run, rise, limits)
     maxSlope = Math.max(maxSlope ?? 0, edgeSlope(rise, run))
   }
   return {

@@ -21,11 +21,17 @@ const (
 
 // RegisterCTX serves fixed CTX sources and returns a function that drains both
 // caches. Source selection is explicit so neighboring tiles never mix mosaics.
-func RegisterCTX(mux *http.ServeMux, cacheDir string, client *http.Client) func() {
-	return registerCTX(mux, cacheDir, client, 2048)
+// With a ReadAhead it also fetches the tiles around each one served.
+func RegisterCTX(mux *http.ServeMux, cacheDir string, client *http.Client, ahead ...*ReadAhead) func() {
+	// Reading ahead brings in about eight tiles for each one viewed, so the
+	// disk keeps more of them.
+	if len(ahead) > 0 {
+		return registerCTX(mux, cacheDir, client, 8192, ahead[0])
+	}
+	return registerCTX(mux, cacheDir, client, 2048, nil)
 }
 
-func registerCTX(mux *http.ServeMux, cacheDir string, client *http.Client, maxTiles int) func() {
+func registerCTX(mux *http.ServeMux, cacheDir string, client *http.Client, maxTiles int, ahead *ReadAhead) func() {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -117,6 +123,11 @@ func registerCTX(mux *http.ServeMux, cacheDir string, client *http.Client, maxTi
 			w.Header().Set("Cache-Control", "no-store")
 			ctxText(w, http.StatusBadGateway, "CTX tile unavailable")
 			return
+		}
+		for _, next := range around(tile{z, x, y}, ctxMaxLevel-1) {
+			ahead.offer(fmt.Sprintf("ctx/%s/%d/%d/%d", source, next.z, next.row, next.col), func(ctx context.Context) {
+				_, _ = load(ctx, next.z, next.row, next.col, source, true)
+			})
 		}
 		w.Header().Set("Content-Type", mime)
 		w.Header().Set("Cache-Control", "public, max-age=2592000")

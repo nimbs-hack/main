@@ -1,5 +1,6 @@
 import type { Catalog, MissionPlan, Planned } from '../api'
-import { kcal, kwh, num, range } from '../numbers'
+import { kcal, kwh, meters, num, range } from '../numbers'
+import { siteLegs, totalLegs } from './legs'
 import { Readout } from '../components/controls'
 import { FactRow } from './parts'
 
@@ -83,6 +84,8 @@ export function ReviewStep({
   stale,
   onSave,
   onExportJson,
+  selectedSite,
+  onSite,
 }: {
   catalog: Catalog
   planned: Planned
@@ -91,8 +94,12 @@ export function ReviewStep({
   // Null while the mission cannot be saved.
   onSave: (() => void) | null
   onExportJson: () => void
+  // The site shown as selected on the globe beside this page.
+  selectedSite: number
+  onSite: (index: number) => void
 }) {
-  const { plan, cautions: warnings } = planned
+  const { mission, plan, cautions: warnings } = planned
+  const legs = siteLegs(mission.sites)
   const { rates } = catalog
   const { total, provision } = plan
   const seconds = plan.days * SECONDS_PER_DAY
@@ -175,6 +182,65 @@ export function ReviewStep({
               ))}
             </tbody>
           </table>
+        </section>
+
+        <section>
+          <h2 className="planner__title">Sites, with the distance from the one before</h2>
+          {mission.sites.length === 0 ? (
+            <p className="note">No sites. Add points on the Sites page.</p>
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Site</th>
+                  <th scope="col">Distance</th>
+                  <th scope="col">Tasks</th>
+                  <th scope="col">Hours</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mission.sites.map((site, i) => {
+                  const tasks = mission.tasks.filter((task) => task.site === i)
+                  const leg = legs[i]
+                  return (
+                    <tr key={i}>
+                      <th scope="row">
+                        <button
+                          type="button"
+                          aria-pressed={i === selectedSite}
+                          title="Show on the globe"
+                          onClick={() => onSite(i)}
+                        >
+                          {i + 1} {site.name}
+                        </button>
+                      </th>
+                      <td>{leg === null || leg === undefined ? '' : meters(leg)}</td>
+                      <td>{num(tasks.length)}</td>
+                      <td>
+                        {num(
+                          tasks.reduce((sum, task) => sum + task.hours, 0),
+                          1,
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <th scope="row">Through all sites</th>
+                  <td>{meters(totalLegs(legs))}</td>
+                  <td>{num(mission.tasks.length)}</td>
+                  <td>
+                    {num(
+                      mission.tasks.reduce((sum, task) => sum + task.hours, 0),
+                      1,
+                    )}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          )}
         </section>
 
         <section>

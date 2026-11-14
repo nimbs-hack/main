@@ -372,7 +372,7 @@ func TestCTXDiskEviction(t *testing.T) {
 		_, _ = w.Write(data)
 	})
 	mux := http.NewServeMux()
-	flush := registerCTX(mux, dir, client, 2)
+	flush := registerCTX(mux, dir, client, 2, nil)
 	t.Cleanup(flush)
 	for x := range 3 {
 		if response := ctxTestRequest(mux, fmt.Sprintf("1/0/%d.png", x)); response.Code != 200 {

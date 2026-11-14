@@ -9,9 +9,11 @@
   grid-template: auto auto minmax(0, 1fr) auto / minmax(0, 1fr);
 }
 
+/* The stage tabs start at the left edge, as a slicer's do. */
 .console--mission > .topbar {
   min-height: var(--topbar-height);
   padding-right: var(--space-3);
+  padding-left: 0;
 }
 
 input,
@@ -32,7 +34,7 @@ button:disabled {
 }
 
 /* :where keeps this reset weaker than any class rule below it. */
-:where(.page, .sites, .review, .alerts, .planbar) :where(h1, h2, h3, p, ul, ol, dl, dd) {
+:where(.page, .sites, .review, .alerts) :where(h1, h2, h3, p, ul, ol, dl, dd) {
   margin: 0;
   padding: 0;
 }
@@ -49,7 +51,6 @@ button:disabled {
   display: flex;
   align-self: stretch;
   min-width: 0;
-  margin-left: var(--space-4);
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -63,16 +64,12 @@ button:disabled {
   min-width: 128px;
   padding: 0 var(--space-4);
   border: 0;
-  border-left: var(--border-width) solid var(--color-line);
+  border-right: var(--border-width) solid var(--color-line);
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--color-text-muted);
   font-family: var(--font-sans);
   font-size: var(--text-body);
-}
-
-.tab:last-child {
-  border-right: var(--border-width) solid var(--color-line);
 }
 
 .tab:hover {
@@ -314,6 +311,16 @@ button:disabled {
 .item__grip:hover {
   border-color: var(--color-line-strong);
   color: var(--color-text);
+}
+
+/* Six dots, the usual mark for something you can drag. */
+.item__grip svg {
+  width: 10px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
 }
 
 .item.is-dragged {
@@ -598,6 +605,186 @@ select.input {
   color: var(--color-modified);
 }
 
+/* The crew list: one line per person, with a button that opens their
+   information and one that selects them. People who are going on the mission
+   are outlined in the accent colour, which is the colour of a selection. */
+
+.card__add {
+  min-width: var(--control-height);
+  margin-left: var(--space-2);
+  padding: 0;
+  font-size: var(--text-button);
+  letter-spacing: 0;
+}
+
+.people {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.person__line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: var(--border-width) solid var(--color-line);
+  background: var(--color-surface-raised);
+}
+
+.person.is-selected .person__line {
+  border-color: var(--color-accent);
+}
+
+.person__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* A name with a line of detail under it, as on the home page. */
+.person__who {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.person__meta {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.person__line .button {
+  background: var(--color-bg);
+}
+
+.person__line .button:last-child {
+  min-width: 96px;
+}
+
+.person__more {
+  width: var(--control-height);
+  padding: 0;
+}
+
+.person__more svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* A map page that stays mounted while another stage is shown. It adds no box
+   of its own, so its children sit in the console's grid as before. */
+.keep {
+  display: contents;
+}
+
+.keep[hidden] {
+  display: none;
+}
+
+/* Work in progress: a ring that turns. The one round shape in the app, so
+   it reads as "busy" and nothing else. Without motion it stays a ring and
+   the words beside it carry the message. */
+.spinner {
+  display: inline-block;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-right: var(--space-2);
+  border: 2px solid var(--color-line-strong);
+  border-top-color: var(--color-text);
+  border-radius: 50%;
+  vertical-align: -1px;
+  animation: spin 0.8s linear infinite;
+}
+
+.spinner--large {
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  border-width: 3px;
+}
+
+@keyframes spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
+/* A spinner over its words, centred: the planner starting, the map's code
+   on its way, the first tiles of the planet. */
+.loading,
+.stage__loading {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.stage--loading {
+  display: grid;
+  place-content: center;
+}
+
+.stage__loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+}
+
+/* The route is being worked out: said on the map, top centre, and in the
+   panel's dock. */
+.stage__routing {
+  position: absolute;
+  top: 30px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-surface);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  translate: -50% 0;
+}
+
+.plan__verdict.is-routing {
+  align-items: center;
+  border-color: var(--color-text-muted);
+  color: var(--color-text);
+}
+
+.plan__verdict.is-routing .spinner {
+  margin-right: 0;
+}
+
 /* Crew portraits: a photo from src/assets/crew, or two letters in a frame. */
 
 .portrait {
@@ -639,37 +826,7 @@ select.input {
   gap: var(--space-4);
 }
 
-/* Roster, details, fact lists, tasks */
-
-.roster {
-  border: var(--border-width) solid var(--color-line-strong);
-}
-
-.roster li {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
-}
-
-.roster li + li {
-  border-top: var(--border-width) solid var(--color-line);
-}
-
-.roster__who {
-  display: grid;
-  flex: 1;
-  min-width: 0;
-}
-
-.roster__who span {
-  overflow: hidden;
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-label);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* Details, fact lists, tasks */
 
 .details summary {
   color: var(--color-text-muted);
@@ -841,67 +998,40 @@ select.input {
   text-transform: uppercase;
 }
 
-/* The plan, under every column page: what to supply and what the last edit
-   did to it. */
-
-.planbar {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-8);
-  border-top: var(--border-width) solid var(--color-line);
-  background: var(--color-surface);
-}
-
-.planbar h2 {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-4);
+.table tfoot :is(th, td) {
+  border-bottom: 0;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
   font-weight: 400;
 }
 
-.planbar__stale {
-  color: var(--color-warning);
+/* A row that selects something on the map: a plain underlined name, with a
+   check mark when it is the one selected. */
+.table tbody th button {
+  padding: 0;
+  border: 0;
+  background: none;
+  text-decoration: underline dotted var(--color-text-dim);
+  text-underline-offset: 3px;
 }
 
-.planbar__grid {
-  display: grid;
-  grid-template-columns: repeat(6, auto);
-  justify-content: space-between;
-  gap: var(--space-3) var(--space-6);
-}
-
-.planbar .readout__value {
-  font-size: var(--text-section);
+.table tbody th button[aria-pressed='true']::before {
+  content: '✓ ';
 }
 
 /* Numbers from the last valid mission are struck through as well as dimmed. */
-.planbar.is-stale .readout__value,
 .review.is-stale :is(.readout__value, .facts dd, .table td, .crew-needs__meta) {
   color: var(--color-text-muted);
   text-decoration: line-through;
 }
 
-/* The sites page: the plan panel, the map, then the mission's sites. */
-
-.workspace--aside {
-  grid-template-columns: min(var(--sidebar-width), 30vw) minmax(0, 1fr) min(400px, 26vw);
-}
+/* The mission's sites and tasks, as a tab of the plan panel on the sites page. */
 
 .sites {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  min-height: 0;
-  padding: var(--space-4);
-  border-left: var(--border-width) solid var(--color-line);
-  background: var(--color-surface);
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-line-strong) transparent;
-}
-
-.sites > * {
-  flex: none;
+  padding-top: var(--space-3);
 }
 
 .sites section {
@@ -1007,21 +1137,9 @@ select.input {
     flex-wrap: wrap;
   }
 
-  .workspace--aside,
   .workspace--review {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) minmax(0, 45%) auto;
-  }
-
-  .workspace--review {
     grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
-  }
-
-  .sites {
-    order: 3;
-    max-height: 40dvh;
-    border-top: var(--border-width) solid var(--color-line);
-    border-left: 0;
   }
 
   .review {
@@ -1029,13 +1147,6 @@ select.input {
     border-bottom: var(--border-width) solid var(--color-line);
   }
 
-  .planbar {
-    padding: var(--space-3) var(--space-4);
-  }
-
-  .planbar__grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 /* Shown in place of the pages while the planner service is being reached. */

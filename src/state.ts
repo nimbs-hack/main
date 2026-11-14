@@ -7,6 +7,7 @@ export type Draft = Mission
 
 // The stages of making a mission, in the order they are done. Each is a page.
 export const STEPS = [
+  { id: 'home', label: 'Home' },
   { id: 'mission', label: 'Mission' },
   { id: 'crew', label: 'Crew' },
   { id: 'phases', label: 'Phases' },
@@ -16,8 +17,7 @@ export const STEPS = [
 export type StepId = (typeof STEPS)[number]['id']
 
 // The stage in the address, so a reload or the back button lands on it.
-export const stepFromHash = (): StepId =>
-  STEPS.find((entry) => `#${entry.id}` === location.hash)?.id ?? 'mission'
+export const stepFromHash = (): StepId => STEPS.find((entry) => `#${entry.id}` === location.hash)?.id ?? 'home'
 
 export type Selection = { list: 'crew' | 'phase' | 'site'; index: number } | null
 
@@ -31,6 +31,7 @@ export function stepOfProblem(message: string): StepId {
 
 const DRAFT_KEY = 'nimbs:planner:draft'
 const ROSTER_KEY = 'nimbs:planner:roster'
+const LIBRARY_KEY = 'nimbs:planner:library'
 
 function stored(key: string): unknown {
   try {
@@ -41,9 +42,12 @@ function stored(key: string): unknown {
   }
 }
 
-export function store(key: 'draft' | 'roster', value: unknown): void {
+export function store(key: 'draft' | 'roster' | 'library', value: unknown): void {
+  // A number field being retyped is NaN, which JSON turns into null. A roster
+  // saved like that would lose the person on the next start, so wait.
+  if (key === 'roster' && /:null[,}]/.test(JSON.stringify(value))) return
   try {
-    localStorage.setItem(key === 'draft' ? DRAFT_KEY : ROSTER_KEY, JSON.stringify(value))
+    localStorage.setItem({ draft: DRAFT_KEY, roster: ROSTER_KEY, library: LIBRARY_KEY }[key], JSON.stringify(value))
   } catch {
     // Storage can be blocked or full. The editor still works for this session.
   }
@@ -60,6 +64,63 @@ const isProfile = (value: unknown): value is Astronaut =>
 export function loadRoster(catalog: Catalog): Astronaut[] {
   const saved = stored(ROSTER_KEY)
   return Array.isArray(saved) ? saved.filter(isProfile) : catalog.sampleRoster
+}
+
+// A mission kept on the home page: saved from here, or received as a file.
+export interface LibraryEntry {
+  id: string
+  mission: Mission
+  // ISO time it was saved or received.
+  at: string
+  source: 'saved' | 'received'
+  // Name of the file it came from, for a received one.
+  file?: string
+}
+
+// The most missions the home page keeps. The oldest go first.
+const LIBRARY_LIMIT = 50
+
+const isEntry = (value: unknown): value is LibraryEntry => {
+  const entry = value as LibraryEntry | null
+  return (
+    typeof entry === 'object' &&
+    entry !== null &&
+    typeof entry.id === 'string' &&
+    typeof entry.at === 'string' &&
+    (entry.source === 'saved' || entry.source === 'received') &&
+    typeof entry.mission === 'object' &&
+    entry.mission !== null &&
+    typeof entry.mission.name === 'string' &&
+    Array.isArray(entry.mission.crew) &&
+    Array.isArray(entry.mission.phases) &&
+    Array.isArray(entry.mission.sites)
+  )
+}
+
+export function loadLibrary(): LibraryEntry[] {
+  const saved = stored(LIBRARY_KEY)
+  return Array.isArray(saved) ? saved.filter(isEntry) : []
+}
+
+// The library with one more mission, newest first. A mission saved again
+// under the same name, or received again from the same file, replaces the
+// earlier copy.
+export function withEntry(
+  library: LibraryEntry[],
+  mission: Mission,
+  source: LibraryEntry['source'],
+  file?: string,
+): LibraryEntry[] {
+  const twin = (entry: LibraryEntry) =>
+    entry.source === source && entry.mission.name === mission.name && entry.file === file
+  const entry: LibraryEntry = {
+    id: `${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+    mission,
+    at: new Date().toISOString(),
+    source,
+    file,
+  }
+  return [entry, ...library.filter((old) => !twin(old))].slice(0, LIBRARY_LIMIT)
 }
 
 // The draft from the last session, unchecked. The planner decides at start
@@ -121,6 +182,8 @@ export function createEdits(catalog: Catalog) {
   })
 
   return {
+    newPerson,
+
     blank: (): Draft => ({
       name: '',
       type: 'mars-long-stay',
@@ -147,10 +210,6 @@ export function createEdits(catalog: Catalog) {
     addCrew: (draft: Draft, person?: Astronaut): Draft => ({
       ...draft,
       crew: [...draft.crew, person ?? newPerson(draft.crew)],
-    }),
-    duplicateCrew: (draft: Draft, index: number): Draft => ({
-      ...draft,
-      crew: [...draft.crew, { ...draft.crew[index]!, name: newPerson(draft.crew).name }],
     }),
     updateCrew: (draft: Draft, index: number, patch: Partial<Astronaut>): Draft => ({
       ...draft,
@@ -308,8 +367,7 @@ export function useHistory<T>(initial: () => T) {
 
   const commit = useCallback((recipe: (current: T) => T, key = '') => {
     const now = Date.now()
-    const merge =
-      key !== '' && key === last.current.key && now - last.current.time < MERGE_WINDOW_MS
+    const merge = key !== '' && key === last.current.key && now - last.current.time < MERGE_WINDOW_MS
     last.current = { key, time: now }
     setState((s) => {
       const present = recipe(s.present)
@@ -338,9 +396,7 @@ export function useHistory<T>(initial: () => T) {
   const redo = useCallback(() => {
     last.current = { key: '', time: 0 }
     setState((s) =>
-      s.future.length === 0
-        ? s
-        : { past: [...s.past, s.present], present: s.future[0]!, future: s.future.slice(1) },
+      s.future.length === 0 ? s : { past: [...s.past, s.present], present: s.future[0]!, future: s.future.slice(1) },
     )
   }, [])
 

@@ -14,10 +14,14 @@ export type Plan = {
   waypoints: LatLon[]
 }
 
-// SI units: degrees for slope, m/s for pace, seconds for time, meters for range.
+// SI units: degrees for slope, m/s for the three speeds, seconds for time,
+// meters for range. `pace` is speed over flat ground. `climb` and `descent`
+// are vertical rates, meters of height per second.
 export type Limits = {
   slope: number
   pace: number
+  climb: number
+  descent: number
   eva: number
   work: number
   range: number
@@ -25,16 +29,29 @@ export type Limits = {
 
 export const EMPTY_PLAN: Plan = { start: null, target: null, waypoints: [] }
 
+const perHour = (meters: number) => meters / 3600
+
 // Planning assumptions, not suit certifications. No Mars suit limits are
-// published. Slope limits follow lunar traverse studies. Pace is flat-ground
-// walking speed in a pressurized suit. Range is the walk-back radius.
+// published.
+//
+// Human and Rover are the two traverse presets of the algorithms branch
+// (TRAVERSE_PRESETS in packages/shared/src/types.ts): slope limit, flat,
+// climb and descent speed, and longest EVA. Their work time and walk-back
+// range are ASSUMED here, since that branch has neither.
+//
+// The other three came with the route planner. Their slope limits follow
+// lunar traverse studies, and they use the algorithms branch's default
+// climb and descent rates.
 export const PRESETS: { id: string, name: string, limits: Limits }[] = [
-  { id: 'conservative', name: 'Conservative', limits: { slope: 15, pace: 0.7, eva: 3 * 3600, work: 45 * 60, range: 1500 } },
-  { id: 'nominal', name: 'Nominal', limits: { slope: 20, pace: 0.85, eva: 4 * 3600, work: 60 * 60, range: 3000 } },
-  { id: 'extended', name: 'Extended', limits: { slope: 25, pace: 1, eva: 6 * 3600, work: 90 * 60, range: 5000 } },
+  { id: 'human', name: 'Human, EVA suit', limits: { slope: 7, pace: perHour(2500), climb: perHour(350), descent: perHour(800), eva: 4 * 3600, work: 60 * 60, range: 3000 } },
+  { id: 'rover', name: 'Rover, pressurized', limits: { slope: 15, pace: perHour(5000), climb: perHour(700), descent: perHour(1200), eva: 8 * 3600, work: 60 * 60, range: 20_000 } },
+  { id: 'conservative', name: 'Conservative', limits: { slope: 15, pace: 0.7, climb: perHour(350), descent: perHour(800), eva: 3 * 3600, work: 45 * 60, range: 1500 } },
+  { id: 'nominal', name: 'Nominal', limits: { slope: 20, pace: 0.85, climb: perHour(350), descent: perHour(800), eva: 4 * 3600, work: 60 * 60, range: 3000 } },
+  { id: 'extended', name: 'Extended', limits: { slope: 25, pace: 1, climb: perHour(350), descent: perHour(800), eva: 6 * 3600, work: 90 * 60, range: 5000 } },
 ]
 
-export const DEFAULT_LIMITS = PRESETS[1].limits
+export const DEFAULT_PRESET = 'nominal'
+export const DEFAULT_LIMITS = PRESETS.find((preset) => preset.id === DEFAULT_PRESET)!.limits
 
 export function presetFor(limits: Limits) {
   return PRESETS.find((preset) => (Object.keys(limits) as (keyof Limits)[]).every((key) => preset.limits[key] === limits[key])) ?? null
@@ -77,15 +94,17 @@ export function removeWaypoint(plan: Plan, index: number): Plan {
   return { ...plan, waypoints: plan.waypoints.filter((_, i) => i !== index) }
 }
 
-// Walking speed on a grade (rise over run, signed), scaled from Tobler's
-// hiking function so `pace` is the flat-ground speed. Downhill at about 3%
-// is fastest. Earth gait in a suit, so treat it as an estimate.
-export function walkSpeed(grade: number, pace: number) {
-  return pace * Math.exp(-3.5 * Math.abs(grade + 0.05)) / Math.exp(-3.5 * 0.05)
+// Seconds to cover `run` meters of ground while going up or down by `rise`
+// meters. The model of the algorithms branch (evaluateEvaWeather in
+// apps/api/src/weather/generator.ts): the distance at the flat speed, plus
+// the height gained at the climb rate, plus the height lost at the descent
+// rate.
+export function stepTime(run: number, rise: number, limits: Limits) {
+  return run / limits.pace + Math.max(0, rise) / limits.climb + Math.max(0, -rise) / limits.descent
 }
 
-// Seconds to walk the samples in order, or in reverse for the way back.
-export function walkTime(samples: ProfileSample[], pace: number, reverse = false) {
+// Seconds to travel the samples in order, or in reverse for the way back.
+export function traverseTime(samples: ProfileSample[], limits: Limits, reverse = false) {
   let total = 0
   for (let i = 1; i < samples.length; i++) {
     const a = samples[i - 1]
@@ -93,7 +112,7 @@ export function walkTime(samples: ProfileSample[], pace: number, reverse = false
     const run = b.d - a.d
     if (run <= 0) continue
     const rise = a.elevation !== null && b.elevation !== null ? b.elevation - a.elevation : 0
-    total += run / walkSpeed((reverse ? -rise : rise) / run, pace)
+    total += stepTime(run, reverse ? -rise : rise, limits)
   }
   return total
 }
@@ -110,11 +129,14 @@ export type Leg = {
 }
 
 // Per-leg slope stats. Leg i runs from vertex i to vertex i + 1 of the path.
-export function legStats(samples: ProfileSample[], path: LatLon[], limit: number): Leg[] {
-  const along = cumulative(path)
+// With `stops`, the positions in `path` where legs end, a leg runs from one
+// stop to the next and the vertices between them are only turns in it.
+export function legStats(samples: ProfileSample[], path: LatLon[], limit: number, stops?: number[]): Leg[] {
+  const every = cumulative(path)
+  const along = stops ? stops.map((index) => every[index]) : every
   const total = samples.at(-1)?.d ?? 0
   // Samples come from a resampled path. Scale vertex distances to match.
-  const scale = along.at(-1) ? total / along.at(-1)! : 1
+  const scale = every.at(-1) ? total / every.at(-1)! : 1
   const legs: Leg[] = along.slice(0, -1).map((from, i) => ({
     index: i + 1,
     from: from * scale,
@@ -171,10 +193,10 @@ function meters(value: number) {
  * Go or no-go for walking the samples out and back. `doseRate` is in Sv/day
  * and is optional, since only one site has a measured value.
  */
-export function assess(samples: ProfileSample[], path: LatLon[], limits: Limits, doseRate: number | null = null): Assessment {
-  const legs = legStats(samples, path, limits.slope)
-  const timeOut = walkTime(samples, limits.pace)
-  const timeBack = walkTime(samples, limits.pace, true)
+export function assess(samples: ProfileSample[], path: LatLon[], limits: Limits, doseRate: number | null = null, stops?: number[]): Assessment {
+  const legs = legStats(samples, path, limits.slope, stops)
+  const timeOut = traverseTime(samples, limits)
+  const timeBack = traverseTime(samples, limits, true)
   const total = timeOut + limits.work + timeBack
   const start = samples[0]?.point
   const maxFromStart = start ? Math.max(0, ...samples.map((s) => distance(start, s.point))) : 0

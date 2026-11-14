@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { distance } from '../data/geo'
-import { PRESETS, formatDuration, presetFor } from '../data/plan'
+import { DEFAULT_PRESET, PRESETS, formatDuration, presetFor } from '../data/plan'
 import { slopeLevel } from '../data/route-profile'
 import { SITES } from '../data/sites'
 import { formatLatLon } from '../format'
@@ -27,6 +27,14 @@ import './plan-panel.css'
  *   onRetry(), onWalk(), onClear()
  *   onAddToMission  adds this EVA to the mission. Null while there is no
  *                   assessed route, undefined when no mission is open.
+ *   missionSites    content of an extra rail tab, the mission's sites and
+ *                   tasks. missionFlag puts a dot on its icon, and the tab
+ *                   opens when missionFocus, the selected site, changes.
+ *                   With it the mission's points are the route, so the Site
+ *                   card and the waypoint and Clear controls are not shown.
+ *                   routeNote says why there is no route yet.
+ *   methods         ways to join the mission's points, as { id, name, note }.
+ *                   method is the one in use, and onMethod(id) changes it.
  */
 
 const ICONS = {
@@ -36,6 +44,7 @@ const ICONS = {
   range: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /></>,
   dose: <><circle cx="12" cy="12" r="1.5" /><path d="M12 4a8 8 0 0 1 7 4l-5 3M5 8a8 8 0 0 1 7-4M5 8l5 3M12 20a8 8 0 0 1-7-4l5-3M19 16a8 8 0 0 1-7 4v-6" /></>,
   site: <path d="M12 21s-6-6-6-11a6 6 0 0 1 12 0c0 5-6 11-6 11ZM12 12a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />,
+  mission: <path d="M6 21V4m0 1h11l-2.5 4L17 13H6" />,
   limits: <path d="M5 4v16M12 4v16M19 4v16M3 8h4M10 15h4M17 10h4" />,
   pick: <path d="M12 3v4M12 17v4M3 12h4M17 12h4M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z" />,
   search: <><circle cx="11" cy="11" r="6" /><path d="m20 20-4.5-4.5" /></>,
@@ -54,6 +63,8 @@ const FIELDS = {
   eva: { unit: 'h', step: 0.5, min: 0.5, max: 10, toView: (v) => +(v / 3600).toFixed(2), fromView: (v) => v * 3600 },
   work: { unit: 'min', step: 5, min: 0, max: 240, toView: (v) => Math.round(v / 60), fromView: (v) => v * 60 },
   range: { unit: 'km', step: 0.25, min: 0.25, max: 20, toView: (v) => +(v / 1000).toFixed(2), fromView: (v) => v * 1000 },
+  climb: { unit: 'm/h', step: 10, min: 50, max: 3000, toView: (v) => Math.round(v * 3600), fromView: (v) => v / 3600 },
+  descent: { unit: 'm/h', step: 10, min: 50, max: 3000, toView: (v) => Math.round(v * 3600), fromView: (v) => v / 3600 },
 }
 
 // Same value within float noise from unit conversion.
@@ -168,9 +179,9 @@ const BASE_KEY = 'nimbs.plan-b.preset'
 
 function loadBase() {
   try {
-    return localStorage.getItem(BASE_KEY) ?? 'nominal'
+    return localStorage.getItem(BASE_KEY) ?? DEFAULT_PRESET
   } catch {
-    return 'nominal'
+    return DEFAULT_PRESET
   }
 }
 
@@ -189,20 +200,29 @@ const CATS = [
   { id: 'range', icon: 'range', title: 'Walk-back' },
   { id: 'dose', icon: 'dose', title: 'Radiation' },
 ]
+const MISSION_CAT = { id: 'mission', icon: 'mission', title: 'Mission points' }
 
 export default function PlanPanel({
   plan, limits, assessment, status, placing, dose,
   onPlacing, onSite, onRemoveWaypoint, onLimits, onRetry, onWalk, onClear, onAddToMission,
+  missionSites, missionFlag = null, missionFocus = -1, routeNote = null,
+  methods, method, onMethod,
 }) {
   const searchId = useId()
   const [advanced, setAdvanced] = useState(false)
   const [searching, setSearching] = useState(false)
   const [query, setQuery] = useState('')
-  const [active, setActive] = useState('route')
+  // With a mission open its points come first, since the mission is why you are here.
+  const [active, setActive] = useState(missionSites ? 'mission' : 'route')
+  const cats = missionSites ? [MISSION_CAT, ...CATS] : CATS
+  // Picking a mission site, on the map or by adding one, opens its tab.
+  useEffect(() => {
+    if (missionSites && missionFocus >= 0) setActive('mission')
+  }, [missionFocus])
   const rail = useRef(null)
   // The preset stays chosen while you edit. Edits show as changes from it.
   const [baseId, setBaseId] = useState(() => presetFor(limits)?.id ?? loadBase())
-  const base = PRESETS.find((p) => p.id === baseId) ?? PRESETS[1]
+  const base = PRESETS.find((p) => p.id === baseId) ?? PRESETS.find((p) => p.id === DEFAULT_PRESET)
   const changes = Object.keys(base.limits).filter((key) => !same(limits[key], base.limits[key]))
   // Follow preset matches when limits change from the map controls.
   const exact = presetFor(limits)?.id
@@ -222,8 +242,8 @@ export default function PlanPanel({
     const step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0
     if (!step) return
     event.preventDefault()
-    const index = (CATS.findIndex((cat) => cat.id === active) + step + CATS.length) % CATS.length
-    setActive(CATS[index].id)
+    const index = (cats.findIndex((cat) => cat.id === active) + step + cats.length) % cats.length
+    setActive(cats[index].id)
     rail.current?.querySelectorAll('button')[index]?.focus()
   }
 
@@ -234,12 +254,26 @@ export default function PlanPanel({
   // or a search that matches them.
   const rows = {
     route: [
+      ...(methods ? [{
+        label: 'Method',
+        group: 'Routing',
+        wide: true,
+        basic: true,
+        hint: methods.find((entry) => entry.id === method)?.note,
+        node: (
+          <select className="plan__select" aria-label="Routing method" value={method} onChange={(event) => onMethod(event.target.value)}>
+            {methods.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+          </select>
+        ),
+      }] : []),
       { label: 'Waypoints', group: 'Points', basic: true, node: (
         <span className="plan__box plan__box--action">
           <output>{plan.waypoints.length}</output>
-          <button type="button" aria-pressed={placing === 'waypoint'} disabled={!ready} onClick={() => onPlacing(placing === 'waypoint' ? null : 'waypoint')}>
-            {placing === 'waypoint' ? 'Done' : 'Add'}
-          </button>
+          {!missionSites && (
+            <button type="button" aria-pressed={placing === 'waypoint'} disabled={!ready} onClick={() => onPlacing(placing === 'waypoint' ? null : 'waypoint')}>
+              {placing === 'waypoint' ? 'Done' : 'Add'}
+            </button>
+          )}
         </span>
       ) },
       { label: 'Distance one way', group: 'Points', basic: true, node: <Value unit={a && a.distance >= 1000 ? 'km' : 'm'}>{a ? (a.distance >= 1000 ? (a.distance / 1000).toFixed(2) : Math.round(a.distance)) : pending}</Value> },
@@ -252,7 +286,7 @@ export default function PlanPanel({
         node: (
           <span className={`plan__box plan__box--leg is-${slopeLevel(leg.maxSlope, limits.slope)}`}>
             <output>{formatDistance(leg.length)} · {formatSlope(leg.maxSlope)}</output>
-            {i < plan.waypoints.length && (
+            {!missionSites && i < plan.waypoints.length && (
               <button type="button" onClick={() => onRemoveWaypoint(i)} aria-label={`Remove waypoint ${i + 1}`} title={`Remove waypoint ${i + 1}`}>×</button>
             )}
           </span>
@@ -270,7 +304,9 @@ export default function PlanPanel({
     time: [
       { label: 'EVA budget', group: 'Budget', basic: true, node: field('eva', 'EVA budget') },
       { label: 'Time at target', group: 'Budget', basic: true, node: field('work', 'Time at target') },
-      { label: 'Flat pace', group: 'Budget', basic: false, hint: "Tobler's hiking function, scaled to this pace", node: field('pace', 'Flat pace') },
+      { label: 'Flat speed', group: 'Speed', basic: true, hint: 'Over level ground', node: field('pace', 'Flat speed') },
+      { label: 'Climb rate', group: 'Speed', basic: false, hint: 'Height gained per hour, added to the time for the distance', node: field('climb', 'Climb rate') },
+      { label: 'Descent rate', group: 'Speed', basic: false, hint: 'Height lost per hour, added to the time for the distance', node: field('descent', 'Descent rate') },
       { label: 'Walk out', group: 'This route', basic: false, node: <Value unit="min">{a ? minutes(a.timeOut) : pending}</Value> },
       { label: 'Walk back', group: 'This route', basic: false, node: <Value unit="min">{a ? minutes(a.timeBack) : pending}</Value> },
       { label: 'EVA total', group: 'This route', basic: true, node: <Value level={a && a.total > limits.eva ? 'hazard' : null}>{a ? formatDuration(a.total) : pending}</Value> },
@@ -283,6 +319,8 @@ export default function PlanPanel({
       { label: 'Dose rate', group: 'Reference', basic: false, hint: dose ? `${dose.site} RAD mean, ${dose.when}` : undefined, node: <Value unit="mSv/day">{dose ? (dose.measurement.value * 1000).toFixed(2) : '—'}</Value> },
       { label: 'EVA dose', group: 'This route', basic: true, hint: dose ? `${dose.site} RAD mean, ${dose.when}` : undefined, node: <Value unit="mSv">{a?.dose != null ? (a.dose * 1000).toFixed(3) : pending}</Value> },
     ],
+    // The mission tab holds a list, not setting rows.
+    mission: [],
   }
 
   const visible = (row) => (query ? match(row.label) : advanced || row.basic)
@@ -295,21 +333,23 @@ export default function PlanPanel({
     time: !a ? null : a.total > limits.eva ? 'hazard' : a.total > limits.eva * 0.85 ? 'caution' : null,
     range: a && a.maxFromStart > limits.range ? 'hazard' : null,
     dose: null,
+    mission: missionFlag,
   }
 
   // One tab, or every tab's matches while searching.
   const tabs = query ? CATS : CATS.filter((cat) => cat.id === active)
+  const showMission = active === 'mission' && !query
   const panel = tabs.map((cat) => {
     const shown = rows[cat.id].filter(visible)
     const groups = [...new Set(shown.map((row) => row.group))]
     return { cat, groups: groups.map((group) => ({ group, rows: shown.filter((row) => row.group === group) })) }
   }).filter((tab) => tab.groups.length)
-  const current = CATS.find((cat) => cat.id === active)
+  const current = cats.find((cat) => cat.id === active)
 
   return (
     <aside className="plan" aria-label="EVA plan">
       <div className="plan__rail" role="tablist" aria-label="Settings" aria-orientation="vertical" ref={rail} onKeyDown={onRailKey}>
-        {CATS.map((cat) => (
+        {cats.map((cat) => (
           <button
             key={cat.id}
             type="button"
@@ -329,9 +369,17 @@ export default function PlanPanel({
       </div>
 
       <div className="plan__main">
-        <SiteCard plan={plan} placing={placing} onPlacing={onPlacing} onSite={onSite} />
+        {!missionSites && <SiteCard plan={plan} placing={placing} onPlacing={onPlacing} onSite={onSite} />}
 
-        <section className="plan__card plan__card--limits" aria-label="Limits">
+        {showMission && (
+          <section className="plan__card plan__card--limits" aria-label="Mission points">
+            <div className="plan__scroll" id="plan-panel" role="tabpanel" aria-labelledby="plan-tab-mission">
+              <h3 className="plan__tab-title"><Icon name="mission" />Mission points</h3>
+              {missionSites}
+            </div>
+          </section>
+        )}
+        <section className="plan__card plan__card--limits" aria-label="Limits" hidden={showMission}>
           <div className="plan__card-head">
             <h2 className="plan__card-title"><Icon name="limits" />Limits</h2>
             <label className="plan__switch">
@@ -412,14 +460,20 @@ export default function PlanPanel({
               <span>{a.reasons[0]?.text ?? `${formatDuration(a.total)} of ${formatDuration(limits.eva)}`}</span>
               {a.reasons.length > 1 && <span className="plan__more" title={a.reasons.slice(1).map((r) => r.text).join('\n')}>+{a.reasons.length - 1}</span>}
             </div>
+          ) : status === 'loading' ? (
+            <div className="plan__verdict is-routing" role="status">
+              <span className="spinner" aria-hidden="true" />
+              <strong>Routing</strong>
+              <span>Working out the way through {plan.waypoints.length + 2} points</span>
+            </div>
           ) : (
             <div className="plan__verdict">
-              <span>{status === 'loading' ? 'Sampling terrain…' : !plan.start ? 'Choose a start' : 'Pick a target'}</span>
+              <span>{routeNote ?? (!plan.start ? 'Choose a start' : 'Pick a target')}</span>
             </div>
           )}
           <div className="plan__actions">
-            <button type="button" className="plan__button" onClick={onClear} disabled={!plan.start}>Clear</button>
-            <button type="button" className="plan__button plan__button--primary" onClick={onWalk} disabled={!a}>Walk it</button>
+            {!missionSites && <button type="button" className="plan__button" onClick={onClear} disabled={!plan.start}>Clear</button>}
+            <button type="button" className={`plan__button plan__button--primary${missionSites ? ' plan__button--wide' : ''}`} onClick={onWalk} disabled={!a}>Walk it</button>
             {onAddToMission !== undefined && (
               <button
                 type="button"
