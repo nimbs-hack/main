@@ -8,3 +8,4 @@ dist/
 # Raw and processed datasets. See AGENTS.md.
 /data/*
 !/data/SOURCES.md
+local/
