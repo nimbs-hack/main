@@ -202,7 +202,7 @@ export function MapView({
     map.setZoom(map.getZoom() + zoomStepTrigger.delta);
   }, [zoomStepTrigger]);
 
-  // Render 3x3 km HiRISE hillshade, slope mask, and boundary box
+  // Render local DEM hillshade and site boundary box
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !site) return;
@@ -222,18 +222,6 @@ export function MapView({
       }).addTo(map);
     }
 
-    if (slopeMaskRef.current) {
-      slopeMaskRef.current.removeFrom(map);
-      slopeMaskRef.current = null;
-    }
-    if (showSlopeHazard) {
-      slopeMaskRef.current = L.imageOverlay(
-        `/api/site/passability.png?maxSlopeDeg=${maxSlopeDeg.toFixed(1)}`,
-        bounds,
-        { opacity: 0.78 },
-      ).addTo(map);
-    }
-
     if (boundsRectRef.current) {
       boundsRectRef.current.removeFrom(map);
       boundsRectRef.current = null;
@@ -248,7 +236,44 @@ export function MapView({
         interactive: false,
       }).addTo(map);
     }
-  }, [site, showHillshade, showSlopeHazard, showSiteBounds, maxSlopeDeg]);
+  }, [site, showHillshade, showSiteBounds]);
+
+  // Update slope hazard PNG overlay cleanly, debouncing rapid slider changes
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !site) return;
+
+    if (!showSlopeHazard) {
+      if (slopeMaskRef.current) {
+        slopeMaskRef.current.removeFrom(map);
+        slopeMaskRef.current = null;
+      }
+      return;
+    }
+
+    const [west, south, east, north] = site.bbox;
+    const bounds = L.latLngBounds([south, west], [north, east]);
+    const nextUrl = `/api/site/passability.png?maxSlopeDeg=${maxSlopeDeg.toFixed(1)}`;
+
+    const applyMask = () => {
+      if (slopeMaskRef.current) {
+        slopeMaskRef.current.setBounds(bounds);
+        slopeMaskRef.current.setUrl(nextUrl);
+      } else {
+        slopeMaskRef.current = L.imageOverlay(nextUrl, bounds, {
+          opacity: 0.78,
+        }).addTo(map);
+      }
+    };
+
+    if (!slopeMaskRef.current) {
+      applyMask();
+      return;
+    }
+
+    const timer = window.setTimeout(applyMask, 150);
+    return () => window.clearTimeout(timer);
+  }, [site, showSlopeHazard, maxSlopeDeg]);
 
   // Render routes
   useEffect(() => {

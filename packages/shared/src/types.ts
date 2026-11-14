@@ -2,7 +2,7 @@ import type { MarsBBox, MarsCoord } from "./coords";
 
 export type LonFormat = "180" | "360";
 
-/** Metadata describing a preprocessed local elevation patch (e.g. 3x3 km site). */
+/** Metadata describing a preprocessed local elevation patch (e.g. 20x20 km site). */
 export interface SiteMetadata {
   id: string;
   name: string;

@@ -20,7 +20,7 @@ docs/                    Visual language, tool extension guide, and architecture
 
 ```mermaid
 flowchart LR
-  COG["USGS STAC HiRISE COG"] -->|HTTP Range| Fetch["scripts/data/fetch-site.ts"]
+  COG["USGS STAC MRO CTX COG"] -->|HTTP Range| Fetch["scripts/data/fetch-site.ts"]
   Fetch -->|writes| Data["data/site-terrain.json and site-hillshade.png"]
   Data -->|loads| API["apps/api: Hono and TerrainGraph"]
   WMS["USGS WMS and Mars Trek WMTS"] -->|disk cache| API
@@ -39,7 +39,7 @@ Each dependency keeps local tooling simple and avoids native compilation bottlen
 | TypeScript | `5.7.3` | `tsconfig.base.json` sets `strict: true`, `noUncheckedIndexedAccess: true`, `isolatedModules: true`, `target: "ES2022"`, and `moduleResolution: "bundler"`. |
 | Biome | `1.9.4` | Formats with 2-space indentation and `lineWidth: 100` while running `recommended` lint rules across `apps`, `packages`, and `scripts`. |
 | `geotiff` | `2.1.3` | Pure TypeScript COG reader used by `scripts/data/fetch-site.ts` over HTTP Range requests, avoiding GDAL bindings and full-scene downloads. |
-| Custom PNG encoder | Node `node:zlib` | `apps/api/src/utils/png.ts` uses `deflateSync`, `DataView`, and a CRC32 table with polynomial `0xedb88320` to encode 8-bit RGBA PNGs with zero native image libraries. |
+| Custom PNG encoder | Node `node:zlib` | `apps/api/src/utils/png.ts` uses `deflateSync` (configurable compression level, default `6`, `1` for real-time hazard masks), `DataView`, and a CRC32 table with polynomial `0xedb88320` to encode 8-bit RGBA PNGs with zero native image libraries. |
 | Leaflet | `1.9.4` | Uses `L.CRS.EPSG4326` directly so USGS WMS tiles, Mars Trek WMTS tiles, and site `L.imageOverlay` masks align without Web Mercator reprojection. |
 
 ## Geodesy and site data pipeline
@@ -50,22 +50,22 @@ Each dependency keeps local tooling simple and avoids native compilation bottlen
 
 - **Latitude.** Planetocentric degrees clamped to `[-90, 90]` via `clampLat`, north positive.
 - **Longitude.** East-positive degrees normalized into `[-180, 180)` via `normalizeLon180`, which maps `180` to `-180`. For UI display, `lon180To360` converts back to `[0, 360)`.
-- **Reference sphere.** `MARS_RADIUS_M = 3_396_190` m, matching the Mars 2015 sphere used by USGS HiRISE COGs.
+- **Reference sphere.** `MARS_RADIUS_M = 3_396_190` m, matching the Mars 2015 sphere used by USGS CTX and HiRISE COGs.
 - **Equirectangular projection.** `equirectangularToCoord` and `coordToEquirectangular` convert between projected meters with `clon = 0` and `lat_ts = 0` and planetocentric degrees using `R = 3,396,190` m.
 - **Great-circle distance.** `surfaceDistanceMeters(a, b)` applies the Haversine formula `2 * MARS_RADIUS_M * asin(min(1, sqrt(h)))`, normalizing longitudinal difference with `normalizeLon180(b.lon - a.lon)`.
 - **Local degree scaling.** `metersToLatDeg` and `metersToLonDeg` convert metric widths to degrees, clamping `cos(lat)` to at least `1e-6`.
 
 ### Equirectangular DEM window extraction
 
-`scripts/data/fetch-site.ts` extracts a local `3000 m x 3000 m` crop from multi-hundred-megabyte HiRISE COGs. It defines two site presets: `jezero` targeting `DTEEC_048842_1985_048908_1985_U01` near `lat 18.46, lon 77.523`, and `mount-sharp` targeting `DTEEC_063319_1745_052242_1745_A01` near `lat -5.48, lon 137.316`.
+`scripts/data/fetch-site.ts` extracts a local `20 km x 20 km` crop from wide-swath MRO CTX Controlled USGS COGs (`~20 m/px`, covering ~34 x 44 km, unlike narrow ~7.3 km HiRISE DTMs). It defines two site presets: `jezero` targeting `K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W` near `lat 18.664, lon 77.502`, and `mount-sharp` targeting `T01_000881_1752_XI_04S223W__P02_001752_1753_XI_04S222W` near `lat -4.81, lon 137.16`. Optional CLI flags `--size-km=...` and `--grid=...` override the default patch size and node count.
 
-1. `fromUrl` opens the remote DTM COG header via HTTP Range requests, and `pickOverviewImage` chooses the coarsest IFD overview with pixel resolution `<= 12` m/px.
-2. Because equirectangular projection stretches east-west meters away from the equator, the script sets `widthProjM = 3000 / max(0.1, cos(latRad))` and `heightProjM = 3000`.
-3. The script probes 5 candidate windows around the image center at `[0, 0]`, `[0, -0.1*H]`, `[0, +0.1*H]`, `[-0.08*W, 0]`, and `[+0.08*W, 0]`. `isValidElevation` rejects non-finite values, values within `1e-3` of GDAL nodata, and values outside `[-20000, 30000]`. The script picks the candidate with `validRatio >= 0.995` and the largest elevation span.
-4. Centered on that window's `projCenter`, the script computes an exact `3000 m x 3000 m` box, bilinearly resamples it to `151 x 151` via `overviewImg.readRasters`, and rounds heights to `0.01 m`. Rare edge nodata cells get sentinel `-99999` and are filled by averaging valid neighbors in a `5 x 5` kernel over `-2..2` or falling back to `minElevationM`.
-5. For visual context, `pickOverviewImage` picks a `<= 6` m/px overview of the matching hillshade COG, reads a `600 x 600` crop at `5 m/px`, tints RGB channels by `[0.88, 0.83, 0.78]` with alpha `180` on `0` pixels and `225` elsewhere, and writes `data/site-hillshade.png` with `encodeRgbaPng`.
+1. `fromUrl` opens the remote DTM COG header via HTTP Range requests, and `pickOverviewImage` selects an overview near `180 m/px` for candidate probing and an overview near `cellSizeM` for extraction.
+2. Because equirectangular projection stretches east-west meters away from the equator, the script sets `widthProjM = 20000 / max(1e-6, cos(latRad))` and `heightProjM = 20000`.
+3. The script probes 6 candidate windows around `centerHint` and the raster center (`[0, 0]`, raster center, and `+-0.1 * span` along X/Y). Valid pixels require finite numbers above `nodataValue + 10`. It picks near-complete windows (`validRatio >= 0.99`) and breaks ties by maximum topographic relief.
+4. Centered on the chosen window, the script reads the full-resolution DTM subwindow (`1036 x 982` at `~20.39 m/px` for Jezero) and runs nodata-aware bilinear resampling onto `1001 x 1001` nodes rounded to `0.01 m`. Isolated nodata pockets are filled iteratively up to 3 passes using inverse-distance neighbor weights within a `9 x 9` kernel (`dr, dc in -4..4`).
+5. For visual context, `pickOverviewImage` reads the matching hillshade COG subwindow at `~20 m/px`, blends raster relief (`0.8`) with analytical Horn hillshade computed from the `1001 x 1001` DTM (`azimuth 315 deg`, `altitude 38 deg`, weight `0.2`, falling back to `1.0` where raster hillshade is missing), tints RGB channels by `[0.94, 0.86, 0.78]`, and writes a `1000 x 1000` `data/site-hillshade.png` via `encodeRgbaPng`.
 
-The fetched Jezero Crater Delta dataset in `data/site-terrain.json` contains `151` rows by `151` columns, `22,801` elevation nodes at `20 m` spacing across `150` intervals, bbox `[77.4863733373711, 18.4375029889216, 77.5397315290088, 18.488114803495947]`, center `{ lat: 18.462808896208774, lon: 77.51305243318996 }`, and elevations between `-2645.56 m` and `-2502.28 m`.
+The fetched Jezero Crater Delta and Rim dataset in `data/site-terrain.json` contains `1001` rows by `1001` columns, `1,002,001` elevation nodes at `20 m` spacing across `1000` intervals, bbox `[77.26644047791001, 18.49529395141885, 77.62258148283172, 18.832706048581155]`, center `{ lat: 18.664, lon: 77.44451098037086 }`, and elevations between `-2590.35 m` and `-1696.52 m`.
 
 ### Basemap tile proxy and disk caching
 
@@ -103,7 +103,7 @@ slopeDeg = atan(dh / max(1e-6, distM)) * 180 / pi
 
 `planRoutes` clamps `maxSlopeDeg` to `[0.5, 89]` and checks `isInsideBounds` for both endpoints. `snapToNode` rounds fractional grid coordinates to the nearest valid cell, expanding outward in square rings of radius `1..5` if the exact pixel is nodata.
 
-`runAStar(startIdx, goalIdx, maxSlopeDeg, weightFn)` uses a custom binary `MinHeap` stored in parallel `nodes: number[]` and `scores: number[]` arrays, alongside `Float64Array` `gScore`, `Int32Array` `parent`, and `Uint8Array` `closed`. Any edge with `slope > maxSlopeDeg` is pruned. The heuristic estimates remaining distance in meters on the local grid plane:
+`runAStar(startIdx, goalIdx, maxSlopeDeg, mode)` uses a custom zero-allocation binary `MinHeap` (`popInto()` writing `poppedNode` and `poppedScore` instead of allocating objects) alongside preallocated reusable typed buffers (`Float64Array` `gScoreBuf`, `Int32Array` `parentBuf`, `Uint8Array` `closedBuf`, `Uint8Array` `validMask`). Neighbor passability avoids per-edge `Math.atan` by precomputing `maxDh[d] = tan(maxSlopeDeg) * dirDists[d]` for all 8 directions and comparing `abs(elev[v] - elev[u]) <= maxDh[d]`. The heuristic estimates remaining distance in meters on the local grid plane:
 
 ```text
 h(r, c) = hypot((r - goalR) * dyM, (c - goalC) * dxM)
@@ -125,18 +125,18 @@ cost = distM * (1 + 4.5 * ratio * ratio)
 
 `planRoutes` appends this route only when `overlapRatio(gentlestPath, shortestPath) < 0.9`.
 
-3. **Alternate corridor, `route-alternate`.** Strategy `"alternate"` builds a `Uint8Array` `penaltyMask` across a `5 x 5` block, offsets `dr = -2..2` and `dc = -2..2`, around every intermediate node of already discovered paths while excluding `startIdx` and `goalIdx`. Stepping onto a masked cell multiplies cost to `distM * 3.5`; unmasked steps cost `distM`. `planRoutes` appends this route only when `overlapRatio(alternatePath, existing) < 0.85` for all prior routes.
+3. **Alternate corridor, `route-alternate`.** Strategy `"alternate"` populates the preallocated `Uint8Array` `penaltyBuf` across a scaled square block (`radius = clamp(2, 8, round(cols / 100))`, which is `8` cells or `160 m` on the `1001 x 1001` grid) around intermediate nodes of already discovered paths while excluding `startIdx` and `goalIdx`. Stepping onto a masked cell multiplies cost to `distM * 3.5`; unmasked steps cost `distM`. `planRoutes` appends this route only when `overlapRatio(alternatePath, existing) < 0.85` for all prior routes.
 
 `buildRouteSummary` records `totalDistanceM`, `elevationGainM`, and `elevationLossM` rounded to `0.1 m`, `maxSlopeDeg` and distance-weighted `meanSlopeDeg` rounded to `0.01°`, plus per-node `RoutePoint` entries with 6-decimal coordinates and incoming segment slopes.
 
 ### Minimax Dijkstra for unreachable thresholds
 
-When `shortestPath` returns `null`, `findMinRequiredSlope(startIdx, goalIdx)` finds the lowest slope limit that connects A to B. Using `Float32Array` `bestMaxSlope` and `MinHeap`, it relaxes neighbor edges with `candSlope = max(uSlope, edgeSlope)` and returns `ceil(top.score * 10) / 10` as `minRequiredSlopeDeg` when `goalIdx` is popped, or `null` if no valid cell path exists.
+When `shortestPath` returns `null`, `findMinRequiredSlope(startIdx, goalIdx)` finds the lowest slope limit that connects A to B. Using preallocated `Float32Array` `bestSlopeBuf` and `MinHeap`, it relaxes neighbor edges with `candSlope = max(uSlope, edgeSlope)` and returns `ceil(heap.poppedScore * 10) / 10` as `minRequiredSlopeDeg` when `goalIdx` is popped, or `null` if no valid cell path exists.
 
 ### Bilinear elevation lookup and passability masks
 
 - **Bilinear interpolation.** `elevationAt(coord)` maps coordinates to fractional `(r, c)`. When all four surrounding corner indices `(r0, c0)`, `(r0, c1)`, `(r1, c0)`, and `(r1, c1)` are valid, it interpolates linearly in both axes and rounds to `0.01 m`. If any corner is nodata, it falls back to the nearest rounded cell if valid, or returns `null`.
-- **Passability mask PNG.** `renderSlopeMaskPng(maxSlopeDeg)` finds `localMaxSlope` across each valid cell's 8 neighbors and encodes a `151 x 151` RGBA PNG via `encodeRgbaPng`:
+- **Passability mask PNG.** `renderSlopeMaskPng(maxSlopeDeg)` reads `localMaxSlope` precomputed once in the `TerrainGraph` constructor (`precomputeLocalMaxSlopes`) and encodes a `1001 x 1001` RGBA PNG via `encodeRgbaPng` at zlib compression level `1` (~23 ms encode time):
   - `localMaxSlope > maxSlopeDeg` writes amber-orange `rgba(245, 158, 11, 175)`, keeping terrain hazards visually separate from the `#de233d` selection accent.
   - `localMaxSlope > maxSlopeDeg * 0.75` writes caution yellow `rgba(234, 179, 8, 55)`.
   - Safer cells remain transparent `rgba(0, 0, 0, 0)`.
@@ -148,8 +148,8 @@ When `shortestPath` returns `null`, `findMinRequiredSlope(startIdx, goalIdx)` fi
 `apps/web/src/registry/toolRegistry.ts` manages rail tools via `ToolRegistry` methods `register`, `list` sorted ascending by `order`, and `get`. Following `docs/adding-tools.md`, `apps/web/src/App.tsx` registers three tools on the 64px vertical `.tool-rail`:
 
 - `route`, rail label `RTE`, order `1`: waypoint readouts, `MaxSlopeControl`, route strategy buttons, summary stats, and `ElevationProfile`.
-- `layers`, rail label `LYR`, order `2`: global basemap selector and toggles for the 3x3 km hillshade, slope hazard mask, and site bounding box.
-- `settings`, rail label `SET`, order `3`: `MaxSlopeControl`, graph edge passability percentage, `-180..180` versus `0..360E` longitude display toggle, DEM grid stats, and a button to re-center on the 3x3 km patch.
+- `layers`, rail label `LYR`, order `2`: global basemap selector and toggles for the local site hillshade, slope hazard mask, and site bounding box.
+- `settings`, rail label `SET`, order `3`: `MaxSlopeControl`, graph edge passability percentage, `-180..180` versus `0..360E` longitude display toggle, DEM grid stats, and a button to re-center on the local site patch.
 
 When `panelOpen` is true, the `64px` `.tool-rail` plus `416px` `.side-panel` equals `480px`, matching `--sidebar-width` in `apps/web/src/styles/tokens.css`, and shifts `.map-hud` left offset from `64px` to `480px`.
 
@@ -158,7 +158,8 @@ When `panelOpen` is true, the `64px` `.tool-rail` plus `416px` `.side-panel` equ
 `apps/web/src/components/MapView.tsx` initializes Leaflet with `crs: L.CRS.EPSG4326`, center `[18.46, 77.523]`, initial zoom `13`, `minZoom: 1`, `maxZoom: 17`, `zoomControl: false`, and `attributionControl: false`.
 
 - Basemap `L.tileLayer` instances use `tileSize: 256`, `noWrap: true`, bounds `[[-90, -180], [90, 180]]`, and `maxNativeZoom` from `MapLayerMeta`.
-- The 3x3 km `L.imageOverlay` for `/api/site/hillshade.png` at `opacity: 0.9`, `/api/site/passability.png?maxSlopeDeg=...` at `opacity: 0.78`, and the dashed `#fff8f3` `L.rectangle` share `site.bbox` bounds `[south, west]` to `[north, east]`.
+- The local `L.imageOverlay` for `/api/site/hillshade.png` at `opacity: 0.9`, `/api/site/passability.png?maxSlopeDeg=...` at `opacity: 0.78`, and the dashed `#fff8f3` `L.rectangle` share `site.bbox` bounds `[south, west]` to `[north, east]`.
+- Terrain overlay effects in `MapView` isolate static overlays (hillshade + bounding box) from `maxSlopeDeg` updates and debounce slope hazard PNG URL swaps by `150 ms` using `setUrl`, preventing UI flicker when dragging the slope slider.
 - On `zoomend`, `moveend`, and `resize`, `updateScale` measures `surfaceDistanceMeters` across a `120 px` horizontal span at viewport center and picks the largest entry in `NICE_SCALE_METERS` from `50 m` to `500 km` that fits within `110 px`.
 - Right-clicking the map prevents the browser context menu, normalizes longitude with `normalizeLon180`, and opens `apps/web/src/components/ContextMenu.tsx` clamped within `window.innerWidth - 230` and `window.innerHeight - 150`. Selecting Set A Waypoint or Set B Waypoint updates coordinates, switches to the `route` tool, and opens the side panel.
 - Moving the pointer inside `site.bbox` triggers a `45 ms` debounced `GET /api/terrain/elevation` lookup for the top-right `ELEVATION` HUD readout.
@@ -166,7 +167,7 @@ When `panelOpen` is true, the `64px` `.tool-rail` plus `416px` `.side-panel` equ
 ### Reactive slope filtering and elevation profile
 
 - `apps/web/src/components/MaxSlopeControl.tsx` binds a `1..45°` slider with `0.5°` steps to a `0.5..60°` numeric input with `0.5°` steps.
-- Any change to `waypointA`, `waypointB`, or `maxSlopeDeg` triggers an `80 ms` debounced `POST /api/graph/routes` call with cancellation on superseded requests, while `MapView` updates the `/api/site/passability.png?maxSlopeDeg=...` overlay URL.
+- Any change to `waypointA`, `waypointB`, or `maxSlopeDeg` triggers an `80 ms` debounced `POST /api/graph/routes` call with cancellation on superseded requests, while `MapView` debounces `/api/site/passability.png?maxSlopeDeg=...` `setUrl` updates by `150 ms`.
 - Candidate polylines sort so the active `selectedRouteId` renders last on top in `#de233d` with weight `3.5` and opacity `0.96`; unselected candidates render as dashed `#fff8f3` lines with weight `2` and opacity `0.45`.
 - `apps/web/src/components/ElevationProfile.tsx` renders a `328 x 128` SVG elevation profile, highlights steep segments where incoming `pt.slopeDeg > maxSlopeDeg * 0.8` in `#f59e0b`, and maps horizontal pointer position to the nearest `RoutePoint` by `distanceM` to place `.profile-hover-dot` on the map.
 
@@ -195,7 +196,7 @@ Root `package.json` exposes six scripts:
 
 ```sh
 bun install
-bun run fetch-site              # Fetch default jezero 3x3 km COG crop
+bun run fetch-site              # Fetch default jezero 20x20 km CTX COG crop (1001x1001 nodes)
 bun run fetch-site --site=mount-sharp
 bun run dev                     # Run API on port 3001 with --hot and Vite on port 5173
 bun run build                   # Run tsc --noEmit and vite build for @nimbs/web
@@ -212,6 +213,6 @@ The repository defines 11 `test` cases across 3 test files:
 
 - `packages/shared/src/coords.test.ts`, 3 tests: checks `[-180, 180)` longitude normalization, USGS Jezero HiRISE origin round-trip transforms, and `surfaceDistanceMeters` against `metersToLatDeg` and `metersToLonDeg`.
 - `apps/api/src/terrain/engine.test.ts`, 5 tests: builds a synthetic `11 x 11` ridge grid with a pass at row `9` to verify strict `10°` detours, permissive `30°` direct crossings, `1°` `unreachable` results with `minRequiredSlopeDeg`, `out_of_bounds` rejections, and `createApp(graph)` HTTP responses.
-- `apps/api/src/terrain/real-site.test.ts`, 3 tests gated by `describe.skipIf(!hasRealSite)` on `data/site-terrain.json`: verifies `151 x 151` Jezero grid loading, `/api/terrain/elevation` queries, `unreachable` threshold recovery via `minRequiredSlopeDeg`, and PNG magic bytes on `/api/site/passability.png` and `/api/site/hillshade.png`.
+- `apps/api/src/terrain/real-site.test.ts`, 3 tests gated by `describe.skipIf(!hasRealSite)` on `data/site-terrain.json`: verifies `1001 x 1001` Jezero grid loading, `/api/terrain/elevation` queries, `unreachable` threshold recovery via `minRequiredSlopeDeg`, and PNG magic bytes on `/api/site/passability.png` and `/api/site/hillshade.png`.
 
 `bun run lint` runs `biome check apps packages scripts`, checking `apps/`, `packages/`, and `scripts/` while ignoring `docs/`, `data/`, `local/`, `node_modules/`, `dist/`, and `apps/web/src/styles/tokens.css` per `biome.json`.

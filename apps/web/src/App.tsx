@@ -75,7 +75,22 @@ export function App() {
       });
   }, []);
 
-  // Debounced elevation readout for cursor inside 3x3 km bounds
+  const siteLabels = useMemo(() => {
+    const wKm = site ? Math.round(site.widthMeters / 100) / 10 : 20;
+    const hKm = site ? Math.round(site.heightMeters / 100) / 10 : 20;
+    const compactW = Math.round(wKm);
+    const compactH = Math.round(hKm);
+    const sizeCompact = `${compactW}x${compactH}`;
+    const sizeUpper = `${compactW}X${compactH} KM`;
+    const sizeExact = `${wKm.toFixed(1)} x ${hKm.toFixed(1)} KM`;
+    const isCtx = site?.sourceTitle.includes("CTX") ?? true;
+    const isHirise = site?.sourceTitle.includes("HiRISE") ?? false;
+    const sourceLabel = isCtx ? "MRO CTX" : isHirise ? "HiRISE" : "local DEM";
+    const sourceUpper = isCtx ? "CTX" : isHirise ? "HIRISE" : "DEM";
+    return { sizeCompact, sizeUpper, sizeExact, sourceLabel, sourceUpper };
+  }, [site]);
+
+  // Debounced elevation readout for cursor inside local terrain bounds
   const elevTimerRef = useRef<number | null>(null);
   const handleCursorMove = useCallback(
     (coord: MarsCoord | null) => {
@@ -164,7 +179,8 @@ export function App() {
           <div className="panel-header">
             <h1 className="panel-title">Route Planner</h1>
             <p className="panel-desc">
-              Right-click the map to place A and B inside the 3x3 km terrain graph.
+              Right-click the map to place A and B inside the {siteLabels.sizeCompact} km terrain
+              graph.
             </p>
             <div className="panel-rule" />
           </div>
@@ -298,7 +314,8 @@ export function App() {
           <div className="panel-header">
             <h1 className="panel-title">Map Layers</h1>
             <p className="panel-desc">
-              Global USGS and Mars Trek basemaps paired with the 3x3 km HiRISE terrain patch.
+              Global USGS and Mars Trek basemaps paired with the {siteLabels.sizeCompact} km{" "}
+              {siteLabels.sourceLabel} terrain patch.
             </p>
             <div className="panel-rule" />
           </div>
@@ -326,7 +343,7 @@ export function App() {
 
           <button type="button" className="toggle-row" onClick={() => setShowHillshade((v) => !v)}>
             <span className="value-label" style={{ color: "var(--color-text)" }}>
-              3X3 KM HIRISE HILLSHADE
+              {siteLabels.sizeUpper} {siteLabels.sourceUpper} HILLSHADE
             </span>
             <span className={`toggle-state ${showHillshade ? "is-on" : ""}`}>
               {showHillshade ? "ON" : "OFF"}
@@ -348,7 +365,7 @@ export function App() {
 
           <button type="button" className="toggle-row" onClick={() => setShowSiteBounds((v) => !v)}>
             <span className="value-label" style={{ color: "var(--color-text)" }}>
-              3X3 KM BOUNDARY FRAME
+              {siteLabels.sizeUpper} BOUNDARY FRAME
             </span>
             <span className={`toggle-state ${showSiteBounds ? "is-on" : ""}`}>
               {showSiteBounds ? "ON" : "OFF"}
@@ -368,7 +385,8 @@ export function App() {
           <div className="panel-header">
             <h1 className="panel-title">Settings</h1>
             <p className="panel-desc">
-              Slope threshold in degrees filters passable edges in the 3x3 km terrain graph.
+              Slope threshold in degrees filters passable edges in the {siteLabels.sizeCompact} km
+              terrain graph.
             </p>
             <div className="panel-rule" />
           </div>
@@ -425,7 +443,7 @@ export function App() {
             onClick={() => setFocusCount((c) => c + 1)}
           >
             <span className="chamfer-btn-body">
-              <span className="chamfer-btn-label">FOCUS 3X3 KM SITE</span>
+              <span className="chamfer-btn-label">FOCUS {siteLabels.sizeUpper} SITE</span>
             </span>
             <span className="chamfer-btn-arrow">→</span>
           </button>
@@ -449,6 +467,7 @@ export function App() {
     showSlopeHazard,
     showSiteBounds,
     site,
+    siteLabels,
   ]);
 
   const tools = registry.list();
@@ -479,7 +498,7 @@ export function App() {
                 SITE <strong>{site.name.toUpperCase()}</strong>
               </span>
               <span>
-                PATCH <strong>3.0 x 3.0 KM</strong>
+                PATCH <strong>{siteLabels.sizeExact}</strong>
               </span>
             </>
           )}
@@ -590,7 +609,7 @@ export function App() {
                   className="compact-btn"
                   onClick={() => setFocusCount((c) => c + 1)}
                 >
-                  3X3 KM
+                  {siteLabels.sizeUpper}
                 </button>
               </div>
             </div>

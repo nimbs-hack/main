@@ -23,13 +23,14 @@ All datasets used by this app are listed here. Raw files and caches stay in `dat
 - **Terms:** NASA / JPL public data
 - **Fetch / Proxy:** Proxied and cached on disk by `apps/api` (`GET /api/tiles/mola-trek/:z/:x/:y`)
 
-## USGS Astrogeology STAC: MRO HiRISE DTM (3x3 km pilot site)
+## USGS Astrogeology STAC: MRO CTX Controlled DTM (20x20 km local planning site)
 
-- **Name:** `mro_hirise_socet_dtms` (Jezero Crater `DTEEC_048842_1985_048908_1985_U01` / Gale Crater `DTEEC_063319_1745_052242_1745_A01`)
-- **Mission / Instrument:** Mars Reconnaissance Orbiter (MRO) HiRISE
-- **Catalog URL:** `https://stac.astrogeology.usgs.gov/api/collections/mro_hirise_socet_dtms`
-- **Asset URL (selected site):** Recorded by `scripts/data/fetch-site.ts` after extracting the 3x3 km window
-- **Resolution:** ~1.0 m/px native COG, downsampled to a 3x3 km planning grid (20 m spacing, 151x151 nodes)
+- **Name:** `mro_ctx_controlled_usgs_dtms` (Jezero Crater `K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W` / Gale Crater `T01_000881_1752_XI_04S223W__P02_001752_1753_XI_04S222W`)
+- **Mission / Instrument:** Mars Reconnaissance Orbiter (MRO) Context Camera (CTX)
+- **Catalog URL:** `https://stac.astrogeology.usgs.gov/api/collections/mro_ctx_controlled_usgs_dtms`
+- **Asset URL (active Jezero DTM):** `https://astrogeo-ard.s3-us-west-2.amazonaws.com/mars/mro/ctx/controlled/usgs/K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W/K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W_dtm.tif`
+- **Asset URL (active Jezero hillshade):** `https://astrogeo-ard.s3-us-west-2.amazonaws.com/mars/mro/ctx/controlled/usgs/K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W/K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W_hillshade.tif`
+- **Resolution:** ~20.39 m/px native COG (~34 x 44 km swath), cropped and resampled to a 20x20 km planning grid (20 m spacing, 1001x1001 = 1,002,001 nodes)
 - **Projection:** Mars (2015) Sphere / Ocentric / Equirectangular (`R = 3396190 m`, `clon = 0`)
-- **License:** CC0-1.0
+- **License:** CC0-1.0 / Public domain
 - **Fetch script:** `scripts/data/fetch-site.ts` (reads COG byte ranges via HTTP Range requests)

@@ -36,7 +36,12 @@ function makeChunk(type: string, data: Uint8Array): Uint8Array {
 }
 
 /** Encode raw RGBA pixels (width * height * 4 bytes) into a standard PNG buffer. */
-export function encodeRgbaPng(width: number, height: number, rgba: Uint8Array): Uint8Array {
+export function encodeRgbaPng(
+  width: number,
+  height: number,
+  rgba: Uint8Array,
+  compressionLevel = 6,
+): Uint8Array {
   const stride = width * 4;
   const raw = new Uint8Array((stride + 1) * height);
   for (let y = 0; y < height; y += 1) {
@@ -55,7 +60,7 @@ export function encodeRgbaPng(width: number, height: number, rgba: Uint8Array): 
   ihdr[11] = 0;
   ihdr[12] = 0;
 
-  const compressed = new Uint8Array(deflateSync(raw));
+  const compressed = new Uint8Array(deflateSync(raw, { level: compressionLevel }));
   const signature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
   const ihdrChunk = makeChunk("IHDR", ihdr);
   const idatChunk = makeChunk("IDAT", compressed);

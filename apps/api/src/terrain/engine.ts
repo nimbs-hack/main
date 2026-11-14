@@ -25,9 +25,16 @@ const DIRS: ReadonlyArray<readonly [dr: number, dc: number]> = [
 class MinHeap {
   private nodes: number[] = [];
   private scores: number[] = [];
+  poppedNode = -1;
+  poppedScore = 0;
 
   get size(): number {
     return this.nodes.length;
+  }
+
+  clear(): void {
+    this.nodes.length = 0;
+    this.scores.length = 0;
   }
 
   push(node: number, score: number): void {
@@ -37,7 +44,7 @@ class MinHeap {
     this.bubbleUp(idx);
   }
 
-  pop(): { node: number; score: number } | undefined {
+  popInto(): boolean {
     const node = this.nodes[0];
     const score = this.scores[0];
     const lastNode = this.nodes.pop();
@@ -48,14 +55,16 @@ class MinHeap {
       lastNode === undefined ||
       lastScore === undefined
     ) {
-      return undefined;
+      return false;
     }
+    this.poppedNode = node;
+    this.poppedScore = score;
     if (this.nodes.length > 0) {
       this.nodes[0] = lastNode;
       this.scores[0] = lastScore;
       this.sinkDown(0);
     }
-    return { node, score };
+    return true;
   }
 
   private bubbleUp(idx: number): void {
@@ -111,15 +120,28 @@ export class TerrainGraph {
   readonly cols: number;
   readonly dxM: number;
   readonly dyM: number;
+  readonly diagM: number;
   private readonly west: number;
   private readonly south: number;
   private readonly east: number;
   private readonly north: number;
+  private readonly totalCells: number;
+  private readonly validMask: Uint8Array;
+  private readonly localMaxSlope: Float32Array;
+  private readonly dirOffsets: Int32Array;
+  private readonly dirDists: Float64Array;
+  private readonly heap = new MinHeap();
+  private readonly gScoreBuf: Float64Array;
+  private readonly parentBuf: Int32Array;
+  private readonly closedBuf: Uint8Array;
+  private readonly penaltyBuf: Uint8Array;
+  private readonly bestSlopeBuf: Float32Array;
 
   constructor(dataset: SiteDataset) {
     this.meta = dataset.meta;
     this.rows = dataset.meta.rows;
     this.cols = dataset.meta.cols;
+    this.totalCells = this.rows * this.cols;
     this.elevations = Float32Array.from(dataset.elevationsM);
 
     const [west, south, east, north] = dataset.meta.bbox;
@@ -136,11 +158,60 @@ export class TerrainGraph {
     this.dxM =
       surfaceDistanceMeters({ lat: midLat, lon: west }, { lat: midLat, lon: east }) /
       Math.max(1, this.cols - 1);
+    this.diagM = Math.hypot(this.dyM, this.dxM);
+
+    this.dirOffsets = Int32Array.from(DIRS.map(([dr, dc]) => dr * this.cols + dc));
+    this.dirDists = Float64Array.from(
+      DIRS.map(([dr, dc]) => Math.hypot(dr * this.dyM, dc * this.dxM)),
+    );
+
+    this.validMask = new Uint8Array(this.totalCells);
+    const minValid = this.meta.nodataValue + 10;
+    for (let i = 0; i < this.totalCells; i += 1) {
+      const val = this.elevations[i];
+      if (val !== undefined && Number.isFinite(val) && val > minValid) {
+        this.validMask[i] = 1;
+      }
+    }
+
+    this.localMaxSlope = new Float32Array(this.totalCells);
+    this.precomputeLocalMaxSlopes();
+
+    this.gScoreBuf = new Float64Array(this.totalCells);
+    this.parentBuf = new Int32Array(this.totalCells);
+    this.closedBuf = new Uint8Array(this.totalCells);
+    this.penaltyBuf = new Uint8Array(this.totalCells);
+    this.bestSlopeBuf = new Float32Array(this.totalCells);
+  }
+
+  private precomputeLocalMaxSlopes(): void {
+    const radToDeg = 180 / Math.PI;
+    for (let r = 0; r < this.rows; r += 1) {
+      for (let c = 0; c < this.cols; c += 1) {
+        const u = r * this.cols + c;
+        if (!this.validMask[u]) continue;
+        const elevU = this.elevations[u] ?? 0;
+        let maxS = 0;
+        for (let d = 0; d < DIRS.length; d += 1) {
+          const dir = DIRS[d];
+          if (!dir) continue;
+          const nr = r + dir[0];
+          const nc = c + dir[1];
+          if (nr < 0 || nr >= this.rows || nc < 0 || nc >= this.cols) continue;
+          const v = u + (this.dirOffsets[d] ?? 0);
+          if (!this.validMask[v]) continue;
+          const dist = Math.max(1e-6, this.dirDists[d] ?? 1);
+          const dh = Math.abs((this.elevations[v] ?? 0) - elevU);
+          const slope = Math.atan(dh / dist) * radToDeg;
+          if (slope > maxS) maxS = slope;
+        }
+        this.localMaxSlope[u] = maxS;
+      }
+    }
   }
 
   private isValidCell(idx: number): boolean {
-    const val = this.elevations[idx];
-    return val !== undefined && Number.isFinite(val) && val > this.meta.nodataValue + 10;
+    return this.validMask[idx] === 1;
   }
 
   isInsideBounds(coord: MarsCoord): boolean {
@@ -240,28 +311,51 @@ export class TerrainGraph {
 
   /** Fraction of valid graph edges passable under maxSlopeDeg. */
   computePassableEdgeRatio(maxSlopeDeg: number): number {
+    const tanMax = Math.tan((maxSlopeDeg * Math.PI) / 180);
+    const maxDhX = this.dxM * tanMax + 1e-9;
+    const maxDhY = this.dyM * tanMax + 1e-9;
+    const maxDhD = this.diagM * tanMax + 1e-9;
+    const rows = this.rows;
+    const cols = this.cols;
+    const elev = this.elevations;
+    const valid = this.validMask;
+
     let total = 0;
     let passable = 0;
-    for (let r = 0; r < this.rows; r += 1) {
-      for (let c = 0; c < this.cols; c += 1) {
-        const u = r * this.cols + c;
-        if (!this.isValidCell(u)) continue;
-        // Check forward neighbors (right, down, down-right, down-left) once per undirected edge
-        const forward: ReadonlyArray<readonly [number, number]> = [
-          [0, 1],
-          [1, 0],
-          [1, 1],
-          [1, -1],
-        ];
-        for (const [dr, dc] of forward) {
-          const nr = r + dr;
-          const nc = c + dc;
-          if (nr < 0 || nr >= this.rows || nc < 0 || nc >= this.cols) continue;
-          const v = nr * this.cols + nc;
-          if (!this.isValidCell(v)) continue;
-          total += 1;
-          if (this.edgeSlopeDeg(u, v, this.stepDist(dr, dc)) <= maxSlopeDeg) {
-            passable += 1;
+    for (let r = 0; r < rows; r += 1) {
+      const rowBase = r * cols;
+      const hasDown = r + 1 < rows;
+      for (let c = 0; c < cols; c += 1) {
+        const u = rowBase + c;
+        if (!valid[u]) continue;
+        const elevU = elev[u] ?? 0;
+
+        if (c + 1 < cols) {
+          const right = u + 1;
+          if (valid[right]) {
+            total += 1;
+            if (Math.abs((elev[right] ?? 0) - elevU) <= maxDhX) passable += 1;
+          }
+        }
+        if (hasDown) {
+          const down = u + cols;
+          if (valid[down]) {
+            total += 1;
+            if (Math.abs((elev[down] ?? 0) - elevU) <= maxDhY) passable += 1;
+          }
+          if (c + 1 < cols) {
+            const downRight = down + 1;
+            if (valid[downRight]) {
+              total += 1;
+              if (Math.abs((elev[downRight] ?? 0) - elevU) <= maxDhD) passable += 1;
+            }
+          }
+          if (c > 0) {
+            const downLeft = down - 1;
+            if (valid[downLeft]) {
+              total += 1;
+              if (Math.abs((elev[downLeft] ?? 0) - elevU) <= maxDhD) passable += 1;
+            }
           }
         }
       }
@@ -273,30 +367,44 @@ export class TerrainGraph {
     startIdx: number,
     goalIdx: number,
     maxSlopeDeg: number,
-    weightFn: (stepDistM: number, slopeDeg: number, toNode: number) => number,
+    mode: RouteStrategy,
   ): number[] | null {
-    const total = this.rows * this.cols;
-    const gScore = new Float64Array(total).fill(Number.POSITIVE_INFINITY);
-    const parent = new Int32Array(total).fill(-1);
-    const closed = new Uint8Array(total);
+    const cols = this.cols;
+    const rows = this.rows;
+    const dxM = this.dxM;
+    const dyM = this.dyM;
+    const elev = this.elevations;
+    const valid = this.validMask;
+    const penalty = this.penaltyBuf;
 
-    const goalR = Math.floor(goalIdx / this.cols);
-    const goalC = goalIdx % this.cols;
+    const gScore = this.gScoreBuf;
+    const parent = this.parentBuf;
+    const closed = this.closedBuf;
+    const heap = this.heap;
 
-    const heuristic = (idx: number): number => {
-      const r = Math.floor(idx / this.cols);
-      const c = idx % this.cols;
-      return Math.hypot((r - goalR) * this.dyM, (c - goalC) * this.dxM);
-    };
+    gScore.fill(Number.POSITIVE_INFINITY);
+    parent.fill(-1);
+    closed.fill(0);
+    heap.clear();
 
-    const heap = new MinHeap();
+    const goalR = (goalIdx / cols) | 0;
+    const goalC = goalIdx - goalR * cols;
+    const tanMax = Math.tan((maxSlopeDeg * Math.PI) / 180);
+    const maxDh = new Float64Array(8);
+    for (let d = 0; d < 8; d += 1) {
+      maxDh[d] = (this.dirDists[d] ?? 0) * tanMax + 1e-9;
+    }
+
+    const slopeDenom = Math.max(1, maxSlopeDeg);
+    const radToDeg = 180 / Math.PI;
+    const startR = (startIdx / cols) | 0;
+    const startC = startIdx - startR * cols;
+
     gScore[startIdx] = 0;
-    heap.push(startIdx, heuristic(startIdx));
+    heap.push(startIdx, Math.hypot((startR - goalR) * dyM, (startC - goalC) * dxM));
 
-    while (heap.size > 0) {
-      const top = heap.pop();
-      if (!top) break;
-      const u = top.node;
+    while (heap.popInto()) {
+      const u = heap.poppedNode;
       if (u === goalIdx) {
         const path: number[] = [];
         let cur = goalIdx;
@@ -310,26 +418,38 @@ export class TerrainGraph {
       if (closed[u]) continue;
       closed[u] = 1;
 
-      const r = Math.floor(u / this.cols);
-      const c = u % this.cols;
+      const r = (u / cols) | 0;
+      const c = u - r * cols;
       const uCost = gScore[u] ?? Number.POSITIVE_INFINITY;
+      const elevU = elev[u] ?? 0;
 
-      for (const [dr, dc] of DIRS) {
-        const nr = r + dr;
-        const nc = c + dc;
-        if (nr < 0 || nr >= this.rows || nc < 0 || nc >= this.cols) continue;
-        const v = nr * this.cols + nc;
-        if (closed[v] || !this.isValidCell(v)) continue;
+      for (let d = 0; d < 8; d += 1) {
+        const dir = DIRS[d];
+        if (!dir) continue;
+        const nr = r + dir[0];
+        const nc = c + dir[1];
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        const v = u + (this.dirOffsets[d] ?? 0);
+        if (closed[v] || !valid[v]) continue;
 
-        const dist = this.stepDist(dr, dc);
-        const slope = this.edgeSlopeDeg(u, v, dist);
-        if (slope > maxSlopeDeg) continue;
+        const dh = Math.abs((elev[v] ?? 0) - elevU);
+        if (dh > (maxDh[d] ?? 0)) continue;
 
-        const nextG = uCost + weightFn(dist, slope, v);
+        const dist = this.dirDists[d] ?? 0;
+        let stepCost = dist;
+        if (mode === "gentlest") {
+          const slope = Math.atan(dh / Math.max(1e-6, dist)) * radToDeg;
+          const ratio = slope / slopeDenom;
+          stepCost = dist * (1 + 4.5 * ratio * ratio);
+        } else if (mode === "alternate" && penalty[v]) {
+          stepCost = dist * 3.5;
+        }
+
+        const nextG = uCost + stepCost;
         if (nextG < (gScore[v] ?? Number.POSITIVE_INFINITY)) {
           gScore[v] = nextG;
           parent[v] = u;
-          heap.push(v, nextG + heuristic(v));
+          heap.push(v, nextG + Math.hypot((nr - goalR) * dyM, (nc - goalC) * dxM));
         }
       }
     }
@@ -338,38 +458,48 @@ export class TerrainGraph {
 
   /** Minimax Dijkstra to find the minimum maxSlopeDeg threshold connecting start and goal. */
   private findMinRequiredSlope(startIdx: number, goalIdx: number): number | null {
-    const total = this.rows * this.cols;
-    const bestMaxSlope = new Float32Array(total).fill(Number.POSITIVE_INFINITY);
-    const visited = new Uint8Array(total);
-    const heap = new MinHeap();
+    const rows = this.rows;
+    const cols = this.cols;
+    const elev = this.elevations;
+    const valid = this.validMask;
+    const bestMaxSlope = this.bestSlopeBuf;
+    const visited = this.closedBuf;
+    const heap = this.heap;
+    const radToDeg = 180 / Math.PI;
+
+    bestMaxSlope.fill(Number.POSITIVE_INFINITY);
+    visited.fill(0);
+    heap.clear();
 
     bestMaxSlope[startIdx] = 0;
     heap.push(startIdx, 0);
 
-    while (heap.size > 0) {
-      const top = heap.pop();
-      if (!top) break;
-      const u = top.node;
+    while (heap.popInto()) {
+      const u = heap.poppedNode;
       if (u === goalIdx) {
-        return Math.ceil(top.score * 10) / 10;
+        return Math.ceil(heap.poppedScore * 10) / 10;
       }
       if (visited[u]) continue;
       visited[u] = 1;
 
-      const r = Math.floor(u / this.cols);
-      const c = u % this.cols;
+      const r = (u / cols) | 0;
+      const c = u - r * cols;
       const uSlope = bestMaxSlope[u] ?? Number.POSITIVE_INFINITY;
+      const elevU = elev[u] ?? 0;
 
-      for (const [dr, dc] of DIRS) {
-        const nr = r + dr;
-        const nc = c + dc;
-        if (nr < 0 || nr >= this.rows || nc < 0 || nc >= this.cols) continue;
-        const v = nr * this.cols + nc;
-        if (visited[v] || !this.isValidCell(v)) continue;
+      for (let d = 0; d < 8; d += 1) {
+        const dir = DIRS[d];
+        if (!dir) continue;
+        const nr = r + dir[0];
+        const nc = c + dir[1];
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        const v = u + (this.dirOffsets[d] ?? 0);
+        if (visited[v] || !valid[v]) continue;
 
-        const dist = this.stepDist(dr, dc);
-        const edgeSlope = this.edgeSlopeDeg(u, v, dist);
-        const candSlope = Math.max(uSlope, edgeSlope);
+        const dist = Math.max(1e-6, this.dirDists[d] ?? 1);
+        const dh = Math.abs((elev[v] ?? 0) - elevU);
+        const edgeSlope = Math.atan(dh / dist) * radToDeg;
+        const candSlope = uSlope > edgeSlope ? uSlope : edgeSlope;
         if (candSlope < (bestMaxSlope[v] ?? Number.POSITIVE_INFINITY)) {
           bestMaxSlope[v] = candSlope;
           heap.push(v, candSlope);
@@ -453,11 +583,13 @@ export class TerrainGraph {
   planRoutes(waypointA: MarsCoord, waypointB: MarsCoord, maxSlopeDeg: number): RoutePlanResponse {
     const clampedSlope = Math.max(0.5, Math.min(89, maxSlopeDeg));
     const passableEdgeRatio = this.computePassableEdgeRatio(clampedSlope);
+    const widthKm = Math.round(this.meta.widthMeters / 100) / 10;
+    const heightKm = Math.round(this.meta.heightMeters / 100) / 10;
 
     if (!this.isInsideBounds(waypointA) || !this.isInsideBounds(waypointB)) {
       return {
         status: "out_of_bounds",
-        message: "Place both Waypoint A and Waypoint B inside the 3x3 km terrain bounds.",
+        message: `Place both Waypoint A and Waypoint B inside the ${widthKm}x${heightKm} km terrain bounds.`,
         maxSlopeDeg: clampedSlope,
         passableEdgeRatio,
         routes: [],
@@ -485,7 +617,7 @@ export class TerrainGraph {
       elevationM: Math.round((this.elevations[goalIdx] ?? 0) * 100) / 100,
     };
 
-    const shortestPath = this.runAStar(startIdx, goalIdx, clampedSlope, (dist) => dist);
+    const shortestPath = this.runAStar(startIdx, goalIdx, clampedSlope, "shortest");
     if (!shortestPath) {
       const minRequired = this.findMinRequiredSlope(startIdx, goalIdx);
       return {
@@ -508,10 +640,7 @@ export class TerrainGraph {
     ];
     const discoveredPaths: number[][] = [shortestPath];
 
-    const gentlestPath = this.runAStar(startIdx, goalIdx, clampedSlope, (dist, slope) => {
-      const ratio = slope / Math.max(1, clampedSlope);
-      return dist * (1 + 4.5 * ratio * ratio);
-    });
+    const gentlestPath = this.runAStar(startIdx, goalIdx, clampedSlope, "gentlest");
     if (gentlestPath && this.overlapRatio(gentlestPath, shortestPath) < 0.9) {
       routes.push(
         this.buildRouteSummary("route-gentlest", "LOWEST SLOPE", "gentlest", gentlestPath),
@@ -519,28 +648,30 @@ export class TerrainGraph {
       discoveredPaths.push(gentlestPath);
     }
 
-    // Penalize cells near existing routes (radius 2 cells) to discover a distinct corridor
-    const penaltyMask = new Uint8Array(this.rows * this.cols);
+    // Penalize cells near existing routes to discover a distinct alternate corridor
+    const penaltyMask = this.penaltyBuf;
+    penaltyMask.fill(0);
+    const penaltyRad = Math.max(2, Math.min(8, Math.round(this.cols / 100)));
     for (const path of discoveredPaths) {
       for (const idx of path) {
         if (idx === startIdx || idx === goalIdx) continue;
         const pr = Math.floor(idx / this.cols);
         const pc = idx % this.cols;
-        for (let dr = -2; dr <= 2; dr += 1) {
-          for (let dc = -2; dc <= 2; dc += 1) {
-            const nr = pr + dr;
+        for (let dr = -penaltyRad; dr <= penaltyRad; dr += 1) {
+          const nr = pr + dr;
+          if (nr < 0 || nr >= this.rows) continue;
+          const rowBase = nr * this.cols;
+          for (let dc = -penaltyRad; dc <= penaltyRad; dc += 1) {
             const nc = pc + dc;
-            if (nr >= 0 && nr < this.rows && nc >= 0 && nc < this.cols) {
-              penaltyMask[nr * this.cols + nc] = 1;
+            if (nc >= 0 && nc < this.cols) {
+              penaltyMask[rowBase + nc] = 1;
             }
           }
         }
       }
     }
 
-    const alternatePath = this.runAStar(startIdx, goalIdx, clampedSlope, (dist, _slope, toNode) =>
-      penaltyMask[toNode] ? dist * 3.5 : dist,
-    );
+    const alternatePath = this.runAStar(startIdx, goalIdx, clampedSlope, "alternate");
     if (
       alternatePath &&
       discoveredPaths.every((existing) => this.overlapRatio(alternatePath, existing) < 0.85)
@@ -562,41 +693,27 @@ export class TerrainGraph {
 
   /** Render an RGBA PNG mask highlighting steep impassable terrain for the given maxSlopeDeg. */
   renderSlopeMaskPng(maxSlopeDeg: number): Uint8Array {
-    const rgba = new Uint8Array(this.rows * this.cols * 4);
+    const rgba = new Uint8Array(this.totalCells * 4);
     const cautionThresh = maxSlopeDeg * 0.75;
 
-    for (let r = 0; r < this.rows; r += 1) {
-      for (let c = 0; c < this.cols; c += 1) {
-        const u = r * this.cols + c;
-        if (!this.isValidCell(u)) continue;
-
-        let localMaxSlope = 0;
-        for (const [dr, dc] of DIRS) {
-          const nr = r + dr;
-          const nc = c + dc;
-          if (nr < 0 || nr >= this.rows || nc < 0 || nc >= this.cols) continue;
-          const v = nr * this.cols + nc;
-          if (!this.isValidCell(v)) continue;
-          const s = this.edgeSlopeDeg(u, v, this.stepDist(dr, dc));
-          if (s > localMaxSlope) localMaxSlope = s;
-        }
-
-        const p = u * 4;
-        if (localMaxSlope > maxSlopeDeg) {
-          // Impassable hazard (amber-orange, distinct from Mars red accent)
-          rgba[p] = 245;
-          rgba[p + 1] = 158;
-          rgba[p + 2] = 11;
-          rgba[p + 3] = 175;
-        } else if (localMaxSlope > cautionThresh) {
-          rgba[p] = 234;
-          rgba[p + 1] = 179;
-          rgba[p + 2] = 8;
-          rgba[p + 3] = 55;
-        }
+    for (let u = 0; u < this.totalCells; u += 1) {
+      if (!this.validMask[u]) continue;
+      const maxS = this.localMaxSlope[u] ?? 0;
+      const p = u * 4;
+      if (maxS > maxSlopeDeg) {
+        // Impassable hazard (amber-orange, distinct from Mars red accent)
+        rgba[p] = 245;
+        rgba[p + 1] = 158;
+        rgba[p + 2] = 11;
+        rgba[p + 3] = 175;
+      } else if (maxS > cautionThresh) {
+        rgba[p] = 234;
+        rgba[p + 1] = 179;
+        rgba[p + 2] = 8;
+        rgba[p + 3] = 55;
       }
     }
 
-    return encodeRgbaPng(this.cols, this.rows, rgba);
+    return encodeRgbaPng(this.cols, this.rows, rgba, 1);
   }
 }

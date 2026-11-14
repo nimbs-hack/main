@@ -22,7 +22,7 @@ describe.skipIf(!hasRealSite)("Real Jezero Crater site dataset", () => {
     ? (JSON.parse(readFileSync(TERRAIN_JSON_PATH, "utf8")) as SiteDataset)
     : null;
 
-  test("loads 3x3 km Jezero Crater DEM grid and answers elevation queries", async () => {
+  test("loads 20x20 km Jezero Crater DEM grid and answers elevation queries", async () => {
     if (!dataset) return;
     const graph = new TerrainGraph(dataset);
     const app = createApp();
@@ -30,10 +30,10 @@ describe.skipIf(!hasRealSite)("Real Jezero Crater site dataset", () => {
     const siteRes = await app.request("/api/site");
     expect(siteRes.status).toBe(200);
     const { meta } = (await siteRes.json()) as { meta: SiteMetadata };
-    expect(meta.rows).toBe(151);
-    expect(meta.cols).toBe(151);
-    expect(meta.widthMeters).toBeGreaterThan(2900);
-    expect(meta.widthMeters).toBeLessThan(3100);
+    expect(meta.rows).toBe(1001);
+    expect(meta.cols).toBe(1001);
+    expect(meta.widthMeters).toBeGreaterThan(19900);
+    expect(meta.widthMeters).toBeLessThan(20100);
 
     const elevRes = await app.request(
       `/api/terrain/elevation?lat=${meta.center.lat}&lon=${meta.center.lon}`,
@@ -54,17 +54,17 @@ describe.skipIf(!hasRealSite)("Real Jezero Crater site dataset", () => {
   test("plans routes respecting maxSlopeDeg and reports unreachable minimum slope", async () => {
     if (!dataset) return;
     const graph = new TerrainGraph(dataset);
-    const a = graph.coordForCell(20, 20);
-    const b = graph.coordForCell(130, 130);
+    const a = graph.coordForCell(100, 100);
+    const b = graph.coordForCell(900, 900);
 
     const permissive = graph.planRoutes(a, b, 30);
     expect(permissive.status).toBe("ok");
     const first = permissive.routes[0];
     expect(first).toBeDefined();
     if (first) {
-      expect(first.totalDistanceM).toBeGreaterThan(2500);
+      expect(first.totalDistanceM).toBeGreaterThan(15000);
       expect(first.maxSlopeDeg).toBeLessThanOrEqual(30);
-      expect(first.points.length).toBeGreaterThan(20);
+      expect(first.points.length).toBeGreaterThan(200);
     }
 
     const strict = graph.planRoutes(a, b, 0.5);
@@ -83,8 +83,8 @@ describe.skipIf(!hasRealSite)("Real Jezero Crater site dataset", () => {
     if (!dataset) return;
     const app = createApp();
     const graph = new TerrainGraph(dataset);
-    const a = graph.coordForCell(25, 30);
-    const b = graph.coordForCell(120, 120);
+    const a = graph.coordForCell(150, 150);
+    const b = graph.coordForCell(850, 850);
 
     const routeRes = await app.request("/api/graph/routes", {
       method: "POST",
