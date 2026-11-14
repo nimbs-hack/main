@@ -102,9 +102,11 @@ func ParamKeys() []string {
 // outpost. Shared by the nominal crew of four, that is 20 hours each.
 const surfaceEVAHours = 20
 
-// Hygiene water per crewmember per day, BVAD Tables 4-19 and 4-20.
+// Hygiene water per crewmember per day. The larger two are from BVAD Tables
+// 4-19 and 4-20. BVAD's short-mission allocation leaves 0.2 kg, under the
+// minimum in STD-3001, so stored-supply phases use the minimum.
 const (
-	hygieneWipesOnly   = 0.2  // 2.7 kg short-mission allocation less 2.5 kg potable
+	hygieneWipesOnly   = HygieneWaterMinKgPerDay
 	hygieneStation     = 0.7  // oral hygiene and hand wash 0.4, urinal flush 0.3
 	hygieneSurfaceBase = 1.98 // adds a shower and a bigger flush
 )
@@ -497,7 +499,7 @@ func parseMission(raw, rawRoster any) (Mission, error) {
 	mission := Mission{
 		Name:          c.text(or(source["name"], ""), "mission name", 0),
 		Type:          missionType,
-		MarginPercent: int(c.measure(or(source["marginPercent"], float64(DefaultMarginPercent)), "marginPercent", 0, maxCount, 1, 1)),
+		MarginPercent: int(c.measure(or(source["marginPercent"], float64(DefaultMarginPercent)), "marginPercent", MinMarginPercent, MaxMarginPercent, 1, 1)),
 		Crew:          crew,
 		Phases:        phases,
 		Sites:         sites,

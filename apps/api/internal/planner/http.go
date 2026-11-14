@@ -38,6 +38,8 @@ type catalog struct {
 	Activities           []string           `json:"activities"`
 	TaskKinds            []string           `json:"taskKinds"`
 	DefaultMarginPercent int                `json:"defaultMarginPercent"`
+	MinMarginPercent     int                `json:"minMarginPercent"`
+	MaxMarginPercent     int                `json:"maxMarginPercent"`
 	Rates                map[string]float64 `json:"rates"`
 	// A fictional mission and crew to start from.
 	Example      Mission     `json:"example"`
@@ -48,6 +50,8 @@ func buildCatalog() (catalog, error) {
 	c := catalog{
 		Sexes: Sexes, Roles: Roles, Activities: Activities, TaskKinds: TaskKinds,
 		DefaultMarginPercent: DefaultMarginPercent,
+		MinMarginPercent:     MinMarginPercent,
+		MaxMarginPercent:     MaxMarginPercent,
 		Rates: map[string]float64{
 			"evaFoodKcalPerHour":       EVAFoodKcalPerHour,
 			"foodKgPer1000Kcal":        FoodKgPerMJ * (1 + FoodPackagingFraction) * KJPerKcal,

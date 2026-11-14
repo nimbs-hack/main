@@ -118,7 +118,7 @@ Any type accepts its own `phases` list, and any phase can override any parameter
   "crew": ["NAKAMURA", "OKAFOR"],
   "phases": [
     { "kind": "rover", "days": 10, "evaHoursPerWeek": 28, "basePowerW": 1500 },
-    { "kind": "custom", "days": 2, "hygieneWaterKg": 0.2 }
+    { "kind": "custom", "days": 2, "hygieneWaterKg": 0.4 }
   ]
 }
 ```
@@ -129,9 +129,9 @@ Any type accepts its own `phases` list, and any phase can override any parameter
 | --- | --- | --- | --- | --- | --- |
 | `transit` | 0 | 98% | 50% | 0.70 | 0 |
 | `station` | 0.5 (assumed) | 98% | 50% | 0.70 | 18.53 kW |
-| `lander` | 20 | 0 | 0 | 0.20 | 0 |
+| `lander` | 20 | 0 | 0 | 0.40 | 0 |
 | `habitat` | 20 | 98% | 50% | 1.98 | 0 |
-| `rover` | 20 | 0 | 0 | 0.20 | 0 |
+| `rover` | 20 | 0 | 0 | 0.40 | 0 |
 | `analog` | 0 | 0 | 100% (outside air) | 1.98 | 0 |
 | `custom` | 0 | 0 | 0 | 0.70 | 0 |
 
@@ -143,7 +143,7 @@ Per person, per day of a phase:
 
 | Quantity | Rule | Source |
 | --- | --- | --- |
-| Food energy | DRI energy equation from sex, age, mass, height and activity, plus 200 kcal per EVA hour | NASA-STD-3001 V2 7003 and 7004 |
+| Food energy | Energy equation from sex, age, mass, height and activity, plus 200 kcal per EVA hour | NASA-STD-3001 V2 7003 with Table 7.1-1, and V2 7004 |
 | Protein | 1.2 to 1.8 g per kg of body mass | HASF Table 1 |
 | Carbohydrate, fat | 45 to 65% and 20 to 35% of food energy | HASF Table 1 |
 | Vitamins, minerals, fiber | Fixed daily targets by sex | HASF Table 1 |
@@ -151,12 +151,12 @@ Per person, per day of a phase:
 | Oxygen breathed | 0.816 kg per 12.59 MJ eaten | BVAD Table 3-33 |
 | Carbon dioxide | 1.04 kg per 12.59 MJ eaten | BVAD Table 3-33 |
 | Body heat | 12.00 MJ per 12.59 MJ eaten | BVAD Table 3-33 |
-| Drinking and food water | 2.5 kg, or 32 mL per kg of body mass if that is more, plus 0.24 kg per EVA hour | BVAD Tables 4-20 and 4-76, HASF Table 1 |
-| Hygiene water | Phase parameter | BVAD Tables 4-19 and 4-20 |
+| Drinking and food water | 2.5 kg, or 32 mL per kg of body mass if that is more, plus 0.24 kg per EVA hour | NASA-STD-3001 V2 6109 with Table 6.3-1, and V2 11030. HASF Table 1 |
+| Hygiene water | Phase parameter. The presets start at the standard's minimum of 0.4 kg | NASA-STD-3001 V2 6109 with Table 6.3-1, BVAD Tables 4-19 and 4-20 |
 | Suit losses per EVA hour | 0.092 kg oxygen and 0.625 kg cooling water, never recovered | BVAD Table 4-75 |
 | Electricity | Per-crew power times crew size, plus the phase's base power | BVAD Table 3-2 |
 
-Recycling applies to breathed oxygen and to drinking and hygiene water. "To supply" is what is left after it. The margin, 10% unless the mission says otherwise, is added to food, water and oxygen to supply and to electricity.
+Recycling applies to breathed oxygen and to drinking and hygiene water. "To supply" is what is left after it. The margin is added to food, water and oxygen to supply and to electricity. It is 40% unless the mission says otherwise, and a mission can set it from 40% to 100%.
 
 ## The mission file
 
@@ -202,11 +202,14 @@ Nothing here has been sent over a radio. For now it is a file with the right sha
 
 ## Limits
 
-- The energy equation coefficients are the published Dietary Reference Intake values (Institute of Medicine, 2005). NASA-STD-3001 shows them in a table image that we did not read by machine. Check them against the standard before relying on the calories.
+- The energy equation is Table 7.1-1 of NASA-STD-3001 Volume 2, Revision F, read from the text of the PDF. The standard applies one activity factor, 1.25, to both sexes, and that is `active`. The other three levels are the Dietary Reference Intake factors (Institute of Medicine, 2005). The standard does not list them, and `very-active` is above its range of 1.0 to 1.25.
+- The standard sets requirements for food energy and water. It gives no rates for oxygen, carbon dioxide, body heat, food mass or suit losses, so those stay on BVAD.
+- Nutrient targets are HASF Table 1. Revision F asks for Dietary Reference Intake values with vitamin D at 25 µg. The 110 and 125 mg of vitamin C that HASF lists were in Revision C and are not in D to F.
+- A mission can set hygiene water under the standard's 0.4 kg and the planner does not warn about it.
 - Per-crew power is the ISS life support, crew equipment and health care load divided by a crew of six. BVAD gives the load but not the crew size, so the six is our reading. Open-loop vehicles probably need less.
 - Base power is known only for the station. Every other kind starts at zero, and the report says so. Set `basePowerW` when the vehicle is known.
 - EVA hours are BVAD's 80 crew-hours a week for a lunar outpost shared by four people. Suit losses are lunar surface values and are used for every EVA.
-- The 10% margin, the station's 0.5 EVA hours a week and the 14-day rover traverse are our choices, not published figures.
+- The margin limits of 40% and 100%, the station's 0.5 EVA hours a week and the 14-day rover traverse are our choices, not published figures.
 - The whole crew goes through every phase. A mission where part of the crew stays in orbit needs two mission files.
 - Iron is reported as 8 mg a day. The requirement is 18 mg for women under 50 who do not suppress menstruation, which the profile does not record.
 - Tasks are checked against EVA hours but do not add to the supplies.
@@ -219,7 +222,7 @@ The planner was first written in TypeScript and then ported to Go when the API s
 ## Sources
 
 - BVAD: [Life Support Baseline Values and Assumptions Document](https://ntrs.nasa.gov/citations/20180001338), NASA/TP-2015-218570/REV1, January 2018.
-- [NASA-STD-3001 Volume 2, section 7](https://www.nasa.gov/reference/7-0-habit-ability-functions-vol-2/), food and nutrition requirements.
+- [NASA-STD-3001 Volume 2, Revision F](https://standards.nasa.gov/system/files/tmp/NASA-STD-3001%20Vol%202%20Rev%20F.pdf), approved 2026-07-14. Sections 6.3 (water), 7.1 (food and nutrition) and 11.2 (suited hydration). The baseline and Revisions A to E were read for what changed: drinking water rose from 2.0 kg to 2.5 L in Revision C, and the men's energy constant was printed as 622 before Revision C.
 - HASF: Smith, Zwart, Douglas, Heer. [Human Adaptation to Spaceflight: The Role of Food and Nutrition](https://www.nasa.gov/wp-content/uploads/2015/02/human_adaptation_2021_final.pdf), 2nd edition, NASA, 2021.
 - Makovsky, Ilott, Taylor. [Mars Science Laboratory Telecommunications System Design](https://descanso.jpl.nasa.gov/DPSummary/Descanso14_MSL_Telecom.pdf), JPL DESCANSO Article 14, 2009.
 - [NASA Achieves Water Recovery Milestone on International Space Station](https://www.nasa.gov/missions/station/iss-research/nasa-achieves-water-recovery-milestone-on-international-space-station/), for the 98% water figure.

@@ -10,7 +10,8 @@ package planner
 //
 // BVAD     NASA Life Support Baseline Values and Assumptions Document,
 //          NASA/TP-2015-218570/REV1, January 2018.
-// STD-3001 NASA-STD-3001 Volume 2, section 7 (food and nutrition).
+// STD-3001 NASA-STD-3001 Volume 2, Revision F, approved 2026-07-14. Requirement
+//          numbers such as [V2 7003] are the same in every revision.
 // HASF     Smith, Zwart, Douglas, Heer. Human Adaptation to Spaceflight: The
 //          Role of Food and Nutrition, 2nd edition, NASA, 2021. Table 1,
 //          "Exploration Requirements (2020)".
@@ -31,9 +32,14 @@ const (
 	// packaged meals".
 	FoodPackagingFraction = 0.17
 
-	// BVAD Table 4-20: 2.00 kg drinking plus 0.50 kg food rehydration per
-	// crewmember per day, the same for every mission class.
+	// STD-3001 [V2 6109], Table 6.3-1: at least 2.5 L per crewmember per day
+	// for hydration, drinking and food rehydration together. Revisions before
+	// C asked for 2.0 kg. BVAD Table 4-20 splits the 2.5 kg as 2.00 drinking
+	// and 0.50 food rehydration.
 	PotableWaterKgPerDay = 2.5
+	// STD-3001 [V2 6109], Table 6.3-1: least water for personal hygiene per
+	// crewmember per day.
+	HygieneWaterMinKgPerDay = 0.4
 
 	// HASF Table 1: fluid of 32 mL per kg of body mass, with a floor by sex.
 	FluidLPerKg = 0.032
@@ -41,7 +47,8 @@ const (
 	// STD-3001 [V2 7004]: 837 kJ (200 kcal) more food per hour of EVA.
 	EVAFoodKcalPerHour = 200
 	EVAFoodMJPerHour   = EVAFoodKcalPerHour * mjPerKcal
-	// BVAD Table 4-76: drinking water during EVA.
+	// STD-3001 [V2 11030] and Table 6.3-1: 240 mL of drinking water per EVA
+	// hour. BVAD Table 4-76 gives the same figure.
 	EVADrinkKgPerHour = 0.24
 	// BVAD Table 4-75, nominal values for lunar surface suits. Both leave the
 	// suit and never come back to the vehicle, so recycling cannot recover
@@ -68,28 +75,35 @@ const (
 	ISSOxygenRecovery = 0.5
 
 	// ASSUMED. Share added on top of everything the crew has to bring or
-	// generate. A mission file can set its own.
-	DefaultMarginPercent = 10
+	// generate. A mission can set its own between the two limits.
+	MinMarginPercent     = 40
+	MaxMarginPercent     = 100
+	DefaultMarginPercent = MinMarginPercent
 )
 
 // HASF Table 1: the least fluid a day, in litres.
 var fluidFloorL = map[string]float64{"female": 2.1, "male": 2.5}
 
-// Dietary Reference Intake equations for adults 19 and older (Institute of
-// Medicine, 2005). STD-3001 [V2 7003] and HASF both point at them, and
-// STD-3001 says to use the "active" factor of 1.25.
+// STD-3001 [V2 7003], Table 7.1-1: Estimated Energy Requirement for adults 19
+// and older, as printed in Revision F.
 //
-//	EER = base - perYear * age + PA * (perKg * mass + perMetre * height)
+//	EER = base - perYear * age + AF * (perKg * mass + perMetre * height)
+//
+// Revisions before C print 622 for the men's constant. C to F print 662.
 type eerCoefficients struct{ base, perYear, perKg, perMetre float64 }
 
 var eer = map[string]eerCoefficients{
-	"male":   {662, 9.53, 15.91, 539.6},
+	"male":   {662, 9.53, 15.9, 539.6},
 	"female": {354, 6.91, 9.36, 726},
 }
 
+// "active" is the 1.25 that STD-3001 [V2 7003] applies to both sexes. The
+// standard has no other levels, only a range of 1.0 to 1.25 by gravity and
+// exercise. The rest are the Dietary Reference Intake factors (Institute of
+// Medicine, 2005), and "very-active" is above the standard's range.
 var activityFactor = map[string]map[string]float64{
 	"male":   {"sedentary": 1.0, "low": 1.11, "active": 1.25, "very-active": 1.48},
-	"female": {"sedentary": 1.0, "low": 1.12, "active": 1.27, "very-active": 1.45},
+	"female": {"sedentary": 1.0, "low": 1.12, "active": 1.25, "very-active": 1.45},
 }
 
 // HASF Table 1, exploration requirements. Shares are of daily food energy.
@@ -105,6 +119,9 @@ const (
 )
 
 // HASF Table 1, per day. Where the table gives a range, max is set.
+// STD-3001 [V2 7100] asks for Dietary Reference Intake values with vitamin D
+// at 25 µg. The 110 and 125 mg of vitamin C were in Revision C and are not in
+// D to F.
 // Iron is 18 mg for women under 50 who do not suppress menstruation; the
 // profile does not record that, so the planner reports the 8 mg figure.
 type nutrientTarget struct {

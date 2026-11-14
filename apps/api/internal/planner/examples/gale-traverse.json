@@ -1,7 +1,7 @@
 {
   "name": "GALE-T1",
   "type": "custom",
-  "marginPercent": 25,
+  "marginPercent": 40,
   "crew": [
     { "name": "NAKAMURA", "sex": "female", "age": 35, "massKg": 58.2, "heightCm": 162, "role": "scientist" },
     { "name": "OKAFOR", "sex": "male", "age": 44, "massKg": 91.3, "heightCm": 188, "role": "flight-engineer", "activity": "very-active" }

@@ -35,7 +35,7 @@ func TestPackPlanUnpack(t *testing.T) {
 
 	code, out, _ = cli("plan", file, "--detail")
 	for _, want := range []string{
-		"ARES-3  mars-long-stay  960 days  6 crew  margin 10%",
+		"ARES-3  mars-long-stay  960 days  6 crew  margin 40%",
 		"NUTRIENT TARGETS",
 		"BASE    4.5895°S 137.4417°E",
 		"drill: 2 m core",

@@ -66,12 +66,12 @@ func asMissionError(err error, target **MissionError) bool {
 }
 
 func TestEnergyRequirementMatchesTheDRIEquation(t *testing.T) {
-	// 662 - 9.53*30 + 1.25*(15.91*70 + 539.6*1.75) = 2948.6 kcal
-	near(t, "man", EnergyRequirementMJ(person)/kcalMJ, 2948.6, 0.5)
-	// 354 - 6.91*30 + 1.27*(9.36*60 + 726*1.65) = 2381.3 kcal
+	// 662 - 9.53*30 + 1.25*(15.9*70 + 539.6*1.75) = 2947.7 kcal
+	near(t, "man", EnergyRequirementMJ(person)/kcalMJ, 2947.7, 0.5)
+	// 354 - 6.91*30 + 1.25*(9.36*60 + 726*1.65) = 2346.1 kcal
 	woman := person
 	woman.Sex, woman.MassKg, woman.HeightCm = "female", 60, 165
-	near(t, "woman", EnergyRequirementMJ(woman)/kcalMJ, 2381.3, 0.5)
+	near(t, "woman", EnergyRequirementMJ(woman)/kcalMJ, 2346.1, 0.5)
 }
 
 func TestActivityLevelMovesTheRequirement(t *testing.T) {
@@ -155,7 +155,7 @@ func TestAnAnalogHabitatShipsNoOxygen(t *testing.T) {
 func TestMissionPlan(t *testing.T) {
 	two := person
 	two.Name, two.Sex, two.MassKg, two.HeightCm, two.EVAShare = "TWO", "female", 60, 165, 0
-	mission := parse(t, object{"name": "T-1", "type": "lunar-outpost", "marginPercent": 20, "crew": []Astronaut{person, two}})
+	mission := parse(t, object{"name": "T-1", "type": "lunar-outpost", "marginPercent": 50, "crew": []Astronaut{person, two}})
 	plan := PlanMission(mission)
 
 	var kinds []string
@@ -180,9 +180,9 @@ func TestMissionPlan(t *testing.T) {
 	// Only the first crew member goes outside: 20 h a week for 30 weeks.
 	near(t, "EVA hours", plan.Total.EVAHours, 600, 1e-6)
 
-	near(t, "food with margin", plan.Provision.FoodKg, plan.Total.FoodKg*1.2, 1e-6)
-	near(t, "water with margin", plan.Provision.WaterSupplyKg, plan.Total.WaterSupplyKg*1.2, 1e-6)
-	near(t, "electricity with margin", plan.Provision.ElectricityMJ, plan.Total.ElectricityMJ*1.2, 1e-6)
+	near(t, "food with margin", plan.Provision.FoodKg, plan.Total.FoodKg*1.5, 1e-6)
+	near(t, "water with margin", plan.Provision.WaterSupplyKg, plan.Total.WaterSupplyKg*1.5, 1e-6)
+	near(t, "electricity with margin", plan.Provision.ElectricityMJ, plan.Total.ElectricityMJ*1.5, 1e-6)
 }
 
 func TestVehicleBaseLoadIsAddedOncePerPhaseNotPerPerson(t *testing.T) {
@@ -196,7 +196,7 @@ func TestParseMissionFillsDefaults(t *testing.T) {
 		{"name": "A", "sex": "female", "age": 30, "massKg": 60, "heightCm": 165},
 	}})
 	a := mission.Crew[0]
-	if mission.Name != "" || mission.MarginPercent != 10 || a.Role != "mission-specialist" || a.Activity != "active" || a.EVAShare != 1 {
+	if mission.Name != "" || mission.MarginPercent != 40 || a.Role != "mission-specialist" || a.Activity != "active" || a.EVAShare != 1 {
 		t.Errorf("defaults not filled: %+v", mission)
 	}
 	if mission.Sites == nil || mission.Tasks == nil {
@@ -262,6 +262,8 @@ func TestParseMissionRejects(t *testing.T) {
 		{"missing mass", object{"type": "analog", "crew": []object{{"name": "A", "sex": "male", "age": 30, "heightCm": 170}}},
 			"crew member 1 massKg must be a number from 30 to 250; got nothing"},
 		{"not an object", "mars", "mission must be an object"},
+		{"thin margin", object{"type": "analog", "marginPercent": 39, "crew": crew}, "marginPercent must be a number from 40 to 100; got 39"},
+		{"margin over the top", object{"type": "analog", "marginPercent": 101, "crew": crew}, "marginPercent must be a number from 40 to 100; got 101"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { rejects(t, c.mission, c.want) })
