@@ -1,9 +1,48 @@
 import type {
   ElevationResponse,
+  EvaRouteWeatherContext,
+  EvaWeatherLimits,
   MapLayerMeta,
+  MarsWeatherSnapshot,
   RoutePlanRequest,
   RoutePlanResponse,
+  SiteEnvironmentSummary,
   SiteMetadata,
+  WeatherApiResponse,
+  WeatherScenario,
+} from "@nimbs/shared";
+
+export {
+  type ComputedRoute,
+  DEFAULT_EVA_WEATHER_LIMITS,
+  type ElevationResponse,
+  type EvaRouteContext,
+  type EvaRouteWeatherContext,
+  type EvaSafeWindow,
+  type EvaStatus,
+  type EvaWeatherCheck,
+  type EvaWeatherEvaluation,
+  type EvaWeatherLimits,
+  type MapLayerMeta,
+  type MarsWeatherSnapshot,
+  type MarsWeatherSolForecast,
+  type RouteBlockedReason,
+  type RoutePlanRequest,
+  type RoutePlanResponse,
+  type RoutePoint,
+  type RouteStrategy,
+  type RouteWeatherConstraints,
+  type SelectedHourWeatherSummary,
+  type SiteEnvironmentSummary,
+  type SiteMetadata,
+  type TraverseDepartureSlot,
+  type TraversePointSample,
+  type TraverseWindowRecommendation,
+  type WeatherApiResponse,
+  type WeatherCheckId,
+  type WeatherHourlyPoint,
+  type WeatherScenario,
+  type WeatherSourceType,
 } from "@nimbs/shared";
 
 export async function fetchSiteMeta(): Promise<SiteMetadata> {
@@ -32,14 +71,91 @@ export async function fetchElevation(lat: number, lon: number): Promise<Elevatio
   return (await res.json()) as ElevationResponse;
 }
 
-export async function planGraphRoutes(payload: RoutePlanRequest): Promise<RoutePlanResponse> {
+export async function planGraphRoutes(
+  payload: RoutePlanRequest,
+  signal?: AbortSignal,
+): Promise<RoutePlanResponse> {
   const res = await fetch("/api/graph/routes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    signal,
   });
   if (!res.ok) {
     throw new Error(`Route calculation failed (${res.status})`);
   }
   return (await res.json()) as RoutePlanResponse;
+}
+
+export async function fetchWeatherSnapshot(
+  params?: {
+    site?: string;
+    scenario?: WeatherScenario;
+    sol?: number;
+    lmstHour?: number;
+    refresh?: boolean;
+  },
+  signal?: AbortSignal,
+): Promise<WeatherApiResponse> {
+  const query = new URLSearchParams();
+  if (params?.site) query.set("site", params.site);
+  if (params?.scenario) query.set("scenario", params.scenario);
+  if (params?.sol !== undefined) query.set("sol", String(params.sol));
+  if (params?.lmstHour !== undefined && Number.isFinite(params.lmstHour)) {
+    query.set("lmstHour", String(params.lmstHour));
+  }
+  if (params?.refresh) query.set("refresh", "1");
+  const qs = query.toString();
+  const res = await fetch(`/api/weather${qs ? `?${qs}` : ""}`, { signal });
+  if (!res.ok) {
+    throw new Error(`Weather query failed (${res.status})`);
+  }
+  return (await res.json()) as WeatherApiResponse;
+}
+
+export async function evaluateWeatherConstraints(
+  payload: {
+    limits: EvaWeatherLimits;
+    site?: string;
+    scenario?: WeatherScenario;
+    sol?: number;
+    lmstHour?: number;
+    elevationM?: number;
+    route?: EvaRouteWeatherContext;
+    weather?: MarsWeatherSnapshot;
+  },
+  signal?: AbortSignal,
+): Promise<WeatherApiResponse> {
+  const res = await fetch("/api/weather/evaluate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!res.ok) {
+    throw new Error(`Weather evaluation failed (${res.status})`);
+  }
+  return (await res.json()) as WeatherApiResponse;
+}
+
+export async function fetchEnvironmentSummary(
+  params?: {
+    scenario?: WeatherScenario;
+    sol?: number;
+    lmstHour?: number;
+  },
+  signal?: AbortSignal,
+): Promise<SiteEnvironmentSummary> {
+  const query = new URLSearchParams();
+  if (params?.scenario) query.set("scenario", params.scenario);
+  if (params?.sol !== undefined) query.set("sol", String(params.sol));
+  if (params?.lmstHour !== undefined && Number.isFinite(params.lmstHour)) {
+    query.set("lmstHour", String(params.lmstHour));
+  }
+  const qs = query.toString();
+  const res = await fetch(`/api/site/environment-summary${qs ? `?${qs}` : ""}`, { signal });
+  if (!res.ok) {
+    throw new Error(`Environment summary query failed (${res.status})`);
+  }
+  return (await res.json()) as SiteEnvironmentSummary;
 }

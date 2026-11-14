@@ -7,6 +7,7 @@ interface ContextMenuProps {
   hasWaypoints: boolean;
   onSetA: (coord: MarsCoord) => void;
   onSetB: (coord: MarsCoord) => void;
+  onAddPoint: (coord: MarsCoord) => void;
   onClear: () => void;
   onClose: () => void;
 }
@@ -18,11 +19,12 @@ export function ContextMenu({
   hasWaypoints,
   onSetA,
   onSetB,
+  onAddPoint,
   onClear,
   onClose,
 }: ContextMenuProps) {
   const clampedLeft = Math.min(x, window.innerWidth - 230);
-  const clampedTop = Math.min(y, window.innerHeight - 150);
+  const clampedTop = Math.min(y, window.innerHeight - 190);
 
   return (
     <div
@@ -55,6 +57,19 @@ export function ContextMenu({
         <span>Set B Waypoint</span>
         <span className="context-menu-tag" style={{ color: "var(--color-ok)" }}>
           B
+        </span>
+      </button>
+      <button
+        type="button"
+        className="context-menu-item"
+        onClick={() => {
+          onAddPoint(coord);
+          onClose();
+        }}
+      >
+        <span>Add Classified Point</span>
+        <span className="context-menu-tag" style={{ color: "#38bdf8" }}>
+          POI
         </span>
       </button>
       {hasWaypoints && (

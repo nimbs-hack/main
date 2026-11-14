@@ -1,6 +1,7 @@
 import {
   type ComputedRoute,
   type MarsCoord,
+  type RouteBlockedReason,
   type RoutePlanResponse,
   type RoutePoint,
   type RouteStrategy,
@@ -10,6 +11,32 @@ import {
   surfaceDistanceMeters,
 } from "@nimbs/shared";
 import { encodeRgbaPng } from "../utils/png";
+import { celsiusToKelvin, kelvinToCelsius } from "../weather/generator";
+
+export interface TerrainWeatherFilter {
+  lmstHour: number;
+  lmstLabel?: string;
+  minAirTempC: number;
+  minPressurePa: number;
+  thermalWeight?: number;
+  cellTempK: Float32Array;
+  cellPressurePa: Float32Array;
+}
+
+interface ResolvedWeatherContext {
+  minAirTempK: number;
+  minPressurePa: number;
+  thermalWeight: number;
+  cellTempK: Float32Array;
+  cellPressurePa: Float32Array;
+  maxTempK: number;
+  maxPressurePa: number;
+  tempSpanK: number;
+  pressureSpanPa: number;
+  pressCautionSpanPa: number;
+  checkTemp: boolean;
+  checkPressure: boolean;
+}
 
 const DIRS: ReadonlyArray<readonly [dr: number, dc: number]> = [
   [-1, 0],
@@ -21,6 +48,16 @@ const DIRS: ReadonlyArray<readonly [dr: number, dc: number]> = [
   [1, -1],
   [1, 1],
 ];
+
+/**
+ * Gain applied to the soft thermal risk for the "weather-safe" strategy.
+ * Unlike the hard minPressurePa/minAirTempC filters, this term trades extra
+ * traverse distance for thermal margin: it is deliberately large enough to
+ * outweigh a longer detour around a cold, low-pressure ridge when
+ * thermalWeight is near 1, yet stays mild (and does not force a detour) at the
+ * low thermalWeight values used for hard-filter-only planning.
+ */
+const WEATHER_SAFE_THERMAL_GAIN = 80;
 
 class MinHeap {
   private nodes: number[] = [];
@@ -125,7 +162,7 @@ export class TerrainGraph {
   private readonly south: number;
   private readonly east: number;
   private readonly north: number;
-  private readonly totalCells: number;
+  readonly totalCells: number;
   private readonly validMask: Uint8Array;
   private readonly localMaxSlope: Float32Array;
   private readonly dirOffsets: Int32Array;
@@ -208,6 +245,14 @@ export class TerrainGraph {
         this.localMaxSlope[u] = maxS;
       }
     }
+  }
+
+  getValidMask(): Uint8Array {
+    return this.validMask;
+  }
+
+  isCellValid(idx: number): boolean {
+    return this.validMask[idx] === 1;
   }
 
   private isValidCell(idx: number): boolean {
@@ -363,12 +408,85 @@ export class TerrainGraph {
     return total > 0 ? Math.round((passable / total) * 1000) / 1000 : 0;
   }
 
+  private buildWeatherContext(weatherFilter: TerrainWeatherFilter): ResolvedWeatherContext {
+    const { cellTempK, cellPressurePa } = weatherFilter;
+    if (cellTempK.length !== this.totalCells || cellPressurePa.length !== this.totalCells) {
+      throw new Error(
+        `Weather field dimensions mismatch: expected ${this.totalCells} cells, got temp=${cellTempK.length}, pressure=${cellPressurePa.length}`,
+      );
+    }
+
+    const minAirTempK = celsiusToKelvin(weatherFilter.minAirTempC);
+    const minPressurePa = weatherFilter.minPressurePa;
+    const thermalWeight = Math.max(0, Math.min(1, weatherFilter.thermalWeight ?? 0));
+
+    let maxTempK = minAirTempK;
+    let maxPressurePa = minPressurePa;
+    for (let i = 0; i < this.totalCells; i += 1) {
+      if (!this.validMask[i]) continue;
+      const t = cellTempK[i] ?? Number.NEGATIVE_INFINITY;
+      const p = cellPressurePa[i] ?? Number.NEGATIVE_INFINITY;
+      if (t > maxTempK) maxTempK = t;
+      if (p > maxPressurePa) maxPressurePa = p;
+    }
+
+    return {
+      minAirTempK,
+      minPressurePa,
+      thermalWeight,
+      cellTempK,
+      cellPressurePa,
+      maxTempK,
+      maxPressurePa,
+      tempSpanK: Math.max(5, maxTempK - minAirTempK),
+      pressureSpanPa: Math.max(10, maxPressurePa - minPressurePa),
+      pressCautionSpanPa: Math.max(10, minPressurePa * 0.04),
+      checkTemp: true,
+      checkPressure: true,
+    };
+  }
+
+  private isCellWeatherPassable(idx: number, ctx: ResolvedWeatherContext): boolean {
+    if (ctx.checkTemp && (ctx.cellTempK[idx] ?? Number.NEGATIVE_INFINITY) < ctx.minAirTempK) {
+      return false;
+    }
+    if (
+      ctx.checkPressure &&
+      (ctx.cellPressurePa[idx] ?? Number.NEGATIVE_INFINITY) < ctx.minPressurePa
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  private computeThermalRisk(idx: number, ctx: ResolvedWeatherContext): number {
+    const tK = ctx.cellTempK[idx] ?? ctx.minAirTempK;
+    const pPa = ctx.cellPressurePa[idx] ?? ctx.minPressurePa;
+    const tempDeficit = Math.max(0, Math.min(1, (ctx.maxTempK - tK) / ctx.tempSpanK));
+    const pressDeficit = Math.max(0, Math.min(1, (ctx.maxPressurePa - pPa) / ctx.pressureSpanPa));
+    const tempMargin = Math.max(0, tK - ctx.minAirTempK);
+    const nearTemp = tempMargin < 5 ? 1 - tempMargin / 5 : 0;
+    const pressMargin = Math.max(0, pPa - ctx.minPressurePa);
+    const nearPress =
+      pressMargin < ctx.pressCautionSpanPa ? 1 - pressMargin / ctx.pressCautionSpanPa : 0;
+    return 0.55 * tempDeficit + 0.45 * pressDeficit + 0.6 * Math.max(nearTemp, nearPress);
+  }
+
   private runAStar(
     startIdx: number,
     goalIdx: number,
     maxSlopeDeg: number,
     mode: RouteStrategy,
+    weatherCtx?: ResolvedWeatherContext,
   ): number[] | null {
+    if (
+      weatherCtx &&
+      (!this.isCellWeatherPassable(startIdx, weatherCtx) ||
+        !this.isCellWeatherPassable(goalIdx, weatherCtx))
+    ) {
+      return null;
+    }
+
     const cols = this.cols;
     const rows = this.rows;
     const dxM = this.dxM;
@@ -431,6 +549,7 @@ export class TerrainGraph {
         if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
         const v = u + (this.dirOffsets[d] ?? 0);
         if (closed[v] || !valid[v]) continue;
+        if (weatherCtx && !this.isCellWeatherPassable(v, weatherCtx)) continue;
 
         const dh = Math.abs((elev[v] ?? 0) - elevU);
         if (dh > (maxDh[d] ?? 0)) continue;
@@ -440,7 +559,21 @@ export class TerrainGraph {
         if (mode === "gentlest") {
           const slope = Math.atan(dh / Math.max(1e-6, dist)) * radToDeg;
           const ratio = slope / slopeDenom;
-          stepCost = dist * (1 + 4.5 * ratio * ratio);
+          const thermalTerm =
+            weatherCtx && weatherCtx.thermalWeight > 0
+              ? weatherCtx.thermalWeight * 1.0 * this.computeThermalRisk(v, weatherCtx)
+              : 0;
+          stepCost = dist * (1 + 4.5 * ratio * ratio + thermalTerm);
+        } else if (mode === "weather-safe") {
+          const slope = Math.atan(dh / Math.max(1e-6, dist)) * radToDeg;
+          const ratio = slope / slopeDenom;
+          const thermalTerm =
+            weatherCtx && weatherCtx.thermalWeight > 0
+              ? weatherCtx.thermalWeight *
+                WEATHER_SAFE_THERMAL_GAIN *
+                this.computeThermalRisk(v, weatherCtx)
+              : 0;
+          stepCost = dist * (1 + thermalTerm + 0.5 * ratio * ratio);
         } else if (mode === "alternate" && penalty[v]) {
           stepCost = dist * 3.5;
         }
@@ -450,6 +583,81 @@ export class TerrainGraph {
           gScore[v] = nextG;
           parent[v] = u;
           heap.push(v, nextG + Math.hypot((nr - goalR) * dyM, (nc - goalC) * dxM));
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Maximin Dijkstra over slope-passable edges to find the highest bottleneck cell value along any route. */
+  private findMaxFeasibleNodeValue(
+    startIdx: number,
+    goalIdx: number,
+    maxSlopeDeg: number,
+    values: Float32Array,
+  ): number | null {
+    const rows = this.rows;
+    const cols = this.cols;
+    const elev = this.elevations;
+    const valid = this.validMask;
+    const bestMin = this.bestSlopeBuf;
+    const visited = this.closedBuf;
+    const heap = this.heap;
+
+    const tanMax = Math.tan((maxSlopeDeg * Math.PI) / 180);
+    const maxDh = new Float64Array(8);
+    for (let d = 0; d < 8; d += 1) {
+      maxDh[d] = (this.dirDists[d] ?? 0) * tanMax + 1e-9;
+    }
+
+    bestMin.fill(Number.NEGATIVE_INFINITY);
+    visited.fill(0);
+    heap.clear();
+
+    const startVal = values[startIdx];
+    if (
+      startVal === undefined ||
+      !Number.isFinite(startVal) ||
+      !valid[startIdx] ||
+      !valid[goalIdx]
+    ) {
+      return null;
+    }
+    bestMin[startIdx] = startVal;
+    heap.push(startIdx, -startVal);
+
+    while (heap.popInto()) {
+      const u = heap.poppedNode;
+      if (u === goalIdx) {
+        const val = bestMin[goalIdx];
+        return val !== undefined && Number.isFinite(val) ? val : null;
+      }
+      if (visited[u]) continue;
+      visited[u] = 1;
+
+      const r = (u / cols) | 0;
+      const c = u - r * cols;
+      const uMin = bestMin[u] ?? Number.NEGATIVE_INFINITY;
+      const elevU = elev[u] ?? 0;
+
+      for (let d = 0; d < 8; d += 1) {
+        const dir = DIRS[d];
+        if (!dir) continue;
+        const nr = r + dir[0];
+        const nc = c + dir[1];
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        const v = u + (this.dirOffsets[d] ?? 0);
+        if (visited[v] || !valid[v]) continue;
+
+        const dh = Math.abs((elev[v] ?? 0) - elevU);
+        if (dh > (maxDh[d] ?? 0)) continue;
+
+        const vVal = values[v];
+        if (vVal === undefined || !Number.isFinite(vVal)) continue;
+        const cand = uMin < vVal ? uMin : vVal;
+        if (cand > (bestMin[v] ?? Number.NEGATIVE_INFINITY)) {
+          bestMin[v] = cand;
+          heap.push(v, -cand);
         }
       }
     }
@@ -514,6 +722,7 @@ export class TerrainGraph {
     label: string,
     strategy: RouteStrategy,
     nodePath: number[],
+    weatherCtx?: ResolvedWeatherContext,
   ): ComputedRoute {
     const points: RoutePoint[] = [];
     let cumulativeDist = 0;
@@ -521,6 +730,10 @@ export class TerrainGraph {
     let loss = 0;
     let maxSlope = 0;
     let weightedSlopeSum = 0;
+    let minTempC = Number.POSITIVE_INFINITY;
+    let maxTempC = Number.NEGATIVE_INFINITY;
+    let minPressurePa = Number.POSITIVE_INFINITY;
+    let maxPressurePa = Number.NEGATIVE_INFINITY;
 
     for (let i = 0; i < nodePath.length; i += 1) {
       const idx = nodePath[i];
@@ -547,16 +760,31 @@ export class TerrainGraph {
         cumulativeDist += segDist;
       }
 
-      points.push({
+      const point: RoutePoint = {
         lat: Math.round(coord.lat * 1e6) / 1e6,
         lon: Math.round(coord.lon * 1e6) / 1e6,
         elevationM: Math.round(elev * 100) / 100,
         distanceM: Math.round(cumulativeDist * 10) / 10,
         slopeDeg: Math.round(segSlope * 100) / 100,
-      });
+      };
+
+      if (weatherCtx) {
+        const tC = kelvinToCelsius(weatherCtx.cellTempK[idx] ?? 0);
+        const pPa = weatherCtx.cellPressurePa[idx] ?? 0;
+        const roundedT = Math.round(tC * 100) / 100;
+        const roundedP = Math.round(pPa * 100) / 100;
+        point.tempC = roundedT;
+        point.pressurePa = roundedP;
+        if (roundedT < minTempC) minTempC = roundedT;
+        if (roundedT > maxTempC) maxTempC = roundedT;
+        if (roundedP < minPressurePa) minPressurePa = roundedP;
+        if (roundedP > maxPressurePa) maxPressurePa = roundedP;
+      }
+
+      points.push(point);
     }
 
-    return {
+    const summary: ComputedRoute = {
       id,
       label,
       strategy,
@@ -568,6 +796,15 @@ export class TerrainGraph {
         cumulativeDist > 0 ? Math.round((weightedSlopeSum / cumulativeDist) * 100) / 100 : 0,
       points,
     };
+
+    if (weatherCtx && points.length > 0) {
+      summary.minTempC = minTempC;
+      summary.maxTempC = maxTempC;
+      summary.minPressurePa = minPressurePa;
+      summary.maxPressurePa = maxPressurePa;
+    }
+
+    return summary;
   }
 
   private overlapRatio(pathA: number[], pathB: number[]): number {
@@ -579,18 +816,160 @@ export class TerrainGraph {
     return shared / Math.max(1, Math.min(pathA.length, pathB.length));
   }
 
-  /** Build candidate routes from waypointA to waypointB constrained by maxSlopeDeg. */
-  planRoutes(waypointA: MarsCoord, waypointB: MarsCoord, maxSlopeDeg: number): RoutePlanResponse {
+  private formatLmstClock(lmstHour: number): string {
+    const wrapped = ((lmstHour % 24) + 24) % 24;
+    const totalMinutes = Math.round(wrapped * 60);
+    const hh = Math.floor(totalMinutes / 60) % 24;
+    const mm = totalMinutes % 60;
+    return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+  }
+
+  private diagnoseUnreachable(
+    startIdx: number,
+    goalIdx: number,
+    clampedSlope: number,
+    passableEdgeRatio: number,
+    snappedA: MarsCoord & { elevationM: number },
+    snappedB: MarsCoord & { elevationM: number },
+    weatherFilter?: TerrainWeatherFilter,
+    weatherCtx?: ResolvedWeatherContext,
+  ): RoutePlanResponse {
+    const weatherMeta = weatherFilter
+      ? {
+          weatherApplied: true,
+          appliedLmstHour: Math.round(weatherFilter.lmstHour * 100) / 100,
+          minTempFilterC: Math.round(weatherFilter.minAirTempC * 100) / 100,
+          minPressureFilterPa: Math.round(weatherFilter.minPressurePa * 100) / 100,
+        }
+      : {};
+
+    if (!weatherFilter || !weatherCtx) {
+      const minRequired = this.findMinRequiredSlope(startIdx, goalIdx);
+      const blockedReason: RouteBlockedReason = minRequired !== null ? "slope" : "nodata";
+      return {
+        status: "unreachable",
+        blockedReason,
+        message:
+          minRequired !== null
+            ? `No graph route under ${clampedSlope.toFixed(1)} deg. Minimum required slope: ${minRequired.toFixed(1)} deg.`
+            : "No connected graph path between Waypoint A and Waypoint B.",
+        maxSlopeDeg: clampedSlope,
+        minRequiredSlopeDeg: minRequired ?? undefined,
+        passableEdgeRatio,
+        snappedA,
+        snappedB,
+        routes: [],
+      };
+    }
+
+    const slopeOnlyPath = this.runAStar(startIdx, goalIdx, clampedSlope, "shortest");
+    if (!slopeOnlyPath) {
+      const minRequired = this.findMinRequiredSlope(startIdx, goalIdx);
+      const blockedReason: RouteBlockedReason = minRequired !== null ? "slope" : "nodata";
+      return {
+        status: "unreachable",
+        blockedReason,
+        message:
+          minRequired !== null
+            ? `No graph route under ${clampedSlope.toFixed(1)} deg. Minimum required slope: ${minRequired.toFixed(1)} deg.`
+            : "No connected graph path between Waypoint A and Waypoint B.",
+        maxSlopeDeg: clampedSlope,
+        minRequiredSlopeDeg: minRequired ?? undefined,
+        ...weatherMeta,
+        passableEdgeRatio,
+        snappedA,
+        snappedB,
+        routes: [],
+      };
+    }
+
+    const tempOnlyPath = this.runAStar(startIdx, goalIdx, clampedSlope, "shortest", {
+      ...weatherCtx,
+      checkTemp: true,
+      checkPressure: false,
+    });
+    const pressureOnlyPath = this.runAStar(startIdx, goalIdx, clampedSlope, "shortest", {
+      ...weatherCtx,
+      checkTemp: false,
+      checkPressure: true,
+    });
+
+    let blockedReason: RouteBlockedReason = "combined";
+    if (!tempOnlyPath && pressureOnlyPath) {
+      blockedReason = "temperature";
+    } else if (tempOnlyPath && !pressureOnlyPath) {
+      blockedReason = "pressure";
+    }
+
+    const rawMaxTempK = this.findMaxFeasibleNodeValue(
+      startIdx,
+      goalIdx,
+      clampedSlope,
+      weatherCtx.cellTempK,
+    );
+    const rawMaxPressPa = this.findMaxFeasibleNodeValue(
+      startIdx,
+      goalIdx,
+      clampedSlope,
+      weatherCtx.cellPressurePa,
+    );
+
+    const maxFeasibleMinTempC =
+      rawMaxTempK !== null ? Math.floor(kelvinToCelsius(rawMaxTempK) * 100) / 100 : undefined;
+    const maxFeasibleMinPressurePa =
+      rawMaxPressPa !== null ? Math.floor(rawMaxPressPa * 100) / 100 : undefined;
+
+    const lmstLabel = weatherFilter.lmstLabel ?? this.formatLmstClock(weatherFilter.lmstHour);
+    let message = `No route passes weather constraints at ${lmstLabel}.`;
+    if (blockedReason === "temperature" && maxFeasibleMinTempC !== undefined) {
+      message = `No route stays above ${weatherFilter.minAirTempC.toFixed(1)} C at ${lmstLabel}. Warmest corridor drops to ${maxFeasibleMinTempC.toFixed(1)} C.`;
+    } else if (blockedReason === "pressure" && maxFeasibleMinPressurePa !== undefined) {
+      message = `No route stays above ${weatherFilter.minPressurePa.toFixed(0)} Pa at ${lmstLabel}. Highest-pressure corridor drops to ${maxFeasibleMinPressurePa.toFixed(1)} Pa.`;
+    } else if (maxFeasibleMinTempC !== undefined && maxFeasibleMinPressurePa !== undefined) {
+      message = `No route meets ${weatherFilter.minAirTempC.toFixed(1)} C and ${weatherFilter.minPressurePa.toFixed(0)} Pa at ${lmstLabel}. Corridor limits: ${maxFeasibleMinTempC.toFixed(1)} C, ${maxFeasibleMinPressurePa.toFixed(1)} Pa.`;
+    }
+
+    return {
+      status: "unreachable",
+      blockedReason,
+      message,
+      maxSlopeDeg: clampedSlope,
+      maxFeasibleMinTempC,
+      maxFeasibleMinPressurePa,
+      ...weatherMeta,
+      passableEdgeRatio,
+      snappedA,
+      snappedB,
+      routes: [],
+    };
+  }
+
+  /** Build candidate routes from waypointA to waypointB constrained by maxSlopeDeg and optional weather. */
+  planRoutes(
+    waypointA: MarsCoord,
+    waypointB: MarsCoord,
+    maxSlopeDeg: number,
+    weatherFilter?: TerrainWeatherFilter,
+  ): RoutePlanResponse {
     const clampedSlope = Math.max(0.5, Math.min(89, maxSlopeDeg));
     const passableEdgeRatio = this.computePassableEdgeRatio(clampedSlope);
     const widthKm = Math.round(this.meta.widthMeters / 100) / 10;
     const heightKm = Math.round(this.meta.heightMeters / 100) / 10;
+    const weatherMeta = weatherFilter
+      ? {
+          weatherApplied: true,
+          appliedLmstHour: Math.round(weatherFilter.lmstHour * 100) / 100,
+          minTempFilterC: Math.round(weatherFilter.minAirTempC * 100) / 100,
+          minPressureFilterPa: Math.round(weatherFilter.minPressurePa * 100) / 100,
+        }
+      : {};
 
     if (!this.isInsideBounds(waypointA) || !this.isInsideBounds(waypointB)) {
       return {
         status: "out_of_bounds",
         message: `Place both Waypoint A and Waypoint B inside the ${widthKm}x${heightKm} km terrain bounds.`,
         maxSlopeDeg: clampedSlope,
+        ...weatherMeta,
         passableEdgeRatio,
         routes: [],
       };
@@ -603,6 +982,7 @@ export class TerrainGraph {
         status: "out_of_bounds",
         message: "Waypoints fell on missing elevation pixels.",
         maxSlopeDeg: clampedSlope,
+        ...weatherMeta,
         passableEdgeRatio,
         routes: [],
       };
@@ -617,35 +997,70 @@ export class TerrainGraph {
       elevationM: Math.round((this.elevations[goalIdx] ?? 0) * 100) / 100,
     };
 
-    const shortestPath = this.runAStar(startIdx, goalIdx, clampedSlope, "shortest");
+    const weatherCtx = weatherFilter ? this.buildWeatherContext(weatherFilter) : undefined;
+
+    const shortestPath = this.runAStar(startIdx, goalIdx, clampedSlope, "shortest", weatherCtx);
     if (!shortestPath) {
-      const minRequired = this.findMinRequiredSlope(startIdx, goalIdx);
-      return {
-        status: "unreachable",
-        message:
-          minRequired !== null
-            ? `No graph route under ${clampedSlope.toFixed(1)} deg. Minimum required slope: ${minRequired.toFixed(1)} deg.`
-            : "No connected graph path between Waypoint A and Waypoint B.",
-        maxSlopeDeg: clampedSlope,
-        minRequiredSlopeDeg: minRequired ?? undefined,
+      return this.diagnoseUnreachable(
+        startIdx,
+        goalIdx,
+        clampedSlope,
         passableEdgeRatio,
         snappedA,
         snappedB,
-        routes: [],
-      };
+        weatherFilter,
+        weatherCtx,
+      );
     }
 
     const routes: ComputedRoute[] = [
-      this.buildRouteSummary("route-shortest", "SHORTEST SAFE", "shortest", shortestPath),
+      this.buildRouteSummary(
+        "route-shortest",
+        "SHORTEST SAFE",
+        "shortest",
+        shortestPath,
+        weatherCtx,
+      ),
     ];
     const discoveredPaths: number[][] = [shortestPath];
 
-    const gentlestPath = this.runAStar(startIdx, goalIdx, clampedSlope, "gentlest");
+    const gentlestPath = this.runAStar(startIdx, goalIdx, clampedSlope, "gentlest", weatherCtx);
     if (gentlestPath && this.overlapRatio(gentlestPath, shortestPath) < 0.9) {
       routes.push(
-        this.buildRouteSummary("route-gentlest", "LOWEST SLOPE", "gentlest", gentlestPath),
+        this.buildRouteSummary(
+          "route-gentlest",
+          "LOWEST SLOPE",
+          "gentlest",
+          gentlestPath,
+          weatherCtx,
+        ),
       );
       discoveredPaths.push(gentlestPath);
+    }
+
+    if (weatherCtx && weatherCtx.thermalWeight > 0) {
+      const weatherSafePath = this.runAStar(
+        startIdx,
+        goalIdx,
+        clampedSlope,
+        "weather-safe",
+        weatherCtx,
+      );
+      if (
+        weatherSafePath &&
+        discoveredPaths.every((existing) => this.overlapRatio(weatherSafePath, existing) < 0.88)
+      ) {
+        routes.push(
+          this.buildRouteSummary(
+            "route-weather-safe",
+            "THERMAL SAFE",
+            "weather-safe",
+            weatherSafePath,
+            weatherCtx,
+          ),
+        );
+        discoveredPaths.push(weatherSafePath);
+      }
     }
 
     // Penalize cells near existing routes to discover a distinct alternate corridor
@@ -671,19 +1086,26 @@ export class TerrainGraph {
       }
     }
 
-    const alternatePath = this.runAStar(startIdx, goalIdx, clampedSlope, "alternate");
+    const alternatePath = this.runAStar(startIdx, goalIdx, clampedSlope, "alternate", weatherCtx);
     if (
       alternatePath &&
       discoveredPaths.every((existing) => this.overlapRatio(alternatePath, existing) < 0.85)
     ) {
       routes.push(
-        this.buildRouteSummary("route-alternate", "ALT CORRIDOR", "alternate", alternatePath),
+        this.buildRouteSummary(
+          "route-alternate",
+          "ALT CORRIDOR",
+          "alternate",
+          alternatePath,
+          weatherCtx,
+        ),
       );
     }
 
     return {
       status: "ok",
       maxSlopeDeg: clampedSlope,
+      ...weatherMeta,
       passableEdgeRatio,
       snappedA,
       snappedB,

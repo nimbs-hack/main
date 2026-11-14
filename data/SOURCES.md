@@ -34,3 +34,25 @@ All datasets used by this app are listed here. Raw files and caches stay in `dat
 - **Projection:** Mars (2015) Sphere / Ocentric / Equirectangular (`R = 3396190 m`, `clon = 0`)
 - **License:** CC0-1.0 / Public domain
 - **Fetch script:** `scripts/data/fetch-site.ts` (reads COG byte ranges via HTTP Range requests)
+
+## Planetary geologic map symbols (`geologic-symbols-qgis` / FGDC)
+
+- **Name:** QGIS Geologic Symbols Library (`src/xml/fgdc/*.xml`, `src/gsymblib-svg/symbols/fgdc/*.svg`)
+- **Standard:** FGDC-STD-013-2006 (Federal Geographic Data Committee Digital Cartographic Standard for Geologic Map Symbolization) and Daven Quinn planetary geology symbology
+- **URL:** `https://github.com/afrigeri/geologic-symbols-qgis`
+- **Scope used:** 31 planetary geology symbols (contacts, faults, ridges, volcanic constructs, impact craters, scarps, surficial features, and sample localities) normalized to `24x24` `currentColor` vectors and grouped into 5 themes
+- **License:** CC0-1.0 Universal (`src/LICENSE.txt`; `collections/` was excluded because it is GPL-3.0)
+- **Extract script:** `scripts/assets/extract-fgdc-symbols.ts` -> `apps/web/src/assets/fgdcSymbols.ts`
+
+## Mars surface meteorology and physics generator
+
+- **Primary live JSON feeds:**
+  - NASA Mars 2020 MEDA RSS (`https://mars.nasa.gov/rss/api/?feed=weather&category=mars2020&feedtype=json`) for Jezero Crater air temperature, pressure, solar longitude, and sunrise/sunset LMST.
+  - NASA MSL REMS RSS (`https://mars.nasa.gov/rss/api/?feed=weather&category=msl&feedtype=json`) for Gale Crater / Mount Sharp meteorology.
+- **PDS archival meteorology (Range-sampled):**
+  - PDS4 Mars 2020 MEDA (`https://atmos.nmsu.edu/PDS/data/PDS4/Mars2020/mars2020_meda/data_derived_env/`, `data_calibrated_env/`).
+  - PDS3 MSL REMS (`https://atmos.nmsu.edu/PDS/data/mslrem_1001/DATA/`).
+- **Probed InSight endpoints (retired mission fallback):**
+  - NASA Open API (`https://api.nasa.gov/insight_weather/?api_key=DEMO_KEY&feedtype=json&ver=1.0`) and JPL InSight RSS (`https://mars.nasa.gov/rss/api/?feed=weather&category=insight&feedtype=json`). Since InSight ceased operations in Dec 2022 (`sol_keys: []`) and `DEMO_KEY` rate-limits at 10 req/hour, probes log status cleanly and trigger MEDA/REMS or generator fallback.
+- **Physics-calibrated generator (`apps/api/src/weather/generator.ts`):** Uses Martian scale height (`10,800 m`), thermal lapse rate (`-0.0025 K/m`), solar longitude eccentricity, and Mars sol length (`88,775.244 s`) to synthesize hourly 24-LMST curves, missing wind/UV/dust channels in `hybrid` mode, and explicit `nominal`, `dust-storm`, and `cold-snap` scenarios flagged with `isSimulated: true`.
+- **Fetch / Cache:** `scripts/data/fetch-weather.ts` writes `data/site-weather.json`; `apps/api/src/weather/service.ts` caches responses under `data/cache/weather/`.

@@ -27,6 +27,7 @@
 
   /* Status */
   --color-ok: #3fb68b;           /* real, healthy status only */
+  --color-warn: #eab308;         /* caution / degraded EVA margin */
 
   /* Type. Fonts are outlined in the SVG export. These are best guesses, confirm in Figma. */
   --font-sans: "Inter", system-ui, sans-serif;
