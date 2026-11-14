@@ -20,7 +20,9 @@ Product decisions (site, science objective, form factor, layer list) live in Not
 
 Product context, research notes, decisions and task assignments live in Notion:
 
-- Notion workspace: `TODO: add link`
+- Notion workspace: [MarsMission Planner](https://app.notion.com/p/417268a7dcb58071b16fcd1393b6bbe4)
+
+The [product scenario](https://app.notion.com/p/417268a7dcb5812695dae148ed16b706) still leaves the first travel profile open between a rover and walking EVA. The astronaut framing above is the intended use case, not a settled implementation choice. Check that decision before adding mobility or resource calculations.
 
 If a Notion MCP server is connected, read the relevant pages before starting a feature. If it isn't, ask the human for the page rather than guessing at product decisions. If Notion and this file disagree, Notion wins for product questions and this file wins for code conventions. Point out the conflict so someone fixes it.
 
@@ -62,6 +64,25 @@ data/            Local raw and processed data. Gitignored. Never commit large fi
 Read [docs/visual-language.md](docs/visual-language.md) before building UI. Tokens are in `apps/web/src/styles/tokens.css`. Use them instead of hardcoded values. If one is missing, add it and mention it in the PR.
 
 Don't add labels, headers, badges or status indicators that carry no information. If the view is obviously the overview, it doesn't need an OVERVIEW title. The visual language doc has the full list of what to leave out.
+
+### Human interaction principles
+
+Use NASA's [Field Guide for Designing Human Interaction With Intelligent Systems](https://ntrs.nasa.gov/api/citations/19980210012/downloads/19980210012.pdf), TM-1998-208470, Thronesbery and Malin, July 1998. This is a design and evaluation method for flight-controller software, not a visual style specification or a certification standard. References below use the paper's printed page numbers, four fewer than the PDF page numbers.
+
+- Start with a user task and a measurable outcome. Identify the decision, the information needed, and what currently makes it difficult before choosing controls. Understand the task, establish useful support, then refine presentation. Sections 2.1 and 3.2-3.4, pp. 2, 6-9.
+- Name the human and software responsibilities. Show what the system is doing, what the user selected, and the effect of each action. Keep evidence available so the user can question a result. Sections 4.2, 4.4-4.5 and 7.2.2.3, pp. 13-16, 31.
+- Preserve user control. Provide a clear way to stop, reject, revise, or recover from automation where that automation exists. Recovery must preserve useful work. Sections 4.5 and 5.2.2, pp. 16, 19-20.
+- Design ordinary and failure scenarios together as the prototype matures. Cover an external data failure, a user mistake, and a software mistake separately before combining them. A warning must help the user decide what to do next. Sections 4.5 and 5.2, pp. 16, 19-21.
+- Work in small iterations that address the largest task risks first. Keep task descriptions only as detailed as the next design decision requires. Use inexpensive prototypes when the interaction is still uncertain. Sections 3.4, 4.10 and 6, pp. 8-9, 18, 22-24.
+- Evaluate task performance with users and domain experts. Check completion, mistakes, hesitation, interpretation, and recovery, not appearance preferences alone. Vary evaluation scenarios and include people outside the design team. Record observations and prioritize the next changes. Sections 2.3 and 7, pp. 3-4, 25-37. Automated tests do not replace this evaluation.
+
+Apply these principles to our map as follows. These are project rules derived from the guide and our product context, not verbatim NASA requirements:
+
+- Keep site selection, current view, data availability, and recovery controls discoverable. Selecting a site must not secretly act as a reset; use a separate global-view action.
+- Distinguish rover history from a proposed expedition. Show source, coverage or resolution limits, and the last recorded sol when known. Never imply that a snapshot is live telemetry.
+- Disclose automatic imagery fallback and visual terrain changes. Shading, smoothed terrain and exaggerated relief cannot establish safe slopes. Missing hazard data means unknown, not safe.
+- For future planning, show the outbound and return legs, constraints, assumptions, and reasons for recommendations or rejection together. Keep inputs editable and make outdated results clear after an input changes.
+- For each UI change, identify a normal scenario and a recovery scenario, check their observable outcomes, and report what still needs a human walkthrough. Keep this proportionate to the change.
 
 ## Mars data
 

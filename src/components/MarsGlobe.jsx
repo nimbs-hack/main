@@ -262,7 +262,9 @@ function CursorReadout({ viewer }) {
       const c = MARS.cartesianToCartographic(hit)
       const lat = CesiumMath.toDegrees(c.latitude)
       const lon = CesiumMath.toDegrees(c.longitude)
-      const elevation = unexaggerate(viewer.scene, c.height) - DATUM_OFFSET
+      // pickGround can fall back to the bare sphere. Never label that as elevation.
+      const terrainHeight = viewer.scene.globe.getHeight(c)
+      const elevation = terrainHeight === undefined ? null : unexaggerate(viewer.scene, terrainHeight) - DATUM_OFFSET
       setCursor({ lat, lon, elevation })
     }, ScreenSpaceEventType.MOUSE_MOVE)
     return () => handler.destroy()
@@ -273,7 +275,7 @@ function CursorReadout({ viewer }) {
       <span className="readout__label">Cursor</span>
       <span className="readout__value">
         {cursor ? formatLatLon(cursor.lat, cursor.lon) : '—'}
-        {cursor?.elevation != null && <span className="readout__sub">{formatElevation(cursor.elevation)}</span>}
+        {cursor && <span className="readout__sub">{cursor.elevation === null ? 'Elevation unavailable' : `${formatElevation(cursor.elevation)} · MOLA areoid`}</span>}
       </span>
     </div>
   )
@@ -297,18 +299,19 @@ function AltitudeReadout({ viewer }) {
 
   return (
     <div className="readout readout--br">
-      <span className="readout__label">Altitude</span>
+      <span className="readout__label">Camera above displayed terrain</span>
       <span className="readout__value">{height === null ? '—' : formatAltitude(height)}</span>
     </div>
   )
 }
 
-export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
+export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, retryKey }) {
   const container = useRef(null)
   const [viewer, setViewer] = useState(null)
   const labels = useRef(null)
   const [relief, setRelief] = useState(RELIEF_STEPS[0])
   const [imagerySource, setImagerySource] = useState('v01')
+  const savedCamera = useRef(null)
 
   // Event handlers registered once read the latest props through refs.
   const onSiteRef = useRef(onSite)
@@ -319,29 +322,36 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
   onImagerySourceRef.current = onImagerySource
 
   useEffect(() => {
-    let failed = false
-    const markFailed = () => {
-      failed = true
-      onStatusRef.current('error')
+    onStatusRef.current({ type: 'reset' })
+    const markFailed = (source) => onStatusRef.current({ type: 'failure', source })
+    let resources
+    try {
+      resources = createViewer(container.current, {
+        onSource: (source) => {
+          setImagerySource(source === 'V01' ? 'v01' : 'beta01')
+          onImagerySourceRef.current(source)
+        },
+        onError: () => markFailed('CTX imagery'),
+      })
+    } catch {
+      markFailed('3D viewer')
+      return
     }
-    const { viewer, imagery, terrain, stopCtx, stopRefinement, stopControls } = createViewer(container.current, {
-      onSource: (source) => {
-        setImagerySource(source === 'V01' ? 'v01' : 'beta01')
-        onImagerySourceRef.current(source)
-      },
-      onError: markFailed,
-    })
+    const { viewer, imagery, terrain, stopCtx, stopRefinement, stopControls } = resources
     labels.current = addSites(viewer)
     const stopRoutes = addRouteOverlay(viewer, ROVERS.map((s) => s.traverse.path),
       cssColor('--color-text').toCssColorString(), cssColor('--color-bg').toCssColorString())
-    const removeImageryError = imagery.errorEvent.addEventListener(markFailed)
-    const removeTerrainError = terrain.errorEvent.addEventListener(markFailed)
+    const removeImageryError = imagery.errorEvent.addEventListener(() => markFailed('Viking imagery'))
+    const removeTerrainError = terrain.errorEvent.addEventListener(() => markFailed('Terrain'))
+    let removeTerrainTileError = () => {}
+    const terrainReady = (provider) => {
+      onStatusRef.current({ type: 'terrain-ready' })
+      removeTerrainTileError = provider.errorEvent.addEventListener(() => markFailed('Terrain'))
+    }
+    const removeTerrainReady = terrain.readyEvent.addEventListener(terrainReady)
+    if (terrain.ready) terrainReady(terrain.provider)
     const removeProgress = viewer.scene.globe.tileLoadProgressEvent.addEventListener((queued) => {
-      if (queued > 0) {
-        onStatusRef.current('loading')
-      } else {
-        onStatusRef.current(failed ? 'error' : 'ready')
-      }
+      onStatusRef.current({ type: 'progress', queued })
     })
 
     let hovered = null
@@ -365,9 +375,15 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
 
     setViewer(viewer)
     return () => {
+      savedCamera.current = {
+        destination: Cartesian3.clone(viewer.camera.positionWC),
+        orientation: { heading: viewer.camera.heading, pitch: viewer.camera.pitch, roll: viewer.camera.roll },
+      }
       removeImageryError()
       stopCtx()
       removeTerrainError()
+      removeTerrainReady()
+      removeTerrainTileError()
       removeProgress()
       stopRefinement()
       stopControls()
@@ -376,7 +392,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
       viewer.destroy()
       setViewer(null)
     }
-  }, [])
+  }, [retryKey])
 
   useEffect(() => {
     if (!viewer) return
@@ -384,7 +400,10 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
       label.pinned = id === site?.id
       label.show = label.pinned
     }
-    if (site) flyToSite(viewer, site)
+    if (savedCamera.current) {
+      viewer.camera.setView(savedCamera.current)
+      savedCamera.current = null
+    } else if (site) flyToSite(viewer, site)
     else flyHome(viewer)
   }, [viewer, site])
 
@@ -412,8 +431,9 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
 
         <CursorReadout viewer={viewer} />
         <div className="readout readout--tr">
-          <span className="readout__label">Target</span>
-          <span className="readout__value">{site ? site.name : 'Global'}</span>
+          <span className="readout__label">Selected site</span>
+          <span className="readout__value">{site ? site.name : 'None selected'}</span>
+          {site && <span className="readout__sub">Route safety not assessed</span>}
         </div>
         <AltitudeReadout viewer={viewer} />
         <NavControls viewer={viewer} />
@@ -430,13 +450,13 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource }) {
           <button
             type="button"
             className="zoom__reset"
-            onClick={() => (site ? onSite(site.id) : viewer && flyHome(viewer))}
+            onClick={() => (site ? onSite(null) : viewer && flyHome(viewer))}
           >
-            Global
+            Global view
           </button>
         </div>
 
-        <SitesPanel site={site} onSite={onSite} />
+        <SitesPanel site={site} onSite={onSite} onLocate={() => viewer && site && flyToSite(viewer, site)} imagerySource={imagerySource === 'v01' ? 'V01' : 'beta01'} relief={relief} />
       </div>
     </main>
   )

@@ -27,6 +27,7 @@
 
   /* Status */
   --color-ok: #3fb68b;           /* real, healthy status only */
+  --color-warning: #e8ba73;      /* missing data and degraded map detail */
 
   /* Type. Fonts are outlined in the SVG export. These are best guesses, confirm in Figma. */
   --font-sans: "Inter", system-ui, sans-serif;
@@ -34,6 +35,7 @@
 
   --text-label: 11px;  /* value labels: uppercase, mono, wide tracking, dim */
   --text-body: 15px;
+  --text-section: 22px; /* task title in the site panel */
   --text-button: 16px;   /* uppercase, sans, bold */
   --text-readout: 28px;  /* mono telemetry values */
   --text-title: 40px;    /* sans, bold */

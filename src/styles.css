@@ -41,7 +41,7 @@ button {
 
 .console {
   display: grid;
-  grid-template: var(--topbar-height) minmax(0, 1fr) var(--statusbar-height) / minmax(0, 1fr);
+  grid-template: var(--topbar-height) minmax(0, 1fr) auto / minmax(0, 1fr);
   height: 100dvh;
 }
 
@@ -193,7 +193,7 @@ button {
 }
 
 .readout__label {
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   font-size: var(--text-label);
   font-family: var(--font-mono);
   text-transform: uppercase;
@@ -338,7 +338,7 @@ button {
   border-right: 1px solid var(--color-line);
   background: var(--color-surface);
   overflow-y: auto;
-  scrollbar-width: none;
+  scrollbar-width: thin;
   pointer-events: auto;
 }
 
@@ -349,6 +349,92 @@ button {
   color: var(--color-text-muted);
   font-size: var(--text-label);
   font-weight: 500;
+}
+
+.sites__heading {
+  margin: 0;
+  font-size: var(--text-section);
+  line-height: 1.25;
+}
+
+.sites__intro,
+.map-context p {
+  margin: var(--space-2) 0 0;
+  color: var(--color-text-muted);
+}
+
+.site-detail,
+.map-context {
+  padding: var(--space-4) 0;
+  border-block: 1px solid var(--color-line);
+}
+
+.site-detail h2 {
+  margin: 0;
+  font-size: var(--text-section);
+}
+
+.site-detail dl,
+.map-context dl {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+}
+
+.site-detail dt,
+.map-context dt {
+  color: var(--color-text-muted);
+  font-size: var(--text-label);
+  font-family: var(--font-mono);
+}
+
+.site-detail dd,
+.map-context dd {
+  margin: var(--space-1) 0 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.site-detail__locate,
+.map-status button {
+  min-height: var(--button-height);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-line-strong);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.site-detail__locate {
+  width: 100%;
+  text-align: left;
+}
+
+.map-legend {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+
+.map-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.map-legend__line {
+  width: var(--space-6);
+  border-top: 2px solid var(--color-text);
+  flex: none;
+}
+
+.map-legend__point {
+  width: var(--space-2);
+  height: var(--space-2);
+  margin-inline: var(--space-2);
+  background: var(--color-text);
+  flex: none;
 }
 
 .sites__toggle {
@@ -425,7 +511,7 @@ button {
 }
 
 .nav-button__meta {
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   font-size: var(--text-label);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
@@ -466,12 +552,39 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 20px;
+  min-height: var(--statusbar-height);
+  padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--color-line);
   background: var(--color-surface);
   color: var(--color-text-muted);
   font-size: var(--text-label);
-  white-space: nowrap;
+  flex-wrap: wrap;
+}
+
+.map-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.map-status--error {
+  color: var(--color-warning);
+}
+
+.map-status__fallback {
+  display: block;
+  color: var(--color-warning);
+}
+
+.map-status button {
+  flex: none;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .statusbar__credit {
@@ -520,7 +633,7 @@ button {
   }
 
   .readout--tl {
-    top: 88px;
+    top: 120px;
     left: 22px;
   }
 
@@ -544,6 +657,13 @@ button {
   /* Leaves room for the longest site name. */
   .nav-button__arrow {
     display: none;
+  }
+
+  .nav-button[aria-pressed='true'] .nav-button__arrow {
+    display: grid;
+    width: var(--space-6);
+    border: 0;
+    background: transparent;
   }
 
   .nav-button {
@@ -570,5 +690,28 @@ button {
 
   .sites__panel {
     padding: var(--space-4);
+  }
+}
+
+/* The open panel owns the left side on small displays. Keep map controls
+   reachable after collapsing it instead of overlapping the panel's content. */
+@media (max-width: 1100px) {
+  .hud:has(.sites.is-open) .zoom,
+  .hud:has(.sites.is-open) .readout--br {
+    visibility: hidden;
+  }
+}
+
+@media (max-width: 700px) {
+  .hud:has(.sites.is-open) .nav,
+  .hud:has(.sites.is-open) .readout--tr {
+    visibility: hidden;
+  }
+
+  .statusbar__credit {
+    width: 100%;
+    margin-left: 0;
+    padding-left: 0;
+    white-space: nowrap;
   }
 }
