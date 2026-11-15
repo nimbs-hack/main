@@ -6,8 +6,9 @@ import type { Draft, Selection } from '../state'
 import { Button, NumberField, Segmented, Select, TextField } from '../components/controls'
 import { FactRow, isOpen, Row } from './parts'
 
-const NOBODY = 'Nobody yet'
 const WHERE = ['eva', 'inside'] as const
+// The mission file counts the people on a task after the first in four bits.
+const MOST_ON_A_TASK = 16
 
 export function SitesStep({
   catalog,
@@ -127,19 +128,11 @@ export function SitesStep({
                       </div>
                       <div className="fields fields--2">
                         <Select
-                          label="Who"
-                          value={task.crew === null ? NOBODY : crewNames[task.crew]!}
-                          options={[NOBODY, ...crewNames]}
-                          onChange={(name) => set('crew', name === NOBODY ? null : crewNames.indexOf(name))}
-                        />
-                        <Select
                           label="Phase"
                           value={phaseNames[task.phase]!}
                           options={phaseNames}
                           onChange={(name) => set('phase', phaseNames.indexOf(name))}
                         />
-                      </div>
-                      <div className="fields fields--2">
                         <Segmented
                           label="Where"
                           value={task.eva ? 'eva' : 'inside'}
@@ -147,8 +140,38 @@ export function SitesStep({
                           format={(option) => (option === 'eva' ? 'EVA' : 'Inside')}
                           onChange={(v) => set('eva', v === 'eva')}
                         />
-                        <TextField label="Note" value={task.note} maxLength={31} onChange={(v) => set('note', v)} />
                       </div>
+                      {/* Everyone pressed is on the task, and each works its whole length. */}
+                      <div className="field" role="group" aria-label="Who">
+                        <span className="label" title="Each person works the task's whole length">
+                          {task.crew.length === 0 ? 'Who: nobody yet' : 'Who'}
+                        </span>
+                        <div className="field__buttons">
+                          {crewNames.map((name, member) => {
+                            const on = task.crew.includes(member)
+                            const full = !on && task.crew.length >= MOST_ON_A_TASK
+                            return (
+                              <Button
+                                key={member}
+                                aria-pressed={on}
+                                disabled={full}
+                                title={full ? `A task takes up to ${MOST_ON_A_TASK} people` : undefined}
+                                onClick={() =>
+                                  set(
+                                    'crew',
+                                    on
+                                      ? task.crew.filter((other) => other !== member)
+                                      : [...task.crew, member].sort((a, b) => a - b),
+                                  )
+                                }
+                              >
+                                {name}
+                              </Button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                      <TextField label="Note" value={task.note} maxLength={31} onChange={(v) => set('note', v)} />
                       <Button className="button--remove" onClick={() => onRemoveTask(index)}>
                         Remove task {n + 1}
                       </Button>

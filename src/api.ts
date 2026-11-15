@@ -34,10 +34,12 @@ export interface Site {
 }
 
 // `site`, `phase` and `crew` are positions in the mission's lists, from zero.
+// `crew` is everyone on the task, in crew order, and empty while nobody is.
+// Each of them works the task's hours.
 export interface Task {
   site: number
   phase: number
-  crew: number | null
+  crew: number[]
   kind: string
   eva: boolean
   hours: number

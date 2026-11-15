@@ -85,7 +85,7 @@ Coordinates are on the IAU 2000 Mars sphere, the system NASA Trek tiles use, and
 | --- | --- |
 | `site` | Which site: its position in the list from 0, or its name |
 | `phase` | Which phase: its position in the list from 0 |
-| `crew` | Who does it: position or name. Leave out while nobody is assigned |
+| `crew` | Who does it: a list of up to 16 positions or names, or one of them on its own. Each person works the task's hours. Leave out or leave empty while nobody is assigned |
 | `kind` | `sample`, `survey`, `deploy`, `repair`, `image`, `drill`, `transfer`, `other` |
 | `hours` | Length, in steps of half an hour, up to 127.5 |
 | `eva` | `true` if done outside in a suit. Default `true` |
@@ -175,12 +175,12 @@ One file holds the mission type, the margin, every crew profile, every phase, ev
 | 7 + n each | Crew member: sex, role and activity in one byte, age, mass in 0.1 kg, height in cm, EVA share in percent, name |
 | 4 + overrides each | Phase: kind, days, a mask of parameters that differ from the preset, then only those values |
 | 9 + n each | Site: latitude and longitude as 32-bit integers in millionths of a degree, name |
-| 6 + n each | Task: site, phase, crew member, EVA flag and kind in one byte, half hours, note |
+| 6 + n each | Task: site, phase, first crew member, one byte with the EVA flag, the kind and how many more crew members follow, half hours, note. Each crew member after the first adds a byte |
 | 2 | CRC-16/CCITT-FALSE over everything before it |
 
 A phase that matches its preset costs four bytes. The exact bit layout is at the top of `codec.go`.
 
-This is format version 2. Version 1 had no sites or tasks, and the reader refuses it by name.
+This is format version 3, which lets a task have more than one crew member. A version 2 file has the same layout with at most one, and is still read. Version 1 had no sites or tasks, and the reader refuses it by name.
 
 Values are stored at fixed resolution (mass to 0.1 kg, power to 10 W, recovery to 1%). `ParseMission` snaps input to that resolution first, so both ends of the link plan from identical numbers.
 

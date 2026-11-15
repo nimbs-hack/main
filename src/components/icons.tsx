@@ -4,7 +4,6 @@ import type { StepId } from '../state'
 // One line icon per stage, drawn like the ones on the plan panel's rail.
 const STAGE: Record<StepId, ReactNode> = {
   home: <path d="M4 11.5 12 4l8 7.5M6 10v10h12V10M10 20v-6h4v6" />,
-  mission: <path d="M6 21V4m0 1h11l-2.5 4L17 13H6" />,
   crew: (
     <>
       <circle cx="9" cy="8" r="3" />
@@ -20,6 +19,22 @@ export function StageIcon({ id }: { id: StepId }) {
   return (
     <svg className="plan__icon" viewBox="0 0 24 24" aria-hidden="true">
       {STAGE[id]}
+    </svg>
+  )
+}
+
+// Small marks for buttons that have no words.
+const MARK = {
+  undo: 'M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11',
+  redo: 'm15 14 5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13',
+  down: 'm6 9 6 6 6-6',
+  up: 'm6 15 6-6 6 6',
+}
+
+export function Mark({ id }: { id: keyof typeof MARK }) {
+  return (
+    <svg className="plan__icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d={MARK[id]} />
     </svg>
   )
 }

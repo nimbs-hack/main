@@ -8,7 +8,6 @@ export type Draft = Mission
 // The stages of making a mission, in the order they are done. Each is a page.
 export const STEPS = [
   { id: 'home', label: 'Home' },
-  { id: 'mission', label: 'Mission' },
   { id: 'crew', label: 'Crew' },
   { id: 'phases', label: 'Phases' },
   { id: 'sites', label: 'Sites' },
@@ -22,16 +21,27 @@ export const stepFromHash = (): StepId => STEPS.find((entry) => `#${entry.id}` =
 export type Selection = { list: 'crew' | 'phase' | 'site'; index: number } | null
 
 // Which step a validation message belongs to, from how createMission words it.
-export function stepOfProblem(message: string): StepId {
+// Null is the mission's own name, type or margin, which the top bar edits.
+export function stepOfProblem(message: string): StepId | null {
   if (/^(site|task)/.test(message) || message.includes('in the sites twice')) return 'sites'
   if (message.startsWith('phase') || message.includes('needs a list of phases')) return 'phases'
   if (/^(crew|roster|"|no ")/.test(message)) return 'crew'
-  return 'mission'
+  return null
 }
 
+// What a mission is called before it is given a name.
+export const UNNAMED = 'Unnamed mission'
+
+// The type a new mission starts as.
+export const DEFAULT_TYPE = 'mars-long-stay'
+
+// Earlier versions kept one mission in progress here. It is now a file in
+// the library like any other.
 const DRAFT_KEY = 'nimbs:planner:draft'
 const ROSTER_KEY = 'nimbs:planner:roster'
 const LIBRARY_KEY = 'nimbs:planner:library'
+const CURRENT_KEY = 'nimbs:planner:current'
+const PHOTOS_KEY = 'nimbs:planner:photos'
 
 function stored(key: string): unknown {
   try {
@@ -42,15 +52,35 @@ function stored(key: string): unknown {
   }
 }
 
-export function store(key: 'draft' | 'roster' | 'library', value: unknown): void {
+// False when the browser did not keep the value.
+export function store(key: 'roster' | 'library' | 'current' | 'photos', value: unknown): boolean {
   // A number field being retyped is NaN, which JSON turns into null. A roster
   // saved like that would lose the person on the next start, so wait.
-  if (key === 'roster' && /:null[,}]/.test(JSON.stringify(value))) return
+  if (key === 'roster' && /:null[,}]/.test(JSON.stringify(value))) return false
   try {
-    localStorage.setItem({ draft: DRAFT_KEY, roster: ROSTER_KEY, library: LIBRARY_KEY }[key], JSON.stringify(value))
+    localStorage.setItem(
+      { roster: ROSTER_KEY, library: LIBRARY_KEY, current: CURRENT_KEY, photos: PHOTOS_KEY }[key],
+      JSON.stringify(value),
+    )
+    // Once the library is written, the old draft has its place in it.
+    if (key === 'library') localStorage.removeItem(DRAFT_KEY)
+    return true
   } catch {
     // Storage can be blocked or full. The editor still works for this session.
+    return false
   }
+}
+
+// Photos added on the crew page, as image data, by call sign in lower case.
+// They stay in this browser: the mission file has no room for them.
+export type Photos = Record<string, string>
+
+export const photoKey = (name: string): string => name.trim().toLowerCase()
+
+export function loadPhotos(): Photos {
+  const saved = stored(PHOTOS_KEY)
+  if (typeof saved !== 'object' || saved === null) return {}
+  return Object.fromEntries(Object.entries(saved).filter(([, url]) => typeof url === 'string'))
 }
 
 const isProfile = (value: unknown): value is Astronaut =>
@@ -66,11 +96,12 @@ export function loadRoster(catalog: Catalog): Astronaut[] {
   return Array.isArray(saved) ? saved.filter(isProfile) : catalog.sampleRoster
 }
 
-// A mission kept on the home page: saved from here, or received as a file.
+// A mission file kept on the home page: made here, or received as a file.
+// The one being edited is saved into its entry after every edit that plans.
 export interface LibraryEntry {
   id: string
   mission: Mission
-  // ISO time it was saved or received.
+  // ISO time it was last saved, or received.
   at: string
   source: 'saved' | 'received'
   // Name of the file it came from, for a received one.
@@ -97,34 +128,41 @@ const isEntry = (value: unknown): value is LibraryEntry => {
   )
 }
 
-export function loadLibrary(): LibraryEntry[] {
+// Undefined before anything was ever kept, which is how a first run is told
+// from a library the user emptied.
+export function loadLibrary(): LibraryEntry[] | undefined {
   const saved = stored(LIBRARY_KEY)
-  return Array.isArray(saved) ? saved.filter(isEntry) : []
+  return Array.isArray(saved) ? saved.filter(isEntry).map(withCrewLists) : undefined
 }
 
-// The library with one more mission, newest first. A mission saved again
-// under the same name, or received again from the same file, replaces the
-// earlier copy.
-export function withEntry(
-  library: LibraryEntry[],
-  mission: Mission,
-  source: LibraryEntry['source'],
-  file?: string,
-): LibraryEntry[] {
-  const twin = (entry: LibraryEntry) =>
-    entry.source === source && entry.mission.name === mission.name && entry.file === file
-  const entry: LibraryEntry = {
-    id: `${Date.now()}-${Math.round(Math.random() * 1e6)}`,
-    mission,
-    at: new Date().toISOString(),
-    source,
-    file,
-  }
-  return [entry, ...library.filter((old) => !twin(old))].slice(0, LIBRARY_LIMIT)
+// A task kept before tasks could have several people has one person or null.
+function withCrewLists(entry: LibraryEntry): LibraryEntry {
+  const tasks = (entry.mission.tasks ?? []).map((task) => {
+    const crew: unknown = task.crew
+    return Array.isArray(crew) ? task : { ...task, crew: typeof crew === 'number' ? [crew] : [] }
+  })
+  return { ...entry, mission: { ...entry.mission, tasks } }
 }
 
-// The draft from the last session, unchecked. The planner decides at start
-// whether it still holds up.
+export const newEntry = (mission: Mission, source: LibraryEntry['source'], file?: string): LibraryEntry => ({
+  id: `${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+  mission,
+  at: new Date().toISOString(),
+  source,
+  file,
+})
+
+// The library with one more mission, newest first.
+export const withEntry = (library: LibraryEntry[], entry: LibraryEntry): LibraryEntry[] =>
+  [entry, ...library].slice(0, LIBRARY_LIMIT)
+
+// The id of the file that was open in the last session.
+export const storedCurrent = (): string | null => {
+  const id = stored(CURRENT_KEY)
+  return typeof id === 'string' ? id : null
+}
+
+// The mission in progress from an earlier version, unchecked.
 export const storedDraft = (): unknown => stored(DRAFT_KEY)
 
 function freeName(taken: string[], prefix: string): string {
@@ -186,10 +224,10 @@ export function createEdits(catalog: Catalog) {
 
     blank: (): Draft => ({
       name: '',
-      type: 'mars-long-stay',
+      type: DEFAULT_TYPE,
       marginPercent: catalog.defaultMarginPercent,
       crew: [newPerson([])],
-      phases: template('mars-long-stay').map((p) => presetPhase(p.kind, p.days)),
+      phases: template(DEFAULT_TYPE).map((p) => presetPhase(p.kind, p.days)),
       sites: [],
       tasks: [],
     }),
@@ -215,14 +253,14 @@ export function createEdits(catalog: Catalog) {
       ...draft,
       crew: replaceAt(draft.crew, index, { ...draft.crew[index]!, ...patch }),
     }),
-    // Their tasks stay, with nobody assigned.
+    // Their tasks stay, with whoever else was on them.
     removeCrew: (draft: Draft, index: number): Draft => ({
       ...draft,
       crew: draft.crew.filter((_, i) => i !== index),
-      tasks: retarget(draft, (task) => {
-        if (task.crew === null || task.crew < index) return task
-        return { ...task, crew: task.crew === index ? null : task.crew - 1 }
-      }),
+      tasks: retarget(draft, (task) => ({
+        ...task,
+        crew: task.crew.filter((member) => member !== index).map((member) => (member > index ? member - 1 : member)),
+      })),
     }),
 
     addPhase: (draft: Draft, kind: string, after: number): Draft => ({
@@ -318,7 +356,7 @@ export function createEdits(catalog: Catalog) {
       const task: Task = {
         site: existing >= 0 ? existing : draft.sites.length,
         phase: Math.max(outside, 0),
-        crew: null,
+        crew: [],
         kind: catalog.taskKinds[0]!,
         eva: true,
         hours,
@@ -333,7 +371,7 @@ export function createEdits(catalog: Catalog) {
       const task: Task = {
         site,
         phase: Math.max(outside, 0),
-        crew: null,
+        crew: [],
         kind: catalog.taskKinds[0]!,
         eva: true,
         hours: 2,
@@ -380,6 +418,12 @@ export function useHistory<T>(initial: () => T) {
   // Replaces the present without adding an undo step.
   const amend = useCallback((present: T) => setState((s) => ({ ...s, present })), [])
 
+  // Starts over from another value, as when another file is opened.
+  const reset = useCallback((present: T) => {
+    last.current = { key: '', time: 0 }
+    setState({ past: [], present, future: [] })
+  }, [])
+
   const undo = useCallback(() => {
     last.current = { key: '', time: 0 }
     setState((s) =>
@@ -408,6 +452,7 @@ export function useHistory<T>(initial: () => T) {
     canRedo: state.future.length > 0,
     commit,
     amend,
+    reset,
     undo,
     redo,
   }

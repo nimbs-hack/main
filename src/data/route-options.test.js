@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { distance } from './geo'
 import { DEFAULT_LIMITS } from './plan'
 import {
   areaStats, buildGrid, findPath, gridSlopes, minRequiredSlope, overlapRatio, routeOptions, sameReason, simplify,
@@ -94,4 +95,16 @@ test('simplify keeps the ends and drops collinear nodes', () => {
   const grid = buildGrid(start, target)
   const straight = Array.from({ length: 41 }, (_, k) => grid.start + k)
   expect(simplify(grid, straight, 0.5)).toEqual([grid.start, grid.target])
+})
+
+test('a leg a quarter of the way around the planet still ends on its target', () => {
+  const far = [30, 60]
+  const grid = buildGrid(start, far)
+  expect(grid.points[grid.target]).toEqual(far)
+  // The node before the target is one cell short of it, along the same line.
+  const before = grid.points[grid.target - 1]
+  expect(distance(before, far) / grid.cell).toBeCloseTo(1, 6)
+  expect((distance(start, before) + distance(before, far)) / distance(start, far)).toBeCloseTo(1, 9)
+  // A node a row to the side is one cell off the line.
+  expect(distance(grid.points[grid.start + grid.cols], start) / grid.cell).toBeCloseTo(1, 6)
 })

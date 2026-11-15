@@ -245,8 +245,12 @@ func FormatPlan(mission Mission, plan Plan, detail bool) string {
 			if task.Note != "" {
 				what += ": " + task.Note
 			}
-			if task.Crew != nil {
-				who = mission.Crew[*task.Crew].Name
+			if len(task.Crew) > 0 {
+				names := make([]string, len(task.Crew))
+				for i, person := range task.Crew {
+					names[i] = mission.Crew[person].Name
+				}
+				who = strings.Join(names, ", ")
 			}
 			if task.EVA {
 				where = "EVA"

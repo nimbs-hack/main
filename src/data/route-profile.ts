@@ -29,9 +29,10 @@ export async function buildProfile(path: LatLon[], options: {
 }): Promise<ProfileSample[]> {
   const stations = resample(path, options.count ?? 160)
   const points = stations.map((s) => s.point)
+  const spacing = stations[1].d - stations[0].d
   const [surface, ...layers] = await Promise.all([
     sampleSurface(options.provider, points, options.level),
-    ...options.rasters.map((source) => sampleRaster(source, points, options.load)),
+    ...options.rasters.map((source) => sampleRaster(source, points, options.load, spacing)),
   ])
   return stations.map((station, i) => ({
     ...station,

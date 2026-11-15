@@ -37,10 +37,22 @@ async function sampleAt(provider: TerrainProvider, level: number, points: LatLon
   })
 }
 
-// Tries a detailed level first, then coarser ones where tiles are missing.
+// The mesh level whose points are about ten times closer together than
+// samples `spacing` meters apart, so a slope read there is the ground's and
+// not the sampling's. Level 14 is about 10 m between mesh points, and each
+// level down doubles that. Samples far apart read a coarse level, so a long
+// route asks for no more tiles than a short one.
+export function levelFor(spacing: number) {
+  return Math.max(0, Math.min(14, Math.round(14 - Math.log2(Math.max(1, spacing / 100)))))
+}
+
+// Tries the level asked for first, then coarser ones where tiles are missing,
+// down to level 8 or six levels under the one asked for. Coarser than that
+// the mesh would be too smooth to stand in for it, and the point stays unknown.
 export async function sampleSurface(provider: TerrainProvider, points: LatLon[], level = 14) {
   let samples = points.map((): SurfaceSample => ({ elevation: null, slope: null }))
-  for (let current = level; current >= 8; current -= 2) {
+  const floor = Math.max(0, Math.min(8, level - 6))
+  for (let current = level; current >= floor; current -= 2) {
     const missing = samples.map((s, i) => (s.elevation === null ? i : -1)).filter((i) => i >= 0)
     if (missing.length === 0) break
     const found = await sampleAt(provider, current, missing.map((i) => points[i])).catch(() => [])

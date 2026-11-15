@@ -2,10 +2,11 @@ import { type ReactNode, Suspense, lazy, useCallback, useEffect, useMemo, useRed
 import MapStatus from './globe/MapStatus.jsx'
 import { INITIAL_MAP_STATUS, mapStatusReducer } from './globe/map-status.ts'
 import { type Astronaut, type Catalog, type Planned, PlannerError, fetchCatalog, fileBytes, requestPlan } from './api'
-import { StageIcon } from './components/icons'
+import { Mark, StageIcon } from './components/icons'
+import { MissionMenu } from './components/MissionMenu'
+import { NewMission } from './components/NewMission'
 import { CrewStep } from './steps/CrewStep'
 import { HomeStep } from './steps/HomeStep'
-import { MissionStep } from './steps/MissionStep'
 import { PhasesStep } from './steps/PhasesStep'
 import { ReviewStep } from './steps/ReviewStep'
 import { download, fileStem, readMissionFile } from './files'
@@ -15,13 +16,16 @@ import {
   type Selection,
   type StepId,
   type LibraryEntry,
+  UNNAMED,
   createEdits,
   loadLibrary,
   loadRoster,
   movedIndex,
+  newEntry,
   stepFromHash,
   stepOfProblem,
   store,
+  storedCurrent,
   storedDraft,
   useHistory,
   withEntry,
@@ -104,7 +108,11 @@ const byRosterOrder = (roster: Astronaut[]) => {
 
 interface Start {
   catalog: Catalog
-  // The mission to open with, already checked and planned.
+  // The mission files kept in this browser.
+  library: LibraryEntry[]
+  // The file to open with, or null to open on Home with none.
+  fileId: string | null
+  // That file's mission, or an empty one, already checked and planned.
   planned: Planned
 }
 
@@ -119,20 +127,39 @@ function withinMargin(saved: unknown, catalog: Catalog): unknown {
   }
 }
 
-// Fetches the planner's catalog, then opens the draft from the last session
-// if the planner still accepts it, or the example mission if not.
+// Asks the planner about a stored mission. Undefined when the planner reads
+// it and refuses it, as it does one from an older version.
+async function planStored(mission: unknown): Promise<Planned | undefined> {
+  try {
+    return await requestPlan(mission)
+  } catch (error) {
+    if (!(error instanceof PlannerError) || error.kind !== 'invalid') throw error
+    return undefined
+  }
+}
+
+// Fetches the planner's catalog and the mission files, then opens the file
+// from the last session if the planner still accepts it.
 async function start(): Promise<Start> {
   const catalog = await fetchCatalog()
-  const saved = withinMargin(storedDraft(), catalog)
-  if (saved !== undefined) {
-    try {
-      return { catalog, planned: await requestPlan(saved) }
-    } catch (error) {
-      if (!(error instanceof PlannerError) || error.kind !== 'invalid') throw error
-      // A draft from an older version, or one saved mid-edit. Use the example.
-    }
+  const kept = loadLibrary()
+  // A first run starts with the example mission as its one file.
+  let library = kept ?? [newEntry(catalog.example, 'saved')]
+  let fileId = storedCurrent()
+
+  // The mission in progress of an earlier version becomes a file, and stays open.
+  const draft = storedDraft()
+  const moved = draft === undefined ? undefined : await planStored(withinMargin(draft, catalog))
+  if (moved) {
+    const entry = newEntry(moved.mission, 'saved')
+    library = withEntry(kept ?? [], entry)
+    fileId = entry.id
   }
-  return { catalog, planned: await requestPlan(catalog.example) }
+
+  const file = library.find((entry) => entry.id === fileId)
+  const planned = moved ?? (file && (await planStored(file.mission)))
+  if (planned) return { catalog, library, fileId, planned }
+  return { catalog, library, fileId: null, planned: await requestPlan(createEdits(catalog).blank()) }
 }
 
 export default function App() {
@@ -151,7 +178,7 @@ export default function App() {
     }
   }, [attempt])
 
-  if (state !== null && typeof state !== 'string') return <Editor catalog={state.catalog} opening={state.planned} />
+  if (state !== null && typeof state !== 'string') return <Editor {...state} />
   return (
     <div className="console console--mission">
       <header className="topbar"></header>
@@ -178,7 +205,7 @@ export default function App() {
 // The planner's answer for one exact draft object.
 type Answer = { draft: Draft; planned: Planned } | { draft: Draft; problem: string }
 
-function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
+function Editor({ catalog, planned: opening, library: kept, fileId: openingId }: Start) {
   const edits = useMemo(() => createEdits(catalog), [catalog])
   const history = useHistory(() => opening.mission)
   const { present: draft } = history
@@ -191,7 +218,13 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
     },
     [history.commit],
   )
-  const [step, setStep] = useState<StepId>(stepFromHash)
+  // The mission files, and the one being edited. With none open only Home shows.
+  const [library, setLibrary] = useState(kept)
+  const [fileId, setFileId] = useState(openingId)
+  const [creating, setCreating] = useState(false)
+  useEffect(() => void store('library', library), [library])
+  useEffect(() => void store('current', fileId), [fileId])
+  const [step, setStep] = useState<StepId>(() => (openingId === null ? 'home' : stepFromHash()))
   const [selection, setSelection] = useState<Selection>(null)
   const [roster, setRoster] = useState(() => loadRoster(catalog))
   const [fileProblem, setFileProblem] = useState<string | null>(null)
@@ -247,27 +280,53 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
   const shown = lastGood.current
   const stale = problem !== null || offline !== null
 
+  // Every edit the planner accepts is saved into the open file.
   useEffect(() => {
-    if (valid) store('draft', valid.mission)
+    if (!valid) return
+    setLibrary((entries) => {
+      const file = entries.find((entry) => entry.id === fileId)
+      if (!file || same(file.mission, valid.mission)) return entries
+      const saved = { ...file, mission: valid.mission, at: new Date().toISOString() }
+      return entries.map((entry) => (entry === file ? saved : entry))
+    })
   }, [valid])
 
+  // Shows a file's mission for editing. Undo starts over: it never crosses
+  // from one file into another.
+  const openFile = (entry: LibraryEntry, stage: StepId) => {
+    history.reset(entry.mission)
+    setFileId(entry.id)
+    setSelection(null)
+    setNotice(null)
+    setFileProblem(null)
+    location.hash = stage
+    setStep(stage)
+  }
+  const addFile = (entry: LibraryEntry, stage: StepId) => {
+    setLibrary((entries) => withEntry(entries, entry))
+    openFile(entry, stage)
+  }
+
   // The stage lives in the address. Tabs and buttons change the address, and
-  // the page follows it, so back and forward move between stages.
-  useEffect(() => {
-    const onHash = () => setStep(stepFromHash())
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
-  }, [])
+  // the page follows it, so back and forward move between stages. A stage
+  // other than Home needs a file, so going to one with none open makes one.
   const goTo = (next: StepId) => {
+    if (next !== 'home' && fileId === null) return addFile(newEntry({ ...edits.blank(), name: UNNAMED }, 'saved'), next)
     location.hash = next
     setStep(next)
   }
+  const follow = useRef(goTo)
+  follow.current = goTo
+  useEffect(() => {
+    // With no file open the page is Home, whatever stage the address named.
+    if (openingId === null) window.history.replaceState(null, '', '#home')
+    const onHash = () => follow.current(stepFromHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
   // The map pages that have been opened. They stay mounted from then on.
   const opened = useRef(new Set<StepId>())
   opened.current.add(step)
-  const stepIndex = STEPS.findIndex((entry) => entry.id === step)
-  const next = STEPS[stepIndex + 1]
-  const previous = STEPS[stepIndex - 1]
   const problemStep = problem ? stepOfProblem(problem) : null
   const cautionCount = valid?.cautions.length ?? 0
 
@@ -276,55 +335,31 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
     store('roster', entries)
   }
 
-  // Missions saved from here or received as files, listed on the home page.
-  const [library, setLibrary] = useState(loadLibrary)
-  const updateLibrary = (entries: LibraryEntry[]) => {
-    setLibrary(entries)
-    store('library', entries)
-  }
-
   const open = async (file: File | undefined) => {
     if (!file) return
     try {
-      const mission = await readMissionFile(file, roster)
-      updateLibrary(withEntry(library, mission, 'received', file.name))
-      commit(() => mission)
-      setSelection(null)
-      setFileProblem(null)
-      goTo('review')
-      setNotice(`Opened ${file.name}. The mission you had before is one Undo away.`)
+      addFile(newEntry(await readMissionFile(file, roster), 'received', file.name), 'review')
     } catch (error) {
       if (!(error instanceof PlannerError)) throw error
       setFileProblem(`Could not open ${file.name}: ${error.message}`)
     }
   }
 
-  // Saving writes the mission file and keeps a copy on the home page.
+  // The file is already kept here. Saving writes it out to send or store.
   const save = () => {
-    if (!valid) return
-    download(`${fileStem(valid.mission)}.mhr`, fileBytes(valid), 'application/octet-stream')
-    updateLibrary(withEntry(library, valid.mission, 'saved'))
-  }
-
-  const openEntry = (entry: LibraryEntry) => {
-    commit(() => entry.mission)
-    setSelection(null)
-    goTo('mission')
-    setNotice(`Opened ${entry.mission.name || 'the mission'}. The mission you had before is one Undo away.`)
+    if (valid) download(`${fileStem(valid.mission)}.mhr`, fileBytes(valid), 'application/octet-stream')
   }
   const exportJson = () => {
     if (valid) download(`${fileStem(valid.mission)}.json`, JSON.stringify(valid.mission, null, 2), 'application/json')
   }
 
-  const startNew = () => {
-    commit(() => edits.blank())
+  const remove = (entry: LibraryEntry) => {
+    setLibrary((entries) => entries.filter((other) => other.id !== entry.id))
+    if (entry.id !== fileId) return
+    history.reset(edits.blank())
+    setFileId(null)
     setSelection(null)
-    goTo('mission')
-    setNotice(
-      'Started a new mission with one crew member and the Mars long stay phases. The mission you had before is one Undo away.',
-    )
-    // Put the cursor where the first thing to do is.
-    requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.page input')?.focus())
+    setNotice(null)
   }
 
   // Latest handlers for the key listener, which is attached once.
@@ -332,8 +367,11 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
   keys.current = { save, undo: history.undo, redo: history.redo }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return
-      const key = e.key.toLowerCase()
+      // The new mission dialog has fields of its own, not part of any mission.
+      if (!(e.ctrlKey || e.metaKey) || document.querySelector('dialog[open]')) return
+      // The letter typed, or on a keyboard layout without Latin letters, the
+      // key in that letter's place.
+      const key = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : e.code.replace(/^Key/, '').toLowerCase()
       if (key === 'z' && e.shiftKey) keys.current.redo()
       else if (key === 'z') keys.current.undo()
       else if (key === 'y') keys.current.redo()
@@ -368,7 +406,7 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
     const person = draft.crew[i]!
     if (keep)
       updateRoster([...roster.filter((entry) => entry.name !== person.name), person].sort(byRosterOrder(roster)))
-    const orphaned = draft.tasks.filter((task) => task.crew === i).length
+    const orphaned = draft.tasks.filter((task) => task.crew.length === 1 && task.crew[0] === i).length
     structural(
       (d) => edits.removeCrew(d, i),
       selection?.list === 'crew' ? null : selection,
@@ -386,18 +424,6 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
     <main className="page" onBlur={settle}>
       <div className="page__column">
         {children}
-        <div className="page__next">
-          {previous && (
-            <button type="button" className="plan__button" onClick={() => goTo(previous.id)}>
-              Back
-            </button>
-          )}
-          {next && (
-            <button type="button" className="plan__button page__forward" onClick={() => goTo(next.id)}>
-              Next: {next.label}
-            </button>
-          )}
-        </div>
       </div>
     </main>
   )
@@ -435,32 +461,51 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
             )
           })}
         </nav>
-        <div className="topbar__meta">
-          <span className="topbar__item">
-            Mission <b>{draft.name || 'Unnamed'}</b>
-          </span>
-          <button
-            type="button"
-            className="topbar__action"
-            disabled={!history.canUndo}
-            onClick={history.undo}
-            title="Ctrl+Z"
-          >
-            Undo
-          </button>
-          <button
-            type="button"
-            className="topbar__action"
-            disabled={!history.canRedo}
-            onClick={history.redo}
-            title="Ctrl+Shift+Z"
-          >
-            Redo
-          </button>
-          <button type="button" className="topbar__action" disabled={!valid} onClick={save} title="Ctrl+S">
-            Save
-          </button>
-        </div>
+        {fileId !== null && (
+          <div className="topbar__meta">
+            <MissionMenu
+              catalog={catalog}
+              draft={draft}
+              flag={problem !== null && problemStep === null}
+              onName={(name) => commit((d) => ({ ...d, name }), 'name')}
+              onType={(type) => {
+                const loaded = edits.setType(draft, type).phases
+                structural(
+                  (d) => edits.setType(d, type),
+                  null,
+                  loaded === draft.phases
+                    ? undefined
+                    : `Phases replaced with the ${count(loaded.length, 'default')} for this type. Tasks kept their phase number where it still exists.`,
+                )
+              }}
+              onMargin={(marginPercent) => commit((d) => ({ ...d, marginPercent }), 'margin')}
+              onSettle={settle}
+            />
+            <button
+              type="button"
+              className="topbar__action topbar__action--icon"
+              disabled={!history.canUndo}
+              onClick={history.undo}
+              aria-label="Undo"
+              title="Undo (Ctrl+Z)"
+            >
+              <Mark id="undo" />
+            </button>
+            <button
+              type="button"
+              className="topbar__action topbar__action--icon"
+              disabled={!history.canRedo}
+              onClick={history.redo}
+              aria-label="Redo"
+              title="Redo (Ctrl+Shift+Z)"
+            >
+              <Mark id="redo" />
+            </button>
+            <button type="button" className="topbar__action" disabled={!valid} onClick={save} title="Ctrl+S">
+              Save
+            </button>
+          </div>
+        )}
         <input
           ref={fileInput}
           type="file"
@@ -511,8 +556,8 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
           <p className="problem" role="alert">
             <b>Cannot plan yet</b>
             {plainWords(problem)}.
-            {problemStep !== step && (
-              <button type="button" onClick={() => goTo(problemStep!)}>
+            {problemStep !== null && problemStep !== step && (
+              <button type="button" onClick={() => goTo(problemStep)}>
                 Go to {STEPS.find((entry) => entry.id === problemStep)!.label}
               </button>
             )}
@@ -523,38 +568,24 @@ function Editor({ catalog, opening }: { catalog: Catalog; opening: Planned }) {
       {step === 'home' &&
         column(
           <HomeStep
-            draft={draft}
             library={library}
-            onContinue={() => goTo('mission')}
-            onOpen={openEntry}
-            onDelete={(entry) => updateLibrary(library.filter((other) => other.id !== entry.id))}
+            currentId={fileId}
+            onOpen={openFile}
+            onDelete={remove}
             onOpenFile={() => fileInput.current?.click()}
-            onNew={startNew}
+            onNew={() => setCreating(true)}
           />,
         )}
-
-      {step === 'mission' &&
-        column(
-          <MissionStep
-            catalog={catalog}
-            draft={draft}
-            status={problem ? 'Cannot plan yet' : cautionCount > 0 ? count(cautionCount, 'caution') : 'Nothing to fix'}
-            days={shown.plan.days}
-            onGoTo={goTo}
-            onName={(name) => commit((d) => ({ ...d, name }), 'name')}
-            onType={(type) => {
-              const loaded = edits.setType(draft, type).phases
-              structural(
-                (d) => edits.setType(d, type),
-                null,
-                loaded === draft.phases
-                  ? undefined
-                  : `Phases replaced with the ${count(loaded.length, 'default')} for this type. Tasks kept their phase number where it still exists.`,
-              )
-            }}
-            onMargin={(marginPercent) => commit((d) => ({ ...d, marginPercent }), 'margin')}
-          />,
-        )}
+      {creating && (
+        <NewMission
+          catalog={catalog}
+          onCancel={() => setCreating(false)}
+          onCreate={(name, type, marginPercent) => {
+            setCreating(false)
+            addFile(newEntry(edits.setType({ ...edits.blank(), name: name || UNNAMED, marginPercent }, type), 'saved'), 'crew')
+          }}
+        />
+      )}
 
       {step === 'crew' &&
         column(

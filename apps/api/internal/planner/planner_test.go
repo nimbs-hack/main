@@ -291,10 +291,28 @@ func withTasks(tasks ...object) object {
 
 func TestTaskNamesResolveToPositions(t *testing.T) {
 	mission := parse(t, withTasks(object{"site": "B", "phase": 0, "crew": "TWO", "kind": "drill", "hours": 2.2}))
-	one := 1
-	want := []Task{{Site: 1, Phase: 0, Crew: &one, Kind: "drill", EVA: true, Hours: 2, Note: ""}}
+	want := []Task{{Site: 1, Phase: 0, Crew: []int{1}, Kind: "drill", EVA: true, Hours: 2, Note: ""}}
 	if !reflect.DeepEqual(mission.Tasks, want) {
 		t.Errorf("tasks = %+v", mission.Tasks)
+	}
+}
+
+func TestATaskCanHaveSeveralPeopleAndEachWorksItsHours(t *testing.T) {
+	mission := parse(t, withTasks(
+		object{"site": 0, "phase": 0, "crew": []any{"TWO", 0}, "kind": "sample", "hours": 4},
+		object{"site": 0, "phase": 0, "crew": []any{}, "kind": "image", "hours": 6},
+	))
+	if !reflect.DeepEqual(mission.Tasks[0].Crew, []int{0, 1}) || len(mission.Tasks[1].Crew) != 0 {
+		t.Errorf("crew = %v, %v", mission.Tasks[0].Crew, mission.Tasks[1].Crew)
+	}
+	plan := PlanMission(mission)
+	if plan.Crew[0].TaskHours.EVA != 4 || plan.Crew[1].TaskHours.EVA != 4 || plan.UnassignedTaskHours != 6 {
+		t.Errorf("task hours = %+v, %+v, unassigned %v", plan.Crew[0].TaskHours, plan.Crew[1].TaskHours, plan.UnassignedTaskHours)
+	}
+
+	_, err := ParseMission(js(t, withTasks(object{"site": 0, "phase": 0, "crew": []any{0, "TEST"}, "kind": "sample", "hours": 4})), nil)
+	if err == nil || !strings.Contains(err.Error(), "task 1 crew lists the same person twice") {
+		t.Errorf("the same person twice: %v", err)
 	}
 }
 

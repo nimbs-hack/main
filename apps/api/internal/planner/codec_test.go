@@ -123,12 +123,45 @@ func TestASiteCostsNineBytesPlusItsNameATaskSixPlusItsNote(t *testing.T) {
 	base := len(encode(t, mission))
 	mission.Sites = []Site{{"A", -4.5895, 137.4417}}
 	withSite := len(encode(t, mission))
-	two := 2
-	mission.Tasks = []Task{{Site: 0, Phase: 1, Crew: &two, Kind: "sample", EVA: true, Hours: 3}}
+	mission.Tasks = []Task{{Site: 0, Phase: 1, Crew: []int{2}, Kind: "sample", EVA: true, Hours: 3}}
 	withTask := len(encode(t, mission))
 	if withSite-base != 9+1 || withTask-withSite != 6 {
 		t.Errorf("site adds %d bytes, task adds %d", withSite-base, withTask-withSite)
 	}
+}
+
+func TestEachCrewMemberAfterTheFirstCostsATaskOneByte(t *testing.T) {
+	mission := bare(t)
+	mission.Sites = []Site{{"A", 1, 2}}
+	mission.Tasks = []Task{{Site: 0, Phase: 1, Crew: []int{2}, Kind: "sample", EVA: true, Hours: 3}}
+	alone := len(encode(t, mission))
+	mission.Tasks[0].Crew = []int{0, 2, 3}
+	file := encode(t, mission)
+	decoded, err := DecodeMission(file)
+	if err != nil || !reflect.DeepEqual(decoded.Tasks, mission.Tasks) {
+		t.Errorf("tasks = %+v, %v", decoded.Tasks, err)
+	}
+	if len(file)-alone != 2 {
+		t.Errorf("two more people add %d bytes", len(file)-alone)
+	}
+}
+
+func TestAVersionTwoFileIsStillRead(t *testing.T) {
+	mission := example(t, "ares-3.json")
+	old := encode(t, mission)
+	old[6] = 2<<4 | old[6]&0x0f
+	decoded, err := DecodeMission(resealed(old))
+	if err != nil || !reflect.DeepEqual(decoded, mission) {
+		t.Errorf("a version 2 file decoded differently (err %v)", err)
+	}
+
+	// Version 2 kept the bits that now count crew members at zero.
+	shared := bare(t)
+	shared.Sites = []Site{{"A", 1, 2}}
+	shared.Tasks = []Task{{Site: 0, Phase: 0, Crew: []int{0, 1}, Kind: "sample", EVA: true, Hours: 3}}
+	mixed := encode(t, shared)
+	mixed[6] = 2<<4 | mixed[6]&0x0f
+	refused(t, resealed(mixed), "reserved task bits are set")
 }
 
 func TestCoordinatesKeepTheirSignAndSixDecimals(t *testing.T) {
@@ -144,7 +177,7 @@ func TestCoordinatesKeepTheirSignAndSixDecimals(t *testing.T) {
 func TestAnUnassignedInsideTaskSurvives(t *testing.T) {
 	mission := bare(t)
 	mission.Sites = []Site{{"A", 1, 2}}
-	mission.Tasks = []Task{{Site: 0, Phase: 0, Kind: "other", EVA: false, Hours: 127.5, Note: "inventory"}}
+	mission.Tasks = []Task{{Site: 0, Phase: 0, Crew: []int{}, Kind: "other", EVA: false, Hours: 127.5, Note: "inventory"}}
 	decoded, err := DecodeMission(encode(t, mission))
 	if err != nil || !reflect.DeepEqual(decoded.Tasks, mission.Tasks) {
 		t.Errorf("tasks = %+v, %v", decoded.Tasks, err)
@@ -213,12 +246,12 @@ func TestDamagedOrForeignFilesAreRefused(t *testing.T) {
 	refused(t, damaged, "checksum mismatch, the file is damaged")
 
 	newer := fresh()
-	newer[6] = 3<<4 | newer[6]&0x0f
-	refused(t, resealed(newer), "format version 3, this reader knows version 2")
+	newer[6] = 4<<4 | newer[6]&0x0f
+	refused(t, resealed(newer), "format version 4, this reader knows versions 2 to 3")
 
 	older := fresh()
 	older[6] = 1<<4 | older[6]&0x0f
-	refused(t, resealed(older), "format version 1, this reader knows version 2")
+	refused(t, resealed(older), "format version 1, this reader knows versions 2 to 3")
 
 	morePhases := fresh()
 	morePhases[9] = 4

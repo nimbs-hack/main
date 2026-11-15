@@ -1,3 +1,4 @@
+import { MARS_RADIUS } from './geo'
 import type { LatLon } from './geo'
 import type { ScienceRaster } from './science-types'
 
@@ -77,8 +78,13 @@ export function tileUrl(source: ScienceRaster, level: number, x: number, y: numb
   return source.url.replace('{z}', String(level)).replace('{y}', String(y)).replace('{x}', String(x))
 }
 
-export async function sampleRaster(source: ScienceRaster, points: LatLon[], load: TileLoader = loadTile) {
-  const level = source.maxLevel
+// `spacing` is the distance in meters between the points, when they lie on a
+// line or a grid. Points far apart read the first level whose pixels are no
+// larger than the gap between them, so a long route loads a handful of tiles
+// and not every tile it crosses. Without it the deepest level is read.
+export async function sampleRaster(source: ScienceRaster, points: LatLon[], load: TileLoader = loadTile, spacing = 0) {
+  const pixelAtLevel0 = (2 * Math.PI * MARS_RADIUS) / (2 * source.tileSize)
+  const level = Math.min(source.maxLevel, Math.max(0, Math.ceil(Math.log2(pixelAtLevel0 / Math.max(spacing, 1)))))
   return Promise.all(points.map(async (point) => {
     const { x, y, px, py } = tileFor(point, level, source.tileSize)
     const pixels = await load(tileUrl(source, level, x, y))

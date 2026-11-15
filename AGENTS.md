@@ -16,7 +16,7 @@ Judges will look for these things, so keep them in mind when deciding what to bu
 
 Product decisions (site, science objective, form factor, layer list) live in Notion, not here. See [Context](#context).
 
-This branch holds the mission planner with the map app as one of its stages. A mission is made on five pages: Mission, Crew, Phases, Sites and Review. Sites is the map from `stiven/nasa-ui-principles`, with EVA route planning, map tools and science layers. An EVA assessed there becomes a site and a task in the mission, and the planner works out what the crew needs.
+This branch holds the mission planner with the map app as one of its stages. Home lists the mission files. A mission is made on four pages: Crew, Phases, Sites and Review. Its name, type and margin are edited in the top bar. Sites is the map from `stiven/nasa-ui-principles`, with EVA route planning, map tools and science layers. An EVA assessed there becomes a site and a task in the mission, and the planner works out what the crew needs.
 
 ## Context
 

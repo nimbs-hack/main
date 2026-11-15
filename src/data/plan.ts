@@ -2,6 +2,7 @@ import { cumulative, distance } from './geo'
 import type { LatLon } from './geo'
 import { slopeLevel } from './route-profile'
 import type { ProfileSample } from './route-profile'
+import { SLOPE_BASELINE } from './terrain-sample'
 
 // An EVA plan: walk from start through the waypoints to the target, work
 // there, then walk the same path back. Coordinates are planetocentric
@@ -211,6 +212,12 @@ export function assess(samples: ProfileSample[], path: LatLon[], limits: Limits,
   }
   if (maxFromStart > limits.range) {
     reasons.push({ level: 'no-go', text: `${meters(maxFromStart)} from start, walk-back limit ${meters(limits.range)}` })
+  }
+  // Each sample measures slope over a short baseline. Farther apart than
+  // that, the ground between two samples is not measured at all.
+  const spacing = samples.length > 1 ? samples[1].d - samples[0].d : 0
+  if (spacing > 2 * SLOPE_BASELINE) {
+    reasons.push({ level: 'caution', text: `Slope checked every ${meters(spacing)}. Ground between is unknown` })
   }
   for (const leg of legs) {
     if (leg.over === 0 && leg.caution > 0) reasons.push({ level: 'caution', text: `Leg ${leg.index}: ${meters(leg.caution)} within 5° of limit` })

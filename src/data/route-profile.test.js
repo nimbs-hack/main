@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 import { bearing, distance, offset, resample, tail } from './geo'
-import { pixelValue, rampPosition, tileFor } from './raster-sample'
+import { pixelValue, rampPosition, sampleRaster, tileFor } from './raster-sample'
 import { guidance, slopeLevel, summarize, waypoints } from './route-profile'
-import { slopeFromNeighbors } from './terrain-sample'
+import { levelFor, slopeFromNeighbors } from './terrain-sample'
 
 test('distances and bearings use the Mars sphere', () => {
   // One degree of latitude on a 3,396,190 m sphere.
@@ -70,4 +70,22 @@ test('guidance points at the next waypoint and the steepest slope ahead', () => 
   expect(g.slopeAhead).toBe(22)
   expect(g.heading).toBeCloseTo(90, 3)
   expect(g.remaining).toBe(340)
+})
+
+test('samples far apart read coarser terrain and raster levels', async () => {
+  expect(levelFor(100)).toBe(14)
+  expect(levelFor(3200)).toBe(9)
+  expect(levelFor(12_800)).toBe(7)
+  expect(levelFor(1e9)).toBe(0)
+
+  const source = { url: '{z}/{y}/{x}', maxLevel: 9, tileSize: 256, legend: { colors: ['#000000', '#ffffff'] } }
+  const levels = async (spacing) => {
+    const seen = new Set()
+    await sampleRaster(source, [[0, 0], [0, 40]], async (url) => { seen.add(url.split('/')[0]); return null }, spacing)
+    return [...seen]
+  }
+  expect(await levels(0)).toEqual(['9'])
+  expect(await levels(100)).toEqual(['9'])
+  // A level 2 pixel is 10.4 km across, the first no larger than 11.5 km.
+  expect(await levels(11_500)).toEqual(['2'])
 })

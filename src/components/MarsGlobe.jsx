@@ -42,7 +42,7 @@ import { formatDistance } from './RouteProfile'
 import LayerSwitcher from './LayerSwitcher'
 import MapTools, { ToolButtons } from './MapTools'
 import { sampleRaster } from '../data/raster-sample'
-import { sampleSurface } from '../data/terrain-sample'
+import { levelFor, sampleSurface } from '../data/terrain-sample'
 import SciencePanel from './SciencePanel'
 import RouteProfile from './RouteProfile'
 import PointReadout from './PointReadout'
@@ -94,19 +94,14 @@ function loadPlan() {
 }
 
 // Terrain and night IR on a grid between two points, for the route search.
-// The mesh is read at a level about ten times finer than a grid cell, so the
-// slope measured at each node is the ground's and not the grid's. Level 14
-// is about 10 m between mesh points, and each level down doubles that.
-function gridLevel(cell) {
-  return Math.max(9, Math.min(14, Math.round(14 - Math.log2(Math.max(1, cell / 100)))))
-}
-
+// Both are read at a level that fits the size of a grid cell, so a leg of
+// any length costs about the same number of tiles.
 async function sampleRouteField(provider, from, to) {
   const grid = buildGrid(from, to)
   const night = SAMPLED_RASTERS.find((layer) => layer.id === 'themis-night')
   const [surface, thermal] = await Promise.all([
-    sampleSurface(provider, grid.points, gridLevel(grid.cell)),
-    night ? sampleRaster(night, grid.points) : grid.points.map(() => null),
+    sampleSurface(provider, grid.points, levelFor(grid.cell)),
+    night ? sampleRaster(night, grid.points, undefined, grid.cell) : grid.points.map(() => null),
   ])
   const elevation = surface.map((s) => s.elevation)
   if (!elevation.some((e) => e !== null)) return null
@@ -930,7 +925,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       provider: terrainProvider,
       rasters: SAMPLED_RASTERS,
       count: 200,
-      level: length > 20_000 ? 12 : 15,
+      level: length > 20_000 ? Math.min(12, levelFor(length / 200)) : 15,
     }).then((samples) => {
       if (cancelled) return
       const known = samples.some((s) => s.elevation !== null)

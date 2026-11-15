@@ -1,4 +1,4 @@
-import { bearing, distance, offset } from './geo'
+import { MARS_RADIUS, distance } from './geo'
 import type { LatLon } from './geo'
 import { stepTime } from './plan'
 import type { Limits } from './plan'
@@ -35,23 +35,51 @@ export type Grid = {
   target: number
 }
 
-// Nodes on a grid aligned with the start-to-target line. Offsets are flat
-// east and north meters, fine for routes of a few tens of kilometers.
+type Vector = [number, number, number]
+// Radians in a degree.
+const DEGREE = Math.PI / 180
+const toVector = ([lat, lon]: LatLon): Vector => [
+  Math.cos(lat * DEGREE) * Math.cos(lon * DEGREE),
+  Math.cos(lat * DEGREE) * Math.sin(lon * DEGREE),
+  Math.sin(lat * DEGREE),
+]
+const cross = (a: Vector, b: Vector): Vector => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+const size = (a: Vector) => Math.hypot(a[0], a[1], a[2])
+// `a` times `ka` plus `b` times `kb`.
+const mix = (a: Vector, ka: number, b: Vector, kb: number): Vector => [a[0] * ka + b[0] * kb, a[1] * ka + b[1] * kb, a[2] * ka + b[2] * kb]
+
+// Nodes on a grid aligned with the start-to-target line, laid out on the
+// sphere so a leg of any length ends on its target. Columns are steps along
+// the great circle through both points. Rows are steps to either side of it.
+// Rows off the middle are a little shorter than `cell`, by 6% at the edge of
+// a leg a quarter of the way around the planet.
 export function buildGrid(start: LatLon, target: LatLon): Grid {
   const length = Math.max(1, distance(start, target))
   const cell = length / ALONG
-  const heading = bearing(start, target) * Math.PI / 180
+  const from = toVector(start)
+  // The pole of that great circle, to the left of the way to the target.
+  // Two points in one place, or opposite each other, have none: head north.
+  let pole = cross(from, toVector(target))
+  if (size(pole) < 1e-9) pole = cross(from, [0, 0, 1])
+  if (size(pole) < 1e-9) pole = [0, 1, 0]
+  pole = mix(pole, 1 / size(pole), pole, 0)
+  const ahead = cross(pole, from)
   const cols = ALONG + 2 * MARGIN + 1
   const rows = 2 * HALF_WIDTH + 1
   const points: LatLon[] = []
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const u = (c - MARGIN) * cell
-      const v = (r - HALF_WIDTH) * cell
-      points.push(offset(start, u * Math.cos(heading) - v * Math.sin(heading), u * Math.sin(heading) + v * Math.cos(heading)))
+      const u = ((c - MARGIN) * cell) / MARS_RADIUS
+      const v = ((r - HALF_WIDTH) * cell) / MARS_RADIUS
+      const onLine = mix(from, Math.cos(u), ahead, Math.sin(u))
+      const [x, y, z] = mix(onLine, Math.cos(v), pole, -Math.sin(v))
+      points.push([Math.asin(Math.max(-1, Math.min(1, z))) / DEGREE, Math.atan2(y, x) / DEGREE])
     }
   }
   const startIndex = HALF_WIDTH * cols + MARGIN
+  // The two ends are nodes, so a path joins them without a last short hop.
+  points[startIndex] = start
+  points[startIndex + ALONG] = target
   return { cols, rows, cell, points, start: startIndex, target: startIndex + ALONG }
 }
 

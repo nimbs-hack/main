@@ -215,21 +215,24 @@ func PlanMission(mission Mission) Plan {
 	planned := map[slot]float64{}
 	var order []slot
 	for _, task := range mission.Tasks {
-		if task.Crew == nil {
+		if len(task.Crew) == 0 {
 			plan.UnassignedTaskHours += task.Hours
 			continue
 		}
-		hours := &plan.Crew[*task.Crew].TaskHours
-		if !task.EVA {
-			hours.Inside += task.Hours
-			continue
+		// Everyone on a task works its full length.
+		for _, person := range task.Crew {
+			hours := &plan.Crew[person].TaskHours
+			if !task.EVA {
+				hours.Inside += task.Hours
+				continue
+			}
+			hours.EVA += task.Hours
+			key := slot{person, task.Phase}
+			if _, seen := planned[key]; !seen {
+				order = append(order, key)
+			}
+			planned[key] += task.Hours
 		}
-		hours.EVA += task.Hours
-		key := slot{*task.Crew, task.Phase}
-		if _, seen := planned[key]; !seen {
-			order = append(order, key)
-		}
-		planned[key] += task.Hours
 	}
 	for _, key := range order {
 		phase := mission.Phases[key.phase]

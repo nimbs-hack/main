@@ -5,7 +5,7 @@ Plans what a crew needs for a mission: food energy and nutrients, water, oxygen 
 It has three parts:
 
 - The planner, in Go, in `apps/api/internal/planner`. It has a command line and an HTTP API. Its [README](apps/api/internal/planner/README.md) covers the model, the mission file format, the sources of every rate and the limits.
-- The editor, in React and TypeScript, in `src`. It opens on Home, which lists the missions saved here or received as files. A mission is then made in five stages, each its own page with a tab in the top bar: Mission, Crew, Phases, Sites and Review. Sites is the 3D Mars map with EVA route planning, map tools and science layers.
+- The editor, in React and TypeScript, in `src`. It opens on Home, which lists the mission files kept in this browser. A mission is then made in four stages, each its own page with a tab in the top bar: Crew, Phases, Sites and Review. Sites is the 3D Mars map with EVA route planning, map tools and science layers.
 - The API server, in Go, in `apps/api`. It serves the planner and proxies and caches the globe's imagery and terrain tiles.
 
 Everything the planner reports is a planning estimate built from published NASA rates.
@@ -52,22 +52,23 @@ Typecheck runs `tsc` on the editor and compiles the Go packages. Lint runs `go v
 
 ## Making a mission
 
-The app opens on Home. **Open mission file** reads a `.mhr` or JSON file, **New mission** starts an empty one, and every mission saved here or received as a file is listed with an **Open** button. **Next** at the bottom of a page goes to the next stage, and the tabs in the top bar go to any of them. The address keeps the stage, so reload and the back button work.
+The app opens on Home. **Open mission file** reads a `.mhr` or JSON file, and **New mission** asks for a name, a type and a margin on supplies, then makes the file. The tabs in the top bar go to any stage. Going to a stage with no file open makes one called Unnamed mission. The address keeps the stage, so reload and the back button work.
+
+The open mission is in the top bar on the right. Its name is typed in place, and the arrow beside it opens the type and the margin on supplies. The two arrows after it are undo and redo, also Ctrl+Z and Ctrl+Shift+Z.
 
 | Stage | What you do |
 | --- | --- |
-| Home | The mission in progress, then saved and received missions, newest first. Saving a mission file keeps a copy here. Opening a file adds it as received. The list lives in this browser and holds 50 missions. |
-| Mission | Name it, pick the type, set the margin on supplies. The type fills in the phases. The second card says what the mission holds and links to each stage. |
-| Crew | One list of people. **Select** puts someone on the crew, and those on it are outlined in red. The arrow opens a person's information to read or edit. **+** beside the title adds a new person. A portrait shows when `src/assets/crew` has a file named after the call sign. |
+| Home | Every mission file, newest first, each with its sites joined by straight lines over CTX imagery. A row opens to what the mission holds, with a line for each stage, **Edit** and **Delete**. The file being edited is outlined. A first run starts with the example mission. The list lives in this browser and holds 50 missions. |
+| Crew | People as tiles: a portrait, the call sign, then two buttons. **Select** puts someone on the crew, and those on it are outlined in red. The arrow opens a person's information under their row to read or edit. Search narrows the tiles by call sign or role. **+** beside the title adds a new person. A portrait shows when `src/assets/crew` has a file named after the call sign. **Add photo** in a person's information puts your own picture on their tile, cut to a square. Added photos stay in this browser and are not in the mission file. |
 | Phases | Set each phase's length, recycling, EVA hours and power. Drag a phase by its grip to reorder. A changed value turns blue and offers the preset back. |
-| Sites | The first tab of the left panel holds the mission's points. **Add points** and click the map once for each; open a point to name it and give it tasks. The points are the EVA route, in list order. **Method** on the Route tab picks how each leg is found: Fast, Flat, Thermal or Detour search the terrain for a path under the slope limit, and Straight lines does no search. While the route is worked out, grey lines join the points and the map and the panel both say Routing. Then the panel gives a go or no-go verdict. Drag a numbered pin to move its point. Points more than 100 km apart in total are not routed. **Add EVA to mission** gives the last point one EVA task as long as the travel and the work. |
+| Sites | The first tab of the left panel holds the mission's points. **Add points** and click the map once for each; open a point to name it and give it tasks. Under **Who**, press each person who works on a task; everyone pressed works its whole length. The points are the EVA route, in list order. **Method** on the Route tab picks how each leg is found: Fast, Flat, Thermal or Detour search the terrain for a path under the slope limit, and Straight lines does no search. While the route is worked out, grey lines join the points and the map and the panel both say Routing. Then the panel gives a go or no-go verdict. Drag a numbered pin to move its point. Points any distance apart are routed. The farther apart they are, the coarser the terrain the route is checked against, and past 120 m between checks the verdict says how far apart they are and stays at caution or worse. **Add EVA to mission** gives the last point one EVA task as long as the travel and the work. |
 | Review | The only page with results: cautions, totals, loads on the vehicle, tables by phase, by site with distances, and by crew, with the mission's sites on the planet beside them. Save the mission file here. |
 
 A stage with a problem in it is marked **Fix** on its tab. The Review tab shows how many cautions are waiting.
 
 ### How the stages fit together
 
-One mission is shared by every page, with one undo history. Results are worked out after every edit and shown on Review. An EVA assessed on the Sites map becomes a task, and its hours are checked against the EVA hours of its phase, so a route that is too long shows up as a caution in Review. The task note carries the route's verdict, distance and steepest slope. Review lists the sites with the same point-to-point distances the Sites page shows.
+One mission is shared by every page, with one undo history, which starts over when another file is opened. Every edit the planner accepts is saved into the open file. Results are worked out after every edit and shown on Review. An EVA assessed on the Sites map becomes a task, and its hours are checked against the EVA hours of its phase, so a route that is too long shows up as a caution in Review. The task note carries the route's verdict, distance and steepest slope. Review lists the sites with the same point-to-point distances the Sites page shows.
 
 ## The globe
 
@@ -96,7 +97,7 @@ The search comes from the `alghorims` branch (`apps/api/src/terrain/engine.ts` t
 | Thermal | Ground that reads cold in night infrared. Offered only where night infrared varies |
 | Detour | A corridor away from the routes already found |
 
-Each leg between two mission points gets its own grid of 61 by 29 nodes laid along the leg. A step is impassable when it is steeper than the limit, or when the ground measured at the node it leads to is. When no path exists under the limit, the leg is drawn straight, the verdict is no-go, and it names the lowest limit that would work.
+Each leg between two mission points gets its own grid of 61 by 29 nodes laid along the great circle between them. Terrain and night IR are read at a tile level that fits the size of a grid cell, so a leg of any length asks for about the same number of tiles. A step is impassable when it is steeper than the limit, or when the ground measured at the node it leads to is. When no path exists under the limit, the leg is drawn straight, the verdict is no-go, and it names the lowest limit that would work.
 
 Travel time is that branch's model too: distance at the flat speed, plus height gained at the climb rate, plus height lost at the descent rate. The limit presets include its two, Human in an EVA suit (7°, 2.5 km/h, 350 m/h up, 800 m/h down, 4 h) and Rover (15°, 5 km/h, 700 m/h up, 1,200 m/h down, 8 h). Their work time and walk-back range are assumed here.
 

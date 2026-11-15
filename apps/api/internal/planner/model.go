@@ -198,12 +198,13 @@ type Site struct {
 type Task struct {
 	Site  int `json:"site"`
 	Phase int `json:"phase"`
-	// Who does it. nil while nobody is assigned.
-	Crew *int   `json:"crew"`
+	// Who does it, in crew list order, up to MaxTaskCrew people. Empty while
+	// nobody is assigned.
+	Crew []int  `json:"crew"`
 	Kind string `json:"kind"`
-	// Done outside in a suit. EVA tasks draw on the person's EVA hours.
+	// Done outside in a suit. EVA tasks draw on each person's EVA hours.
 	EVA bool `json:"eva"`
-	// Hours of work for the assigned person, in steps of half an hour.
+	// Hours of work for each assigned person, in steps of half an hour.
 	Hours float64 `json:"hours"`
 	// Printable ASCII, up to 31 characters. May be empty.
 	Note string `json:"note"`
@@ -393,15 +394,39 @@ func (c *checker) task(value any, where string, crew, sites []string, phases int
 		Site:  c.reference(input["site"], sites, true, where+" site"),
 		Phase: c.reference(input["phase"], make([]string, phases), false, where+" phase"),
 	}
-	if input["crew"] != nil {
-		person := c.reference(input["crew"], crew, true, where+" crew")
-		task.Crew = &person
-	}
+	task.Crew = c.taskCrew(input["crew"], crew, where+" crew")
 	task.Kind = c.choice(input["kind"], TaskKinds, where+" kind")
 	task.EVA = eva
 	task.Hours = c.measure(input["hours"], where+" hours", 0.5, 127.5, 1, 2)
 	task.Note = c.text(or(input["note"], ""), where+" note", 0)
 	return task
+}
+
+// MaxTaskCrew is how many people one task can be assigned to. The file keeps
+// the count of those after the first in four bits.
+const MaxTaskCrew = 16
+
+// taskCrew reads who a task is assigned to: nobody, one crew member, as
+// missions written before format version 3 have it, or a list of them.
+func (c *checker) taskCrew(value any, crew []string, where string) []int {
+	people := []int{}
+	switch v := value.(type) {
+	case nil:
+	case []any:
+		for _, entry := range v {
+			people = append(people, c.reference(entry, crew, true, where))
+		}
+	default:
+		people = append(people, c.reference(v, crew, true, where))
+	}
+	if len(people) > MaxTaskCrew {
+		c.failf("%s must list at most %d people; got %d", where, MaxTaskCrew, len(people))
+	}
+	slices.Sort(people)
+	if len(slices.Compact(slices.Clone(people))) != len(people) {
+		c.failf("%s lists the same person twice", where)
+	}
+	return people
 }
 
 // ParseAstronaut validates one profile on its own, for rosters kept outside

@@ -1,14 +1,18 @@
-import { useState } from 'react'
+import { Fragment, useRef, useState } from 'react'
 import type { Astronaut, Catalog, MissionPlan } from '../api'
 import { kcal, num, range, words } from '../numbers'
 import { Button, ConfirmButton, NumberField, Segmented, Select, Slider, TextField } from '../components/controls'
-import { Portrait } from '../components/Portrait'
-import { StageIcon } from '../components/icons'
+import { Portrait, hasPortrait } from '../components/Portrait'
+import { Mark, StageIcon } from '../components/icons'
+import { squarePhoto } from '../files'
+import { type Photos, loadPhotos, photoKey, store } from '../state'
 import { FactRow } from './parts'
 
-// One list of people. Those going on the mission are outlined in the accent
-// colour. The rest wait on the roster, which the browser keeps. A person in
-// both is shown once, as the mission has them.
+// Everyone as a grid of tiles: a portrait, the call sign, then a button that
+// opens their information and one that selects them. Those going on the
+// mission are outlined in the accent colour. The rest wait on the roster,
+// which the browser keeps. A person in both is shown once, as the mission
+// has them. Search narrows the grid by call sign or role.
 export function CrewStep({
   catalog,
   crew,
@@ -36,11 +40,27 @@ export function CrewStep({
 }) {
   // The call sign whose information is open.
   const [open, setOpen] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  // Photos added here. One replaces the file that ships with the app.
+  const [photos, setPhotos] = useState(loadPhotos)
+  const [photoProblem, setPhotoProblem] = useState<string | null>(null)
+  const photoInput = useRef<HTMLInputElement>(null)
+  const keepPhotos = (next: Photos) => {
+    const kept = store('photos', next)
+    if (kept) setPhotos(next)
+    setPhotoProblem(kept ? null : 'This browser has no room left for the photo. Remove another photo first.')
+  }
+  const without = (name: string): Photos => {
+    const { [photoKey(name)]: _, ...rest } = photos
+    return rest
+  }
 
   const people = [
     ...roster.map((person) => crew.find((member) => member.name === person.name) ?? person),
     ...crew.filter((member) => !roster.some((person) => person.name === member.name)),
   ]
+  const wanted = query.trim().toLowerCase()
+  const found = people.filter((person) => `${person.name} ${words(person.role)}`.toLowerCase().includes(wanted))
 
   return (
     <section className="card">
@@ -58,72 +78,114 @@ export function CrewStep({
         </button>
       </h2>
 
-      <ul className="people">
-        {people.map((person) => {
+      <input
+        type="search"
+        className="input"
+        aria-label="Search crew by call sign or role"
+        placeholder="Search call sign or role"
+        spellCheck={false}
+        autoComplete="off"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {found.length === 0 && (
+        <p className="note">
+          Nobody matches "{query.trim()}". <button type="button" onClick={() => setQuery('')}>Show everyone</button>
+        </p>
+      )}
+
+      <ul className="tiles">
+        {found.map((person) => {
           const at = crew.findIndex((member) => member.name === person.name)
           const selected = at >= 0
           const isOpen = open === person.name
           const daily = selected ? plan?.crew[at]?.daily : undefined
           const last = selected && crew.length === 1
+          const photo = photos[photoKey(person.name)]
           const set = <K extends keyof Astronaut>(key: K, value: Astronaut[K]) => {
             const patch = { [key]: value } as Partial<Astronaut>
             if (selected) onUpdate(at, patch, key)
             else onUpdateRoster(person.name, patch)
-            if (key === 'name') setOpen(value as string)
+            if (key !== 'name') return
+            setOpen(value as string)
+            // The photo follows the call sign, unless that one has a photo already.
+            const to = photoKey(value as string)
+            if (photo && to && !(to in photos)) keepPhotos({ ...without(person.name), [to]: photo })
           }
           return (
-            <li key={person.name} className={`person${selected ? ' is-selected' : ''}`}>
-              <div className="person__line">
-                <Portrait name={person.name} />
+            // Keyed by place in the list, so retyping a call sign keeps its field.
+            <Fragment key={people.indexOf(person)}>
+              <li className={`tile${selected ? ' is-selected' : ''}`}>
+                <Portrait name={person.name} photo={photo} />
                 <span className="person__name">{person.name || 'Unnamed'}</span>
-                <button
-                  type="button"
-                  className="button person__more"
-                  aria-expanded={isOpen}
-                  aria-label={`${isOpen ? 'Hide' : 'Show'} information for ${person.name}`}
-                  title="Information"
-                  onClick={() => setOpen(isOpen ? null : person.name)}
-                >
-                  <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <path d={isOpen ? 'm3 10 5-5 5 5' : 'm3 6 5 5 5-5'} />
-                  </svg>
-                </button>
-                {/* The outline says who is going. The last one cannot be taken off. */}
-                <Button
-                  disabled={last}
-                  title={last ? 'A mission needs one crew member' : undefined}
-                  onClick={() => (selected ? onDeselect(at) : onSelect(person))}
-                >
-                  {selected ? 'Deselect' : 'Select'}
-                </Button>
-              </div>
+                <div className="tile__actions">
+                  <button
+                    type="button"
+                    className="button person__more"
+                    aria-expanded={isOpen}
+                    aria-label={`${isOpen ? 'Hide' : 'Show'} information for ${person.name}`}
+                    title="Information"
+                    onClick={() => {
+                      setOpen(isOpen ? null : person.name)
+                      setPhotoProblem(null)
+                    }}
+                  >
+                    <Mark id={isOpen ? 'up' : 'down'} />
+                  </button>
+                  {/* The outline says who is going. The last one cannot be taken off. */}
+                  <Button
+                    disabled={last}
+                    title={last ? 'A mission needs one crew member' : undefined}
+                    onClick={() => (selected ? onDeselect(at) : onSelect(person))}
+                  >
+                    {selected ? 'Deselect' : 'Select'}
+                  </Button>
+                </div>
+              </li>
 
+              {/* Spans the grid, under the row its tile is in. */}
               {isOpen && (
-                <div className="item__body">
-                  <div className="crew-profile">
-                    <Portrait name={person.name} size="large" />
-                    <div className="fields">
-                      <TextField
-                        label="Call sign"
-                        value={person.name}
-                        maxLength={31}
-                        onChange={(v) => set('name', v)}
-                      />
-                      <Segmented
-                        label="Sex"
-                        value={person.sex}
-                        options={catalog.sexes}
-                        onChange={(v) => set('sex', v)}
-                      />
-                      <Select
-                        label="Role"
-                        value={person.role}
-                        options={catalog.roles}
-                        format={words}
-                        onChange={(v) => set('role', v)}
+                <li className="item__body tile__details">
+                  <TextField label="Call sign" value={person.name} maxLength={31} onChange={(v) => set('name', v)} />
+                  <div className="field">
+                    <span className="label">Photo</span>
+                    <div className="field__buttons">
+                      <Button onClick={() => photoInput.current?.click()}>{photo || hasPortrait(person.name) ? 'Change photo' : 'Add photo'}</Button>
+                      {photo && (
+                        <Button variant="quiet" onClick={() => keepPhotos(without(person.name))}>
+                          Remove photo
+                        </Button>
+                      )}
+                      <input
+                        ref={photoInput}
+                        type="file"
+                        accept="image/*"
+                        hidden
+                        onChange={(e) => {
+                          const file = e.target.files?.[0]
+                          e.target.value = ''
+                          if (!file) return
+                          squarePhoto(file).then(
+                            (url) => keepPhotos({ ...photos, [photoKey(person.name)]: url }),
+                            (error: Error) => setPhotoProblem(`${error.message}. Pick a JPEG, PNG or WebP file.`),
+                          )
+                        }}
                       />
                     </div>
                   </div>
+                  {photoProblem && (
+                    <p className="note" role="alert">
+                      {photoProblem}
+                    </p>
+                  )}
+                  <Segmented label="Sex" value={person.sex} options={catalog.sexes} onChange={(v) => set('sex', v)} />
+                  <Select
+                    label="Role"
+                    value={person.role}
+                    options={catalog.roles}
+                    format={words}
+                    onChange={(v) => set('role', v)}
+                  />
                   <NumberField
                     label="Age"
                     value={person.age}
@@ -195,13 +257,14 @@ export function CrewStep({
                       disabled={last}
                       onConfirm={() => {
                         setOpen(null)
+                        if (photo) keepPhotos(without(person.name))
                         onDelete(person.name)
                       }}
                     />
                   </div>
-                </div>
+                </li>
               )}
-            </li>
+            </Fragment>
           )
         })}
       </ul>

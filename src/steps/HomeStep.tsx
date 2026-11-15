@@ -1,17 +1,12 @@
+import { useEffect, useState } from 'react'
+import { PlannerError, requestPlan } from '../api'
 import { Button, ConfirmButton } from '../components/controls'
-import { StageIcon } from '../components/icons'
-import { words } from '../numbers'
-import type { Draft, LibraryEntry } from '../state'
+import { Mark, StageIcon } from '../components/icons'
+import { RouteThumb } from '../components/RouteThumb'
+import { num, words } from '../numbers'
+import { type LibraryEntry, type StepId, UNNAMED } from '../state'
 
-const count = (n: number, thing: string) => `${n} ${thing}${n === 1 ? '' : 's'}`
-
-const contents = (mission: Draft): string =>
-  [
-    words(mission.type),
-    `${mission.crew.length} crew`,
-    count(mission.phases.length, 'phase'),
-    count(mission.sites.length, 'site'),
-  ].join(' · ')
+const count = (n: number, thing: string) => `${num(n)} ${thing}${n === 1 ? '' : 's'}`
 
 // Local date and time, short: 14 Nov 2026, 19:42.
 const when = (iso: string): string =>
@@ -23,25 +18,87 @@ const when = (iso: string): string =>
     minute: '2-digit',
   })
 
-// Where the app starts: the mission in progress, then every mission saved
-// from here or received as a file, newest first. Files are opened here.
+// What a mission holds, one line per stage, and what to do with it. Each
+// line opens the mission on its stage. The planner is asked what Review
+// would say, so a file with cautions shows them before it is opened.
+function Contents({
+  entry,
+  onOpen,
+  onDelete,
+}: {
+  entry: LibraryEntry
+  onOpen: (stage: StepId) => void
+  onDelete: () => void
+}) {
+  const { mission } = entry
+  const [review, setReview] = useState('')
+  useEffect(() => {
+    const controller = new AbortController()
+    requestPlan(mission, undefined, controller.signal).then(
+      ({ cautions }) => setReview(cautions.length > 0 ? count(cautions.length, 'caution') : 'Nothing to fix'),
+      (error: unknown) => {
+        if (controller.signal.aborted) return
+        setReview(error instanceof PlannerError && error.kind === 'invalid' ? 'Cannot plan yet' : 'Planner not answering')
+      },
+    )
+    return () => controller.abort()
+  }, [mission])
+
+  const days = mission.phases.reduce((sum, phase) => sum + phase.days, 0)
+  const lines: Array<[StepId, string, string]> = [
+    ['crew', 'Crew', mission.crew.length === 1 ? '1 person' : `${num(mission.crew.length)} people`],
+    ['phases', 'Phases', `${count(mission.phases.length, 'phase')}, ${num(days)} d`],
+    ['sites', 'Sites', `${count(mission.sites.length, 'site')}, ${count(mission.tasks.length, 'task')}`],
+    ['review', 'Review', review],
+  ]
+  return (
+    <div className="item__body">
+      <ul className="contents">
+        {lines.map(([id, label, value]) => (
+          <li key={id}>
+            <button type="button" onClick={() => onOpen(id)}>
+              <StageIcon id={id} />
+              <span>{label}</span>
+              <output>{value}</output>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="actions">
+        <ConfirmButton
+          label="Delete"
+          confirmLabel="Confirm delete"
+          className="button--remove"
+          aria-label={`Delete ${mission.name || UNNAMED}`}
+          onConfirm={onDelete}
+        />
+        <Button variant="primary" onClick={() => onOpen('crew')}>
+          Edit
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+// Where the app starts: every mission file kept in this browser, newest
+// first, each with its sites on the map. A row opens to what the mission
+// holds. The file being edited is outlined.
 export function HomeStep({
-  draft,
   library,
-  onContinue,
+  currentId,
   onOpen,
   onDelete,
   onOpenFile,
   onNew,
 }: {
-  draft: Draft
   library: LibraryEntry[]
-  onContinue: () => void
-  onOpen: (entry: LibraryEntry) => void
+  currentId: string | null
+  onOpen: (entry: LibraryEntry, stage: StepId) => void
   onDelete: (entry: LibraryEntry) => void
   onOpenFile: () => void
   onNew: () => void
 }) {
+  const [open, setOpen] = useState<string | null>(null)
   return (
     <section className="card">
       <h2 className="card__title">
@@ -56,39 +113,34 @@ export function HomeStep({
       </div>
 
       <ul className="people">
-        <li className="person is-selected">
-          <div className="person__line">
-            <span className="person__who">
-              <span className="person__name">{draft.name || 'Unnamed'}</span>
-              <span className="person__meta">In progress · {contents(draft)}</span>
-            </span>
-            <Button onClick={onContinue}>Continue</Button>
-          </div>
-        </li>
-        {library.map((entry) => (
-          <li key={entry.id} className="person">
-            <div className="person__line">
-              <span className="person__who">
-                <span className="person__name">{entry.mission.name || 'Unnamed'}</span>
-                <span className="person__meta">
-                  {entry.source === 'saved' ? 'Saved' : `Received${entry.file ? ` as ${entry.file}` : ''}`}{' '}
-                  {when(entry.at)} · {contents(entry.mission)}
+        {library.map((entry) => {
+          const isOpen = open === entry.id
+          return (
+            <li key={entry.id} className={`person${entry.id === currentId ? ' is-selected' : ''}`}>
+              <button
+                type="button"
+                className="person__line file"
+                aria-expanded={isOpen}
+                onClick={() => setOpen(isOpen ? null : entry.id)}
+              >
+                <RouteThumb sites={entry.mission.sites} />
+                <span className="person__who">
+                  <span className="person__name">{entry.mission.name || UNNAMED}</span>
+                  <span className="person__meta">
+                    {entry.source === 'saved' ? 'Saved' : `Received${entry.file ? ` as ${entry.file}` : ''}`}{' '}
+                    {when(entry.at)}
+                  </span>
+                  <span className="person__meta">{words(entry.mission.type)}</span>
                 </span>
-              </span>
-              <ConfirmButton
-                label="Delete"
-                confirmLabel="Confirm"
-                aria-label={`Delete ${entry.mission.name || 'unnamed mission'} from this list`}
-                onConfirm={() => onDelete(entry)}
-              />
-              <Button onClick={() => onOpen(entry)}>Open</Button>
-            </div>
-          </li>
-        ))}
+                <Mark id={isOpen ? 'up' : 'down'} />
+              </button>
+              {isOpen && (
+                <Contents entry={entry} onOpen={(stage) => onOpen(entry, stage)} onDelete={() => onDelete(entry)} />
+              )}
+            </li>
+          )
+        })}
       </ul>
-      {library.length === 0 && (
-        <p className="note">Nothing saved or received yet. Save a mission from Review, or open a mission file.</p>
-      )}
     </section>
   )
 }

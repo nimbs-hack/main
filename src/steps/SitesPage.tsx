@@ -6,8 +6,6 @@ import StatusBar from '../components/StatusBar.jsx'
 import { SITES } from '../data/sites.js'
 import type { Draft, Selection } from '../state'
 import { SitesStep } from './SitesStep'
-import { siteLegs, totalLegs } from './legs'
-import { meters } from '../numbers'
 
 // What the map hands over when an assessed EVA is added to the mission.
 interface Eva {
@@ -43,16 +41,12 @@ const MarsGlobe = UntypedGlobe as unknown as ComponentType<{
     onAddSite: (point: [number, number]) => void
     onAddEva: (eva: Eva) => void
     flag: 'caution' | null
-    route: Array<[number, number]> | null
+    route: Array<[number, number]>
     routeNote: string | null
     onMovePoint: (index: number, point: [number, number]) => void
   }
   missionPanel: (hooks: MapHooks) => ReactNode
 }>
-
-// ASSUMED. Far beyond any walk, but short enough to sample terrain along.
-// Past it the points are not routed: the map would fetch hundreds of tiles.
-const LONGEST_ROUTE_M = 100_000
 
 // Tasks are stored in half hours, from 0.5 to 127.5.
 const taskHours = (seconds: number): number => Math.min(127.5, Math.max(0.5, Math.ceil(seconds / 1800) / 2))
@@ -115,23 +109,15 @@ export function SitesPage({
     'Terrain: NASA Mars Trek',
   ]
 
-  // The mission's points are the EVA route, in list order. It is rebuilt only
-  // when a position changes, so renaming a point does not route again.
+  // The mission's points are the EVA route, in list order, however far apart.
+  // It is rebuilt only when a position changes, so renaming a point does not
+  // route again.
   const placed = draft.sites
     .map((entry, index) => ({ entry, index }))
     .filter(({ entry }) => !Number.isNaN(entry.lat + entry.lon))
   const positions = placed.map(({ entry }) => `${entry.lat},${entry.lon}`).join(';')
-  const length = totalLegs(siteLegs(placed.map(({ entry }) => entry)))
-  const route = useMemo(
-    () => (length > LONGEST_ROUTE_M ? null : placed.map(({ entry }): [number, number] => [entry.lat, entry.lon])),
-    [positions],
-  )
-  const routeNote =
-    placed.length < 2
-      ? 'Add two points to route between them'
-      : route === null
-        ? `Points are ${meters(length)} apart. Routes run up to ${meters(LONGEST_ROUTE_M)}`
-        : null
+  const route = useMemo(() => placed.map(({ entry }): [number, number] => [entry.lat, entry.lon]), [positions])
+  const routeNote = placed.length < 2 ? 'Add two points to route between them' : null
 
   const mission = useMemo(
     () => ({

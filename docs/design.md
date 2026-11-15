@@ -58,12 +58,12 @@ The guide's levels: nominal first, then failures of three kinds. Each of these i
 
 **Nominal. A new short-stay mission.**
 
-1. Press New mission. The name field has the cursor.
-2. Type a name. Pick `mars-short-stay`. A message says the phases were replaced.
-3. Next. Rename the starting crew member, correct mass and age. Add one more from the roster.
-4. Next. Open the lander phase and shorten it. The plan bar shows the change.
-5. Next. Add site, click the ground on the globe, name the site. Add two tasks, assign one.
-6. Next. Review shows one caution: a task with nobody assigned.
+1. Press New mission. A dialog opens and the name field has the cursor.
+2. Type a name. Pick `mars-short-stay`. Create. The file is made and the Crew page opens.
+3. Rename the starting crew member, correct mass and age. Add one more from the roster.
+4. Phases tab. Open the lander phase and shorten it. The plan bar shows the change.
+5. Sites tab. Add site, click the ground on the globe, name the site. Add two tasks, assign one.
+6. Review tab. Review shows one caution: a task with nobody assigned.
 7. Save mission file. A 99-byte file is downloaded.
 
 **Off-nominal 1. The plan is out of tolerance.** A task is lengthened until the person's EVA tasks pass the hours the phase gives them. The step row counts a second caution, and Review states the hours on both sides.
@@ -76,7 +76,7 @@ The guide's levels: nominal first, then failures of three kinds. Each of these i
 
 ## Objectives for this prototype
 
-- The five-step flow covers a whole mission.
+- The four-stage flow covers a whole mission.
 - Sites and tasks on the 3D globe, saved in the mission file.
 - The user is told what every edit did to the plan.
 

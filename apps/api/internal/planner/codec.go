@@ -42,15 +42,20 @@ import (
 //	per task
 //	  u8      site, position in the site list
 //	  u8      phase, position in the phase list
-//	  u8      crew member, position in the crew list, 255 = nobody yet
-//	  u8      EVA (bit 7), kind (bits 2-0), other bits zero
+//	  u8      first crew member, position in the crew list, 255 = nobody yet
+//	  u8      EVA (bit 7), crew members after the first (bits 6-3), kind (bits 2-0)
+//	  u8      each crew member after the first, position in the crew list
 //	  u8      hours, in half hours
 //	  text    note
 //	u16       CRC-16/CCITT-FALSE over every byte before it
 //
-// Version 2 added sites and tasks. Version 1 files are not read.
+// Version 2 added sites and tasks. Version 3 lets a task have more than one
+// crew member. A version 2 file reads as a version 3 file whose tasks have at
+// most one, so both are read. Version 1 files are not.
 const (
-	FormatVersion = 2
+	FormatVersion = 3
+	// The oldest version DecodePacket reads.
+	oldestVersion = 2
 	// DefaultAPID is a placeholder. A real mission assigns its own
 	// application process ids.
 	DefaultAPID = 0x2a0
@@ -172,16 +177,19 @@ func EncodeMission(input Mission, options PacketOptions) ([]byte, error) {
 	for _, task := range mission.Tasks {
 		w.u8(task.Site)
 		w.u8(task.Phase)
-		if task.Crew == nil {
-			w.u8(nobody)
-		} else {
-			w.u8(*task.Crew)
+		first, others := nobody, []int(nil)
+		if len(task.Crew) > 0 {
+			first, others = task.Crew[0], task.Crew[1:]
 		}
-		flags := slices.Index(TaskKinds, task.Kind)
+		w.u8(first)
+		flags := slices.Index(TaskKinds, task.Kind) | len(others)<<3
 		if task.EVA {
 			flags |= 1 << 7
 		}
 		w.u8(flags)
+		for _, person := range others {
+			w.u8(person)
+		}
 		w.u8(int(stored(task.Hours, 1, 2)))
 		w.text(task.Note)
 	}
@@ -262,8 +270,9 @@ func DecodePacket(data []byte) (Packet, error) {
 	}
 
 	first := r.u8()
-	if first>>4 != FormatVersion {
-		return refuse("format version %d, this reader knows version %d", first>>4, FormatVersion)
+	version := first >> 4
+	if version < oldestVersion || version > FormatVersion {
+		return refuse("format version %d, this reader knows versions %d to %d", version, oldestVersion, FormatVersion)
 	}
 	var unknown string
 	pick := func(options []string, index int, what string) string {
@@ -328,13 +337,22 @@ func DecodePacket(data []byte) (Packet, error) {
 	tasks := make([]any, taskCount)
 	for i := range tasks {
 		task := map[string]any{"site": float64(r.u8()), "phase": float64(r.u8())}
+		people := []any{}
 		if person := r.u8(); person != nobody {
-			task["crew"] = float64(person)
+			people = append(people, float64(person))
 		}
 		flags := r.u8()
-		if flags&0b0111_1000 != 0 {
+		others := flags >> 3 & 0b1111
+		switch {
+		case version == 2 && others != 0:
 			reserved = "reserved task bits are set"
+		case others != 0 && len(people) == 0:
+			reserved = "a task lists more crew members after nobody"
 		}
+		for range others {
+			people = append(people, float64(r.u8()))
+		}
+		task["crew"] = people
 		task["eva"] = flags>>7 == 1
 		task["kind"] = pick(TaskKinds, flags&0b111, "task kind")
 		task["hours"] = float64(r.u8()) / 2
