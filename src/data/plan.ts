@@ -6,6 +6,7 @@ import { COARSE_DETAIL, detailLabel } from './terrain-detail'
 import type { ProfileSample } from './route-profile'
 import { SLOPE_BASELINE } from './terrain-sample'
 import { formatDuration } from './duration'
+import { SUIT } from './suit'
 
 // An EVA plan: walk from start through the waypoints to the target, work
 // there, then walk the same path back. Coordinates are planetocentric
@@ -273,28 +274,8 @@ export { formatDuration }
 // ESTIMATED suit load, from [V2 11037] and [V2 11038] of NASA-STD-3001 Vol 2:
 // the system has to work out and show the suited crew's metabolic rate. We
 // have no suit telemetry, so this is a planning model, not a measurement.
-//
-// Rate = a flat walking rate plus the work of lifting crew and suit up the
-// climbs. The flat rate is the Apollo lunar EVA average, 234 kcal/h (Waligora
-// and Horrigan, NASA TN D-7883, via NASA TM 1991). Lifting work follows Mars
-// gravity and a muscle efficiency of 25%. Mass is ASSUMED: 80 kg crew plus
-// 90 kg suit and pack, about an Apollo A7LB with its PLSS.
-export const SUIT = {
-  baseW: (234 * 4184) / 3600,
-  massKg: 170,
-  gravity: 3.711,
-  efficiency: 0.25,
-  // Top of the nominal suited range NASA-STD-3001 sizes heat rejection for,
-  // 2220 kJ/h ([V2 11011] rationale).
-  limitW: 2_220_000 / 3600,
-  // BVAD (NASA/TP-2015-218570) Table 3-33 ratio of oxygen to food energy,
-  // and Table 4-75 suit oxygen loss and cooling water per EVA hour.
-  oxygenKgPerJ: 0.816 / 12.59e6,
-  suitOxygenKgPerHour: 0.092,
-  coolingKgPerHour: 0.625,
-  // [V2 11030]: 240 mL of drinking water per EVA hour.
-  drinkKgPerHour: 0.24,
-}
+// The suit's numbers and their sources are in ./suit.
+export { SUIT }
 
 export type SuitLoad = {
   // Watts. Average over the whole EVA, and the highest over one step.

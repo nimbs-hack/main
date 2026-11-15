@@ -21,10 +21,10 @@ export default defineConfig({
       })),
     }),
   ],
-  // Three pages: the planner, the read-only EVA HUD, and the HUD seen from
-  // inside a helmet. The last two load no map code.
+  // Four pages: the planner, the read-only EVA HUD, the HUD seen from inside
+  // a helmet, and the mission viewer. The last three load no map library.
   build: {
-    rolldownOptions: { input: { main: 'index.html', hud: 'hud.html', helmet: 'helmet.html' } },
+    rolldownOptions: { input: { main: 'index.html', hud: 'hud.html', helmet: 'helmet.html', viewer: 'viewer.html' } },
   },
   define: {
     CESIUM_BASE_URL: JSON.stringify(`/${CESIUM_BASE}`),

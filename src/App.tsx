@@ -2,7 +2,7 @@ import { type ReactNode, Suspense, lazy, useCallback, useEffect, useMemo, useRed
 import type { Viewer } from 'cesium'
 import StatusBar from './components/StatusBar.jsx'
 import { INITIAL_MAP_STATUS, mapStatusReducer, mapStatusState } from './globe/map-status.ts'
-import { type Astronaut, type Catalog, type Planned, PlannerError, fetchCatalog, fileBytes, requestPlan } from './api'
+import { type Astronaut, type Catalog, type Planned, PlannerError, fetchCatalog, fileBytes, plainWords, requestPlan } from './api'
 import { Mark, StageIcon } from './components/icons'
 import { MissionMenu } from './components/MissionMenu'
 import { NewMission } from './components/NewMission'
@@ -11,6 +11,7 @@ import { HomeStep } from './steps/HomeStep'
 import { PhasesStep } from './steps/PhasesStep'
 import { ReviewStep } from './steps/ReviewStep'
 import { download, fileStem, readMissionFile } from './files'
+import { clearHandOff, incomingMission } from './handoff'
 import {
   type Draft,
   STEPS,
@@ -77,25 +78,6 @@ function same(a: unknown, b: unknown): boolean {
 // Map positions arrive with fifteen decimals. The file keeps six.
 const degrees = (value: number): number => Math.round(value * 1e6) / 1e6
 
-// The planner names fields the way the file format does. On screen they get
-// the words the form uses.
-const FIELD_WORDS: Array<[RegExp, string]> = [
-  [/\bmassKg\b/, 'mass in kg'],
-  [/\bheightCm\b/, 'height in cm'],
-  [/\bevaShare\b/, 'share of EVA hours, as a fraction'],
-  [/\bmarginPercent\b/, 'margin in percent'],
-  [/\bevaHoursPerWeek\b/, 'EVA hours per person-week'],
-  [/\bwaterRecovery\b/, 'water recycled, as a fraction'],
-  [/\boxygenRecovery\b/, 'oxygen recycled, as a fraction'],
-  [/\bhygieneWaterKg\b/, 'hygiene water in kg'],
-  [/\bbasePowerW\b/, 'vehicle base power in W'],
-  [/\bcrewPowerW\b/, 'power per person in W'],
-  [/\blat\b/, 'latitude'],
-  [/\blon\b/, 'longitude'],
-]
-const plainWords = (message: string): string =>
-  FIELD_WORDS.reduce((text, [field, words]) => text.replace(field, words), message)
-
 const count = (n: number, thing: string) => `${n} ${thing}${n === 1 ? '' : 's'}`
 
 // Keeps people where they were in the roster. Someone new to it goes last.
@@ -154,6 +136,18 @@ async function start(): Promise<Start> {
     const entry = newEntry(moved.mission, 'saved')
     library = withEntry(kept ?? [], entry)
     fileId = entry.id
+  }
+
+  // A mission sent from the viewer's Edit button opens over the last one. One
+  // already in the list is opened again rather than added twice.
+  const incoming = incomingMission()
+  const received = incoming && (await planStored(incoming.mission))
+  if (incoming && received) {
+    const same = JSON.stringify(received.mission)
+    const known = library.find((entry) => JSON.stringify(entry.mission) === same)
+    const entry = known ?? newEntry(received.mission, 'received', incoming.fileName)
+    if (!known) library = withEntry(library, entry)
+    return { catalog, library, fileId: entry.id, planned: received }
   }
 
   const file = library.find((entry) => entry.id === fileId)
@@ -224,6 +218,8 @@ function Editor({ catalog, planned: opening, library: kept, fileId: openingId }:
   const [creating, setCreating] = useState(false)
   useEffect(() => void store('library', library), [library])
   useEffect(() => void store('current', fileId), [fileId])
+  // The viewer's mission is in the list now, so the next start opens it from there.
+  useEffect(() => clearHandOff(), [])
   const [step, setStep] = useState<StepId>(() => (openingId === null ? 'home' : stepFromHash()))
   const [selection, setSelection] = useState<Selection>(null)
   const [roster, setRoster] = useState(() => loadRoster(catalog))
