@@ -104,6 +104,17 @@ function limitTilt(scene) {
   Cartesian3.clone(camera.positionWC, limitRay.origin)
   Cartesian3.clone(camera.directionWC, limitRay.direction)
   const hit = IntersectionTests.rayEllipsoid(limitRay, ellipsoid)
+  // Exaggerated crater floors can sit below the reference sphere. From
+  // inside it, the ray starts at the camera, so orbiting that hit would
+  // normalize a zero-length direction and stop Cesium's render loop.
+  // Limit the angle in place until the camera is above the sphere again.
+  if (hit && hit.start <= CesiumMath.EPSILON6) {
+    const pitch = limit - Math.PI / 2
+    if (camera.pitch > pitch + TILT_SLACK) {
+      camera.setView({ orientation: { heading: camera.heading, pitch, roll: 0 } })
+    }
+    return
+  }
   let pivot
   if (hit) {
     pivot = Ray.getPoint(limitRay, hit.start, limitPivot)

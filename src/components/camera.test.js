@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
-import { MIN_GROUND_CLEARANCE, zoomBy, orbitCenter, tiltLimit } from './camera'
-import { Cartesian3, Ellipsoid } from 'cesium'
+import { MIN_GROUND_CLEARANCE, zoomBy, orbitCenter, setupControls, tiltLimit } from './camera'
+import { Camera, Cartesian3, Ellipsoid, Event, GeographicProjection, Matrix4 } from 'cesium'
 
 test('zoom buttons and tilt changes preserve the minimum ground clearance', () => {
   const ellipsoid = new Ellipsoid(3396190, 3396190, 3396190)
@@ -36,4 +36,51 @@ test('tilt limit shrinks with altitude to straight down from orbit', () => {
   expect(tiltLimit(741_000)).toBeLessThan(tiltLimit(100_000))
   expect(tiltLimit(100_000)).toBeLessThan(tiltLimit(30_000))
   expect(tiltLimit(9_000_000)).toBe(0)
+})
+
+// 3× relief puts some crater floors below the reference sphere. Include
+// its surface and positive heights to cover the return from a crater to orbit.
+test.each([
+  [-4000, 0],
+  [-4000, -Math.PI / 2],
+  [0, 0],
+  [40, 0],
+  [100_000, 0],
+  [9_000_000, 0],
+])('tilt limit keeps a valid camera at height %s and pitch %s', (height, pitch) => {
+  const ellipsoid = new Ellipsoid(3396190, 3396190, 3396190)
+  const scene = {
+    ellipsoid,
+    mapProjection: new GeographicProjection(ellipsoid),
+    drawingBufferWidth: 1440,
+    drawingBufferHeight: 900,
+    preUpdate: new Event(),
+    screenSpaceCameraController: { enableInputs: true },
+  }
+  const camera = new Camera(scene)
+  scene.camera = camera
+  const destination = Cartesian3.fromDegrees(137.4, -4.6, height, ellipsoid)
+  const heading = 1.2
+  camera.setView({ destination, orientation: { heading, pitch, roll: 0 } })
+  const stop = setupControls({
+    scene,
+    screenSpaceEventHandler: { removeInputAction() {}, setInputAction() {} },
+  })
+  try {
+    expect(() => scene.preUpdate.raiseEvent()).not.toThrow()
+    expect(Matrix4.equals(camera.transform, Matrix4.IDENTITY)).toBe(true)
+    expect(Cartesian3.magnitude(camera.directionWC)).toBeCloseTo(1)
+    expect(Cartesian3.magnitude(camera.upWC)).toBeCloseTo(1)
+    expect(Cartesian3.dot(camera.directionWC, camera.upWC)).toBeCloseTo(0)
+    expect(camera.pitch).toBeLessThanOrEqual(tiltLimit(height) - Math.PI / 2 + 0.01)
+    if (height <= 0) {
+      expect(Cartesian3.distance(camera.positionWC, destination)).toBeLessThan(1e-6)
+      expect(camera.heading).toBeCloseTo(heading)
+      if (pitch === -Math.PI / 2) expect(camera.pitch).toBeCloseTo(pitch)
+    }
+    // A subsequent frame must keep rendering with the corrected camera.
+    expect(() => scene.preUpdate.raiseEvent()).not.toThrow()
+  } finally {
+    stop()
+  }
 })
