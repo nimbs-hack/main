@@ -60,15 +60,20 @@ export function createStreetCamera(viewer: Viewer, ground: Cartesian3) {
     inputs: controls.enableInputs, collision: controls.enableCollisionDetection,
     near: camera.frustum.near,
     error: scene.globe.maximumScreenSpaceError,
+    relief: scene.verticalExaggeration,
   }
   let heading = camera.heading
   let pitch = 0
   let disposed = false
+  let ready = saved.relief === 1
+  let stopTransition: (() => void) | undefined
   camera.cancelFlight()
   controls.enableInputs = false
   controls.enableCollisionDetection = false
   camera.frustum.near = 0.1
   scene.globe.maximumScreenSpaceError = STREET_SCREEN_SPACE_ERROR
+  // Map exaggeration turns low ridges into cliffs at eye level.
+  scene.verticalExaggeration = 1
 
   const place = (height: number) => {
     position.height = height + EYE_HEIGHT
@@ -78,11 +83,27 @@ export function createStreetCamera(viewer: Viewer, ground: Cartesian3) {
     })
     scene.requestRender()
   }
-  place(height)
+  if (ready) {
+    place(height)
+  } else {
+    // Keep the overhead view until Cesium has rebuilt the exaggerated
+    // meshes. Picking during that rebuild can put the eye below the ground.
+    const reference = scene.verticalExaggerationRelativeHeight
+    const unscaled = reference + (height - reference) / saved.relief
+    stopTransition = scene.postRender.addEventListener(() => {
+      if (disposed || ready) return
+      const surface = groundHeight(scene, position, unscaled)
+      if (surface === undefined) return
+      ready = true
+      stopTransition?.()
+      place(surface)
+    })
+    scene.requestRender()
+  }
 
   return {
     step(seconds: number, forward: number, right: number, run = false): boolean {
-      if (disposed || viewer.isDestroyed()) return false
+      if (disposed || viewer.isDestroyed() || !ready) return false
       // The map's motion tuning coarsens tiles after big height changes.
       // Street view keeps full detail.
       scene.globe.maximumScreenSpaceError = STREET_SCREEN_SPACE_ERROR
@@ -105,12 +126,14 @@ export function createStreetCamera(viewer: Viewer, ground: Cartesian3) {
     dispose() {
       if (disposed) return
       disposed = true
+      stopTransition?.()
       if (viewer.isDestroyed()) return
       camera.cancelFlight()
       controls.enableInputs = saved.inputs
       controls.enableCollisionDetection = saved.collision
       camera.frustum.near = saved.near
       scene.globe.maximumScreenSpaceError = saved.error
+      scene.verticalExaggeration = saved.relief
       camera.setView({ destination: saved.destination, orientation: { direction: saved.direction, up: saved.up } })
       scene.requestRender()
     },

@@ -2,10 +2,11 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, ty
 import { createPortal } from 'react-dom'
 import { Cartesian2, Math as CesiumMath, type TerrainProvider, type Viewer } from 'cesium'
 import { createStreetCamera } from './street-view-camera'
+import { improveStreetRendering } from './street-view-rendering'
 import { addHiriseLayers } from '../data/hirise-layer'
 import { hiriseAt } from '../data/imagery.js'
 import { MARS_RADIUS } from '../data/geo'
-import { detailAt, detailLabel } from '../data/terrain-detail'
+import { COARSE_DETAIL, detailAt, detailLabel } from '../data/terrain-detail'
 import './street-view.css'
 
 export type Drop = { x: number; y: number }
@@ -117,7 +118,7 @@ function sourcesAt(terrain: TerrainProvider | null, lat: number, lon: number) {
   const hirise = hiriseAt(lat, lon)
   const imagery = hirise ? `HiRISE ${detailLabel(hiriseMeters(hirise.maxLevel))}` : 'CTX 5 m'
   const detail = detailAt(terrain, [lat, lon])
-  return `Imagery ${imagery} · Terrain ${detail === null ? 'loading' : detailLabel(detail)}`
+  return `Imagery ${imagery} · Terrain ${detail === null ? 'loading' : detailLabel(detail)}${detail !== null && detail > COARSE_DETAIL ? ' · Footing unresolved' : ''}`
 }
 
 export default function StreetView({ viewer, terrain, relief, drop, onExit }: {
@@ -139,6 +140,10 @@ export default function StreetView({ viewer, terrain, relief, drop, onExit }: {
   // HiRISE is only drawn here: at map heights CTX already resolves more than
   // the screen can show, and these extra layers would cost requests.
   useEffect(() => addHiriseLayers(viewer), [viewer])
+
+  useEffect(() => {
+    if (walking) return improveStreetRendering(viewer)
+  }, [viewer, walking])
 
   useEffect(() => {
     const element = surface.current!
@@ -257,9 +262,14 @@ export default function StreetView({ viewer, terrain, relief, drop, onExit }: {
         <strong>{walking ? 'Street view' : 'Click the ground to walk here'}</strong>
         <span>{walking ? `WASD walk · Shift run · ${locked ? 'Mouse' : 'Drag'} look · Esc exit` : 'Esc to cancel'}</span>
         {walking && (
-          <span title={`Orbital imagery draped over terrain, not rover panoramas. Terrain spacing limits visible detail and cannot establish safe footing. Relief ${relief}×.`}>
-            {sources}{relief !== 1 ? ` · ${relief}× relief` : ''}
-          </span>
+          <>
+            <span title="Orbital imagery draped over terrain, not rover panoramas. Terrain spacing limits visible detail and cannot establish safe footing.">
+              {sources}
+            </span>
+            <span title={`Walking uses true-scale heights. Returning to the map restores ${relief}× relief. Sky and haze are illustrative, not the planned EVA's weather or daylight.`}>
+              Heights 1× · Sky and haze simulated
+            </span>
+          </>
         )}
         {message && <span className="street-view__message" role="status">{message}</span>}
         <button type="button" onClick={onExit}>Return to map</button>

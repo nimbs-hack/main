@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { Cartesian3, Cartographic, Ellipsoid } from 'cesium'
+import { Cartesian3, Cartographic, Ellipsoid, Event } from 'cesium'
 import { createStreetCamera, EYE_HEIGHT, groundHeight, RUN_SPEED, WALK_SPEED, walkDestination } from './street-view-camera'
 
 const mars = new Ellipsoid(3396190, 3396190, 3396190)
@@ -39,6 +39,8 @@ function sceneFixture() {
   const viewer = {
     camera, isDestroyed: () => false,
     scene: {
+      verticalExaggeration: 1, verticalExaggerationRelativeHeight: 8201,
+      postRender: new Event(),
       ellipsoid: mars, screenSpaceCameraController: controls,
       globe: { getHeight: () => height, maximumScreenSpaceError: 2 }, requestRender() {},
     },
@@ -66,12 +68,18 @@ test('walking tracks terrain refinement and holds position at missing terrain', 
 
 test('exit restores camera, clipping and controls after looking and moving', () => {
   const { viewer, camera, controls } = sceneFixture()
+  viewer.scene.verticalExaggeration = 3
   const original = Cartesian3.clone(camera.positionWC)
   const controller = createStreetCamera(viewer, Cartesian3.fromDegrees(137.4, -4.6, 1500, mars))
+  // The map stays overhead until the first true-scale mesh has rendered.
+  expect(camera.positionWC).toEqual(original)
+  expect(controller.step(0.016, 1, 0)).toBe(false)
+  viewer.scene.postRender.raiseEvent()
   expect(controls.enableInputs).toBe(false)
   expect(controls.enableCollisionDetection).toBe(false)
   expect(camera.frustum.near).toBe(0.1)
   expect(viewer.scene.globe.maximumScreenSpaceError).toBe(1)
+  expect(viewer.scene.verticalExaggeration).toBe(1)
   viewer.scene.globe.maximumScreenSpaceError = 6
   controller.step(0.016, 0, 0)
   expect(viewer.scene.globe.maximumScreenSpaceError).toBe(1)
@@ -87,6 +95,7 @@ test('exit restores camera, clipping and controls after looking and moving', () 
   expect(controls.enableCollisionDetection).toBe(true)
   expect(camera.frustum.near).toBe(1)
   expect(viewer.scene.globe.maximumScreenSpaceError).toBe(2)
+  expect(viewer.scene.verticalExaggeration).toBe(3)
 })
 
 test('missing terrain cannot enter walking or take ownership of map controls', () => {

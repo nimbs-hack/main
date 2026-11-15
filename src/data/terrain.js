@@ -45,6 +45,7 @@ const WALL_MIN_SLOPE = Math.tan((55 * Math.PI) / 180)
 const WALL_RAMP = 1500 // meters
 const RELAX_ITERATIONS = 60
 const occluder = new EllipsoidalOccluder(MARS_SPHERE)
+const protectedMeshes = new WeakSet()
 
 export function createTerrain() {
   return new Terrain(
@@ -85,6 +86,24 @@ export function prepareTerrainTile(data, rect) {
     data._boundingSphere.center, positions.xyz, 3, Cartesian3.ZERO, data._minimumHeight,
   )
   if (smoothed || !data._encodedNormals) data._encodedNormals = computeNormals(data, positions)
+  const createMesh = data.createMesh.bind(data)
+  data.createMesh = (options) => createMesh(options)?.then((mesh) => {
+    // Cesium 1.147's terrain picker writes exaggerated bounds into the mesh's
+    // render bounds. Returning to 1× then culls nearby terrain against the old
+    // 3× box. Give picking its own box and preserve the measured render bounds.
+    if (!protectedMeshes.has(mesh)) {
+      protectedMeshes.add(mesh)
+      const renderBounds = mesh.orientedBoundingBox
+      const pickBounds = OrientedBoundingBox.clone(renderBounds)
+      const pick = mesh.pick.bind(mesh)
+      mesh.pick = (...args) => {
+        mesh.orientedBoundingBox = pickBounds
+        try { return pick(...args) }
+        finally { mesh.orientedBoundingBox = renderBounds }
+      }
+    }
+    return mesh
+  })
   return data
 }
 

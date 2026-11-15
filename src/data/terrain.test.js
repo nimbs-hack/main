@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { BoundingSphere, Cartesian3, EllipsoidalOccluder, QuantizedMeshTerrainData, Rectangle } from 'cesium'
+import { BoundingSphere, Cartesian3, EllipsoidalOccluder, Matrix4, OrientedBoundingBox, QuantizedMeshTerrainData, Rectangle, SceneMode, TerrainMesh } from 'cesium'
 import { MARS_SPHERE, prepareTerrainTile } from './terrain'
 
 const rect = Rectangle.fromDegrees(77.431640625, 18.4130859375, 77.4755859375, 18.45703125)
@@ -59,4 +59,31 @@ test('tiles with normals also get repaired bounds and scaled horizon culling', (
   expect(occluder.isScaledSpacePointVisible(data._horizonOcclusionPoint)).toBe(true)
   occluder.cameraPosition = Cartesian3.fromDegrees(-102.55, -18.4, 10000, MARS_SPHERE)
   expect(occluder.isScaledSpacePointVisible(data._horizonOcclusionPoint)).toBe(false)
+})
+
+test('picking exaggerated terrain cannot change the bounds used to draw true-scale ground', async () => {
+  const data = tile()
+  const box = OrientedBoundingBox.fromRectangle(rect, 5500, 5600, MARS_SPHERE)
+  const original = OrientedBoundingBox.clone(box)
+  const mesh = {
+    rectangle: rect, minimumHeight: 5500, maximumHeight: 5600,
+    orientedBoundingBox: box,
+    encoding: { exaggeration: 3, exaggerationRelativeHeight: 8201 },
+    _transform: new Matrix4(), _terrainPicker: { needsRebuild: false },
+    getTransform: TerrainMesh.prototype.getTransform,
+    pick() { return this.getTransform(SceneMode.SCENE3D) },
+  }
+  let throttled = true
+  data.createMesh = () => throttled ? undefined : Promise.resolve(mesh)
+  prepareTerrainTile(data, rect)
+  expect(data.createMesh({})).toBeUndefined()
+  throttled = false
+  const prepared = await data.createMesh({})
+  const exaggerated = Matrix4.clone(prepared.pick())
+  expect(prepared.orientedBoundingBox).toEqual(original)
+  mesh.encoding.exaggeration = 1
+  const trueScale = prepared.pick()
+  expect(trueScale).not.toEqual(exaggerated)
+  expect(prepared.orientedBoundingBox).toBe(box)
+  expect(prepared.orientedBoundingBox).toEqual(original)
 })
