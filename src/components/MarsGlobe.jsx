@@ -44,7 +44,7 @@ import { formatDistance } from './RouteProfile'
 import { STATIONS, fetchWeather, formatPressure, formatTemp, nearestStation, pressureAt } from '../data/weather'
 import { COARSE_DETAIL, coverage, detailAt, detailLabel, detailMeters, levelAt, levelForSpacing, outline, slopeBaseline } from '../data/terrain-detail'
 import { checkSpaceWeather, fetchSpaceWeather } from '../data/space-weather'
-import { assessStart, findWindows } from '../data/eva-window'
+import { assessStart, bestOf, findWindows } from '../data/eva-window'
 import { windowsByDate } from '../data/eva-calendar'
 
 import { TERRAIN_API_PATH } from '../data/terrain-source'
@@ -956,10 +956,12 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     const reading = report && report !== 'error' ? report.latest : null
     return { point: plan.start, duration: evaDuration, now: searchFrom, reading, space: spaceWeather.data }
   }, [plan.start, evaDuration, searchFrom, weather, spaceWeather.data])
-  // The best start of each sol over the next six weeks, for the calendar,
-  // and the best of the next seven sols, the start when none is picked.
-  const calendar = useMemo(() => (windowInput ? windowsByDate(findWindows({ ...windowInput, sols: CALENDAR_SOLS })) : null), [windowInput])
-  const autoWindow = useMemo(() => (plan.when || !windowInput ? null : findWindows({ ...windowInput, sols: 7 }).best), [plan.when, windowInput])
+  // One search: the best start of each sol over the next six weeks, for the
+  // calendar, and the best of the first seven, the start when none is picked.
+  // So the worked-out start is always one of the calendar's.
+  const search = useMemo(() => (windowInput ? findWindows({ ...windowInput, sols: CALENDAR_SOLS }) : null), [windowInput])
+  const calendar = useMemo(() => (search ? windowsByDate(search) : null), [search])
+  const autoWindow = useMemo(() => (plan.when || !search ? null : bestOf(search.sols.slice(0, 7).map((sol) => sol.best))), [plan.when, search])
   // A picked start gets the same checks as a worked-out one.
   const pickedWindow = useMemo(() => (plan.when && windowInput ? assessStart(windowInput, Date.parse(plan.when)) : null), [plan.when, windowInput])
   const startWindow = plan.when ? pickedWindow : autoWindow

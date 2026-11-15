@@ -103,11 +103,15 @@ const FORMER_CREW = new Map([
   ['KOWALSKI', 'Kathleen Rubins'],
 ])
 
-// Names and portraits are NASA astronauts; their planning inputs are examples.
+// Sample people no longer in the roster the planner ships, under their names
+// then and now. Missions that took them keep their own copy.
+const RETIRED = new Set(['REYES', 'KOWALSKI', 'Jessica Watkins', 'Kathleen Rubins'])
+
+// Names and portraits are NASA astronauts. Their planning inputs are examples.
 export function loadRoster(catalog: Pick<Catalog, 'sampleRoster'>): Astronaut[] {
   const saved = stored(ROSTER_KEY)
   if (!Array.isArray(saved)) return catalog.sampleRoster
-  const roster = saved.filter(isProfile)
+  const roster = saved.filter(isProfile).filter((person) => !RETIRED.has(person.name))
   const names = new Set(roster.map((person) => person.name))
   return roster.flatMap((person) => {
     const name = FORMER_CREW.get(person.name)
@@ -280,7 +284,8 @@ export function createEdits(catalog: Catalog) {
       name: '',
       type: DEFAULT_TYPE,
       marginPercent: catalog.defaultMarginPercent,
-      crew: [newPerson([])],
+      // Nobody is going until picked on the Crew page.
+      crew: [],
       phases: template(DEFAULT_TYPE).map((p) => presetPhase(p.kind, p.days)),
       sites: [],
       tasks: [],

@@ -114,10 +114,12 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
       button.appendChild(name)
       element.appendChild(button)
       const line = leader(svg)
-      const pin = item.kind === 'crew' ? document.createElementNS(SVG, 'circle') : null
+      // A person is a diamond, so they are never taken for a site or a route
+      // point, which are round.
+      const pin = item.kind === 'crew' ? document.createElementNS(SVG, 'path') : null
       if (pin) {
         pin.setAttribute('class', 'map-label__crew-pin')
-        pin.setAttribute('r', '5')
+        pin.setAttribute('d', 'M0 -6.5 6.5 0 0 6.5 -6.5 0Z')
         svg.appendChild(pin)
       }
       linkHover(button, line, svg)
@@ -244,8 +246,7 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
         if (!at || at.x < 0 || at.y < 0 || at.x > width || at.y > height) continue
         row.screen = { x: at.x, y: at.y }
         if (row.pin) {
-          row.pin.setAttribute('cx', String(at.x))
-          row.pin.setAttribute('cy', String(at.y))
+          row.pin.setAttribute('transform', `translate(${at.x} ${at.y})`)
           row.pin.removeAttribute('display')
         }
         anchors.push({ id: row.item.id, x: at.x, y: at.y, width: row.width, selected: row.item.selected })
@@ -291,9 +292,11 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
     }
     const removeRender = viewer.scene.postRender.addEventListener(draw)
     // Update ground positions without rebuilding rows or losing keyboard focus.
+    // The crew walk about a metre a second, so once a second is enough: each
+    // update redraws the whole globe, which costs integrated graphics.
     const timer = items.some((item) => item.positionAt) ? window.setInterval(() => {
       if (!document.hidden) viewer.scene.requestRender()
-    }, 100) : undefined
+    }, 1000) : undefined
     viewer.scene.requestRender()
     return () => {
       window.clearInterval(timer)

@@ -110,6 +110,10 @@ export function HomeStep({
           Open mission file
         </Button>
         <Button onClick={onNew}>New mission</Button>
+        {/* The lighter page for reading a mission file, at /viewer.html. */}
+        <a className="button button--secondary" href={`${import.meta.env.BASE_URL}viewer.html`} title="A lighter page that opens a mission file on its own map, for a device that cannot carry the planner">
+          Open mission viewer
+        </a>
       </div>
 
       <ul className="people">

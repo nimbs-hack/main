@@ -495,7 +495,8 @@ func parseMission(raw, rawRoster any) (Mission, error) {
 		}
 	}
 	crew := []Astronaut{}
-	for i, entry := range c.list(source["crew"], "crew", 1) {
+	// A new mission has nobody on it until the crew is picked.
+	for i, entry := range c.list(source["crew"], "crew", 0) {
 		name, byName := entry.(string)
 		if !byName {
 			crew = append(crew, c.astronaut(entry, fmt.Sprintf("crew member %d", i+1)))

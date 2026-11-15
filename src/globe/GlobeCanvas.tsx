@@ -13,6 +13,7 @@ import {
   ImageryLayer,
   ImageryProvider,
   Math as CesiumMath,
+  PolylineDashMaterialProperty,
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
   UrlTemplateImageryProvider,
@@ -183,8 +184,12 @@ export function GlobeCanvas({
   onImagerySource,
   onViewer,
   retryKey,
+  route = null,
 }: {
   sites: Site[]
+  // The EVA route as a line of [lat, lon]: the one assessed on the Sites
+  // page, or the plan's stops in order before one is. Null with none.
+  route?: { points: Array<[number, number]>; assessed: boolean } | null
   // Tasks at each site, by position.
   taskCounts: number[]
   selected: number
@@ -353,6 +358,31 @@ export function GlobeCanvas({
     }
   }, [viewer, sites, selected])
 
+  // The route on the ground: solid in the accent when assessed, as the
+  // Sites page draws the plan, dashed while it is only the stops in order.
+  // A dark halo under it keeps it visible on ground of its own colour.
+  useEffect(() => {
+    if (!viewer || !route || route.points.length < 2) return
+    const positions = route.points.map(([lat, lon]) => Cartesian3.fromDegrees(lon, lat, 0, MARS_SPHERE))
+    const accent = cssColor('--color-accent')
+    const halo = viewer.entities.add({ polyline: { positions, width: 6.5, clampToGround: true, zIndex: 0, material: cssColor('--color-bg') } })
+    const line = viewer.entities.add({
+      polyline: {
+        positions,
+        width: 3.5,
+        clampToGround: true,
+        zIndex: 1,
+        material: route.assessed ? accent : new PolylineDashMaterialProperty({ color: accent, dashLength: 16 }),
+      },
+    })
+    viewer.scene.requestRender()
+    return () => {
+      if (viewer.isDestroyed()) return
+      viewer.entities.remove(halo)
+      viewer.entities.remove(line)
+    }
+  }, [viewer, route])
+
   // Bring a site picked in the list into view. Keyed on which site is
   // selected, so editing its coordinates does not move the camera. A site
   // that was already selected when the globe opened does not count: the
@@ -456,6 +486,12 @@ export function GlobeCanvas({
           </button>
         </NavControls>
 
+        {route && route.points.length > 1 && (
+          <p className="stage__key">
+            <i className={`stage__swatch${route.assessed ? '' : ' stage__swatch--dashed'}`} aria-hidden="true" />
+            {route.assessed ? 'EVA route, as assessed on Sites' : 'Plan order, route not assessed yet'}
+          </p>
+        )}
       </div>
     </main>
   )

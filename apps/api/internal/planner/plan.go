@@ -214,7 +214,9 @@ func DailyUse(person Astronaut, phase Phase) Resources {
 // PlanMission works out the mission's needs. The mission must have come from
 // ParseMission, Normalize or DecodeMission.
 func PlanMission(mission Mission) Plan {
-	plan := Plan{MarginPercent: mission.MarginPercent, EVAOverruns: []EVAOverrun{}, DoseLimitSv: CareerDoseLimitSv}
+	// Empty lists, not nil, so a mission with nobody on it yet sends [] and
+	// not null.
+	plan := Plan{MarginPercent: mission.MarginPercent, Crew: []CrewPlan{}, EVAOverruns: []EVAOverrun{}, DoseLimitSv: CareerDoseLimitSv}
 	for _, person := range mission.Crew {
 		plan.Crew = append(plan.Crew, CrewPlan{Name: person.Name, Daily: NeedsPerDay(person)})
 	}

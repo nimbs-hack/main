@@ -587,3 +587,20 @@ button {
    for over a limit, outline for near one. */
 :is(.plan__box.is-hazard > output, .profile__stats dd.is-hazard, .routes span.is-hazard, .tools__row dd.is-hazard, .pointmenu__terrain span.is-hazard, .crew-needs span.is-hazard)::before { content: "▲\00a0"; }
 :is(.plan__box.is-caution > output, .profile__stats dd.is-caution, .routes span.is-caution, .tools__row dd.is-caution, .pointmenu__terrain span.is-caution, .crew-needs span.is-caution)::before { content: "△\00a0"; }
+
+/* Key for the route on the Review globe, bottom left inside the corners. */
+.stage__key {
+  position: absolute;
+  bottom: var(--space-8);
+  left: var(--space-8);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--text-data);
+}
+.stage__swatch { width: 28px; height: 3.5px; background: var(--color-accent); box-shadow: 0 0 0 1.5px var(--color-bg); }
+.stage__swatch--dashed { background: repeating-linear-gradient(90deg, var(--color-accent) 0 6px, var(--color-bg) 6px 11px); }

@@ -251,7 +251,7 @@ func TestParseMissionRejects(t *testing.T) {
 		want    string
 	}{
 		{"unknown type", object{"type": "venus", "crew": crew}, "mission type must be one of"},
-		{"no crew", object{"type": "analog", "crew": []Astronaut{}}, "crew must be a list of 1 to 255 entries"},
+		{"crew not a list", object{"type": "analog", "crew": "TEST"}, "crew must be a list of 0 to 255 entries"},
 		{"custom without phases", object{"type": "custom", "crew": crew}, "a custom mission needs a list of phases"},
 		{"same person twice", object{"type": "analog", "crew": []Astronaut{person, person}}, `"TEST" is in the crew twice`},
 		{"child", object{"type": "analog", "crew": []Astronaut{child}}, "crew member 1 age must be a number from 18 to 99; got 9"},
@@ -457,5 +457,23 @@ func TestCustomPhasesAreLeftOutOfTheDoseAndSaidSo(t *testing.T) {
 	}
 	if lines := Cautions(mission, plan); len(lines) != 1 || !strings.Contains(lines[0], "no radiation rate") {
 		t.Errorf("cautions %v", lines)
+	}
+}
+
+func TestAMissionWithNobodyPickedYetPlansToZero(t *testing.T) {
+	mission, err := ParseMission([]byte(`{"type": "analog", "crew": []}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := PlanMission(mission)
+	if len(plan.Crew) != 0 || plan.Total.FoodKg != 0 || plan.Total.EVAHours != 0 {
+		t.Errorf("crew %d, food %v kg, EVA %v h", len(plan.Crew), plan.Total.FoodKg, plan.Total.EVAHours)
+	}
+	if _, err := DecodeMission(encode(t, mission)); err != nil {
+		t.Errorf("a file with no crew does not read back: %v", err)
+	}
+	// The editor maps over the list, so it must arrive as [], not null.
+	if data, _ := json.Marshal(plan); !strings.Contains(string(data), `"crew":[]`) {
+		t.Errorf("plan JSON has no empty crew list: %.120s", data)
 	}
 }

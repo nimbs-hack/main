@@ -12,6 +12,8 @@ import { PhasesStep } from './steps/PhasesStep'
 import { ReviewStep } from './steps/ReviewStep'
 import { download, fileStem, readMissionFile } from './files'
 import { clearHandOff, incomingMission } from './handoff'
+import { loadHud } from './data/hud-snapshot'
+import { planStops } from './data/stops'
 import {
   type Draft,
   STEPS,
@@ -230,6 +232,17 @@ function Editor({ catalog, planned: opening, library: kept, fileId: openingId }:
   const [imagerySource, setImagerySource] = useState<'V01' | 'beta01'>('V01')
   const [retryKey, setRetryKey] = useState(0)
   const [reviewViewer, setReviewViewer] = useState<Viewer | null>(null)
+  // The route for the Review globe: the one the Sites page assessed and saved
+  // for the HUD, or the plan's stops in order before there is one.
+  const reviewRoute = useMemo(() => {
+    if (step !== 'review') return null
+    const saved = loadHud(fileId ?? 'draft')?.route
+    if (saved) return { points: saved.samples.map((sample) => sample.point), assessed: true }
+    const stops = planStops(draft)
+      .map((index) => draft.sites[index])
+      .filter((site) => site !== undefined && !Number.isNaN(site.lat + site.lon))
+    return stops.length > 1 ? { points: stops.map((site): [number, number] => [site!.lat, site!.lon]), assessed: false } : null
+  }, [step, fileId, draft])
 
   const [answer, setAnswer] = useState<Answer>({ draft: opening.mission, planned: opening })
   // Why the planner did not answer, when it did not.
@@ -747,6 +760,7 @@ function Editor({ catalog, planned: opening, library: kept, fileId: openingId }:
                 onImagerySource={setImagerySource}
                 onViewer={setReviewViewer}
                 retryKey={retryKey}
+                route={reviewRoute}
               />
             </Suspense>
           </div>

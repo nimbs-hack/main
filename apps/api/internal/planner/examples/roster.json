@@ -46,14 +46,6 @@
       "evaShare": 0
     },
     {
-      "name": "Jessica Watkins",
-      "sex": "female",
-      "age": 33,
-      "massKg": 70.4,
-      "heightCm": 174,
-      "role": "mission-specialist"
-    },
-    {
       "name": "Frank Rubio",
       "sex": "male",
       "age": 36,
@@ -61,14 +53,6 @@
       "heightCm": 176,
       "role": "payload-specialist",
       "activity": "low"
-    },
-    {
-      "name": "Kathleen Rubins",
-      "sex": "female",
-      "age": 47,
-      "massKg": 66,
-      "heightCm": 171,
-      "role": "flight-engineer"
     }
   ]
 }

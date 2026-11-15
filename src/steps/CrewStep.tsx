@@ -95,7 +95,6 @@ export function CrewStep({
           const selected = at >= 0
           const isOpen = open === person.name
           const daily = selected ? plan?.crew[at]?.daily : undefined
-          const last = selected && crew.length === 1
           const photo = photos[photoKey(person.name)]
           const set = <K extends keyof Astronaut>(key: K, value: Astronaut[K]) => {
             const patch = { [key]: value } as Partial<Astronaut>
@@ -111,17 +110,13 @@ export function CrewStep({
             // Keyed by place in the list, so retyping a call sign keeps its field.
             <Fragment key={people.indexOf(person)}>
               <li className={`tile${selected ? ' is-selected' : ''}`}>
-                {/* The last one going cannot be taken off. */}
                 <button
                   type="button"
                   className="tile__pick"
                   role="checkbox"
                   aria-checked={selected}
-                  aria-disabled={last}
-                  title={last ? 'A mission needs one crew member' : selected ? 'Going. Click to leave behind' : 'Click to add to the crew'}
-                  onClick={() => {
-                    if (!last) selected ? onDeselect(at) : onSelect(person)
-                  }}
+                  title={selected ? 'Going. Click to leave behind' : 'Click to add to the crew'}
+                  onClick={() => (selected ? onDeselect(at) : onSelect(person))}
                 >
                   <Portrait name={person.name} photo={photo} />
                   <span className="tile__check" aria-hidden="true">
@@ -255,7 +250,6 @@ export function CrewStep({
                       label="Delete from the list"
                       confirmLabel="Confirm delete"
                       className="button--remove"
-                      disabled={last}
                       onConfirm={() => {
                         setOpen(null)
                         if (photo) keepPhotos(without(person.name))

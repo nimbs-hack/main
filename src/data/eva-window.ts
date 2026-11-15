@@ -235,14 +235,18 @@ export function findWindows(input: WindowInput & { sols?: number }): WindowSearc
     }
   }
 
-  // Fewest problems first, then the warmest, then the soonest among near-equals.
-  // All no-go: the most daylight.
-  const found = sols.map((s) => s.best).filter((w): w is EvaWindow => w !== null)
-  if (!found.length) return { sols, best: null }
+  return { sols, best: bestOf(sols.map((s) => s.best)) }
+}
+
+// The best of some sols' best windows: fewest problems first, then the
+// warmest, then the soonest among near-equals. When none can be done
+// safely, the one that runs least past sunset. Null when there are none.
+export function bestOf(windows: Array<EvaWindow | null>): EvaWindow | null {
+  const found = windows.filter((w): w is EvaWindow => w !== null)
+  if (!found.length) return null
   const rank = Math.min(...found.map((w) => RANK[w.verdict]))
   const top = found.filter((w) => RANK[w.verdict] === rank)
-  // When none can be done safely, the one that runs least past sunset.
-  if (rank === RANK['no-go']) return { sols, best: top.reduce((a, b) => (b.daylightLeft > a.daylightLeft ? b : a)) }
+  if (rank === RANK['no-go']) return top.reduce((a, b) => (b.daylightLeft > a.daylightLeft ? b : a))
   const warmest = Math.max(...top.map((w) => w.warmth))
-  return { sols, best: top.find((w) => w.warmth >= warmest - TIE) ?? null }
+  return top.find((w) => w.warmth >= warmest - TIE) ?? null
 }
