@@ -203,7 +203,7 @@ export function orbitCenter(viewer, { heading, pitch }) {
   const { camera } = viewer
   heading ??= camera.heading
   pitch ??= camera.pitch
-  pitch = Math.max(pitch, tiltLimit(camera.positionCartographic.height) - Math.PI / 2)
+  pitch = Math.min(pitch, tiltLimit(camera.positionCartographic.height) - Math.PI / 2)
   const target = pickGround(viewer, screenCenter(viewer))
   if (!target) {
     camera.flyTo({ destination: camera.positionWC, orientation: { heading, pitch, roll: 0 }, duration: MOVE_SECONDS })

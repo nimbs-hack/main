@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { MIN_GROUND_CLEARANCE, zoomBy, orbitCenter, setupControls, tiltLimit } from './camera'
+import { MIN_GROUND_CLEARANCE, zoomBy, orbitCenter, setupControls, tiltLimit, toggleTilt } from './camera'
 import { Camera, Cartesian3, Ellipsoid, Event, GeographicProjection, Matrix4 } from 'cesium'
 
 test('zoom buttons and tilt changes preserve the minimum ground clearance', () => {
@@ -36,6 +36,57 @@ test('tilt limit shrinks with altitude to straight down from orbit', () => {
   expect(tiltLimit(741_000)).toBeLessThan(tiltLimit(100_000))
   expect(tiltLimit(100_000)).toBeLessThan(tiltLimit(30_000))
   expect(tiltLimit(9_000_000)).toBe(0)
+})
+
+test.each([1000, 100_000, 741_000])('2D and 3D orbit the same ground point at height %s', (height) => {
+  const ellipsoid = new Ellipsoid(3396190, 3396190, 3396190)
+  const target = Cartesian3.fromDegrees(137.4, -4.6, 0, ellipsoid)
+  const scene = {
+    ellipsoid,
+    mapProjection: new GeographicProjection(ellipsoid),
+    drawingBufferWidth: 1440,
+    drawingBufferHeight: 900,
+    canvas: { clientWidth: 1440, clientHeight: 900 },
+    globe: { pick: () => target },
+    preUpdate: new Event(),
+    screenSpaceCameraController: { enableInputs: true },
+  }
+  const camera = new Camera(scene)
+  scene.camera = camera
+  camera.setView({
+    destination: Cartesian3.fromDegrees(137.4, -4.6, height, ellipsoid),
+    orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
+  })
+  let orbit
+  camera.flyToBoundingSphere = (sphere, { offset }) => {
+    orbit = offset
+    camera.lookAt(sphere.center, offset)
+    camera.lookAtTransform(Matrix4.IDENTITY)
+  }
+  const viewer = {
+    scene, camera,
+    screenSpaceEventHandler: { removeInputAction() {}, setInputAction() {} },
+  }
+  const stop = setupControls(viewer)
+  try {
+    toggleTilt(viewer)
+    expect(orbit.pitch).toBeCloseTo(Math.min(-Math.PI * 40 / 180, tiltLimit(height) - Math.PI / 2))
+    expect(orbit.range).toBeCloseTo(height)
+    const tiltedPosition = Cartesian3.clone(camera.positionWC)
+    scene.preUpdate.raiseEvent()
+    expect(Cartesian3.distance(camera.positionWC, tiltedPosition)).toBeLessThan(1e-6)
+    const toTarget = Cartesian3.subtract(target, camera.positionWC, new Cartesian3())
+    Cartesian3.normalize(toTarget, toTarget)
+    expect(Cartesian3.dot(camera.directionWC, toTarget)).toBeCloseTo(1)
+
+    toggleTilt(viewer)
+    expect(orbit.pitch).toBeCloseTo(-Math.PI / 2)
+    scene.preUpdate.raiseEvent()
+    expect(camera.pitch).toBeCloseTo(-Math.PI / 2)
+    expect(Cartesian3.distance(camera.positionWC, Cartesian3.fromDegrees(137.4, -4.6, height, ellipsoid))).toBeLessThan(1e-6)
+  } finally {
+    stop()
+  }
 })
 
 // 3× relief puts some crater floors below the reference sphere. Include
