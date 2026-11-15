@@ -2,8 +2,10 @@ import {
   type ComputedRoute,
   type MapLayerMeta,
   type MarsCoord,
+  type MissionUnitId,
   type RoutePoint,
   type SiteMetadata,
+  type UnitSimulationSample,
   type WeatherScenario,
   buildDirectMarsTileUrl,
   normalizeLon180,
@@ -15,16 +17,27 @@ import {
   STATIC_HILLSHADE_URL,
   renderPressureMaskUrl,
   renderSlopeMaskUrl,
+  renderSoilMaskUrl,
   renderTemperatureMaskUrl,
 } from "../services/api";
+import { UNIT_ACCENT_COLORS } from "../services/dualSim";
 import type { MapPoint, MapPointClass } from "../services/pointStore";
 import { createPointIconSvgElement } from "./PointClassIcon";
 import { formatRouteDistance, getRouteStrategyVisual } from "./routeVisuals";
+
+export interface MapUnitDisplay {
+  unitId: MissionUnitId;
+  waypoints: MarsCoord[];
+  routes: ComputedRoute[];
+  selectedRouteId: string | null;
+  simPosition?: UnitSimulationSample | null;
+}
 
 interface MapViewProps {
   site: SiteMetadata | null;
   activeBaseLayer: MapLayerMeta;
   showHillshade: boolean;
+  showSoilLayer: boolean;
   showSlopeHazard: boolean;
   showPressureLayer: boolean;
   showTemperatureLayer: boolean;
@@ -35,10 +48,11 @@ interface MapViewProps {
   weatherSol?: number;
   minPressurePa: number;
   minAirTempC: number;
-  waypointA: MarsCoord | null;
-  waypointB: MarsCoord | null;
-  routes: ComputedRoute[];
-  selectedRouteId: string | null;
+  activeUnitId: MissionUnitId;
+  unit1: MapUnitDisplay;
+  unit2: MapUnitDisplay;
+  isSimMode: boolean;
+  moveWaypoints?: boolean;
   hoveredProfilePoint: RoutePoint | null;
   points: MapPoint[];
   pointClasses: MapPointClass[];
@@ -53,11 +67,12 @@ interface MapViewProps {
   onScaleUpdate: (label: string, widthPx: number, zoom: number) => void;
   onOpenContextMenu: (x: number, y: number, coord: MarsCoord) => void;
   onCloseContextMenu: () => void;
-  onSelectRoute?: (routeId: string) => void;
+  onSelectRoute?: (unitId: MissionUnitId, routeId: string) => void;
+  onDragWaypoint?: (unitId: MissionUnitId, index: number, coord: MarsCoord) => void;
   onPickPointCoord: (coord: MarsCoord) => void;
   onSelectPoint: (pointId: string) => void;
-  onPointSetA: (coord: MarsCoord) => void;
-  onPointSetB: (coord: MarsCoord) => void;
+  onPointAppendWaypoint: (coord: MarsCoord) => void;
+  onPointInsertWaypoint: (coord: MarsCoord) => void;
   onEditPoint: (point: MapPoint) => void;
   onDeletePoint: (pointId: string) => void;
 }
@@ -92,10 +107,12 @@ function buildPointIconHtml(
 function buildPointPopupElement(
   point: MapPoint,
   cls: MapPointClass | undefined,
+  activeUnitId: MissionUnitId,
+  nextWaypointNumber: number,
   showEditActions: boolean,
   actions: {
-    onSetA: (coord: MarsCoord) => void;
-    onSetB: (coord: MarsCoord) => void;
+    onAppendWaypoint: (coord: MarsCoord) => void;
+    onInsertWaypoint: (coord: MarsCoord) => void;
     onEdit: (point: MapPoint) => void;
     onDelete: (id: string) => void;
   },
@@ -151,8 +168,12 @@ function buildPointPopupElement(
     });
     bar.appendChild(btn);
   };
-  addAction("SET A", () => actions.onSetA(point.coord));
-  addAction("SET B", () => actions.onSetB(point.coord));
+  addAction(`+ U${activeUnitId} #${nextWaypointNumber}`, () =>
+    actions.onAppendWaypoint(point.coord),
+  );
+  if (nextWaypointNumber > 2) {
+    addAction("MID", () => actions.onInsertWaypoint(point.coord));
+  }
   if (showEditActions) {
     addAction("EDIT", () => actions.onEdit(point));
     addAction("DEL", () => actions.onDelete(point.id));
@@ -161,6 +182,8 @@ function buildPointPopupElement(
 
   return root;
 }
+
+const RASTER_PANE_NAME = "terrainRasterPane";
 
 class DirectMarsTileLayer extends L.TileLayer {
   private readonly layerId: string;
@@ -174,8 +197,6 @@ class DirectMarsTileLayer extends L.TileLayer {
     return buildDirectMarsTileUrl(this.layerId, coords.z, coords.x, coords.y) ?? "";
   }
 }
-
-const RASTER_PANE_NAME = "terrainRasterPane";
 
 function useDebouncedSiteOverlay(options: {
   mapRef: RefObject<L.Map | null>;
@@ -249,6 +270,7 @@ export function MapView({
   site,
   activeBaseLayer,
   showHillshade,
+  showSoilLayer,
   showSlopeHazard,
   showPressureLayer,
   showTemperatureLayer,
@@ -259,10 +281,11 @@ export function MapView({
   weatherSol,
   minPressurePa,
   minAirTempC,
-  waypointA,
-  waypointB,
-  routes,
-  selectedRouteId,
+  activeUnitId,
+  unit1,
+  unit2,
+  isSimMode,
+  moveWaypoints = false,
   hoveredProfilePoint,
   points,
   pointClasses,
@@ -278,10 +301,11 @@ export function MapView({
   onOpenContextMenu,
   onCloseContextMenu,
   onSelectRoute,
+  onDragWaypoint,
   onPickPointCoord,
   onSelectPoint,
-  onPointSetA,
-  onPointSetB,
+  onPointAppendWaypoint,
+  onPointInsertWaypoint,
   onEditPoint,
   onDeletePoint,
 }: MapViewProps) {
@@ -292,12 +316,16 @@ export function MapView({
   const boundsRectRef = useRef<L.Rectangle | null>(null);
   const routesGroupRef = useRef<L.LayerGroup | null>(null);
   const markersGroupRef = useRef<L.LayerGroup | null>(null);
+  const simMoversGroupRef = useRef<L.LayerGroup | null>(null);
   const pointsGroupRef = useRef<L.LayerGroup | null>(null);
   const hoverMarkerRef = useRef<L.Marker | null>(null);
   const leftInsetRef = useRef(leftInsetPx);
   leftInsetRef.current = leftInsetPx;
   const pickModeRef = useRef(pickMode);
   pickModeRef.current = pickMode;
+  const activeNextNumRef = useRef(1);
+  activeNextNumRef.current =
+    (activeUnitId === 1 ? unit1.waypoints.length : unit2.waypoints.length) + 1;
 
   const callbacksRef = useRef({
     onCursorMove,
@@ -305,10 +333,11 @@ export function MapView({
     onOpenContextMenu,
     onCloseContextMenu,
     onSelectRoute,
+    onDragWaypoint,
     onPickPointCoord,
     onSelectPoint,
-    onPointSetA,
-    onPointSetB,
+    onPointAppendWaypoint,
+    onPointInsertWaypoint,
     onEditPoint,
     onDeletePoint,
   });
@@ -318,10 +347,11 @@ export function MapView({
     onOpenContextMenu,
     onCloseContextMenu,
     onSelectRoute,
+    onDragWaypoint,
     onPickPointCoord,
     onSelectPoint,
-    onPointSetA,
-    onPointSetB,
+    onPointAppendWaypoint,
+    onPointInsertWaypoint,
     onEditPoint,
     onDeletePoint,
   };
@@ -404,6 +434,7 @@ export function MapView({
     routesGroupRef.current = L.layerGroup().addTo(map);
     markersGroupRef.current = L.layerGroup().addTo(map);
     pointsGroupRef.current = L.layerGroup().addTo(map);
+    simMoversGroupRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
     updateScale();
 
@@ -423,12 +454,12 @@ export function MapView({
     }
 
     const tileLayer = new DirectMarsTileLayer(activeBaseLayer.id, activeBaseLayer.tileUrlTemplate, {
+      crossOrigin: "anonymous",
       tileSize: 256,
       minZoom: 0,
       maxZoom: 17,
       maxNativeZoom: activeBaseLayer.maxNativeZoom,
       noWrap: true,
-      crossOrigin: "anonymous",
       bounds: [
         [-90, -180],
         [90, 180],
@@ -502,8 +533,11 @@ export function MapView({
     }
   }, [site, showHillshade, showSiteBounds]);
 
-  const fieldOverlayOpacity = showPressureLayer && showTemperatureLayer ? 0.56 : 0.74;
-
+  const renderSlopeOverlay = useCallback(
+    (signal: AbortSignal) => renderSlopeMaskUrl(maxSlopeDeg, signal),
+    [maxSlopeDeg],
+  );
+  const renderSoilOverlay = useCallback((signal: AbortSignal) => renderSoilMaskUrl(signal), []);
   const renderTemperatureOverlay = useCallback(
     (signal: AbortSignal) =>
       renderTemperatureMaskUrl(
@@ -511,13 +545,12 @@ export function MapView({
           scenario: weatherScenario,
           sol: weatherSol,
           lmstHour: simLmstHour,
-          minAirTempC: Math.round(minAirTempC),
+          minAirTempC,
         },
         signal,
       ),
     [weatherScenario, weatherSol, simLmstHour, minAirTempC],
   );
-
   const renderPressureOverlay = useCallback(
     (signal: AbortSignal) =>
       renderPressureMaskUrl(
@@ -525,17 +558,24 @@ export function MapView({
           scenario: weatherScenario,
           sol: weatherSol,
           lmstHour: simLmstHour,
-          minPressurePa: Math.round(minPressurePa),
+          minPressurePa,
         },
         signal,
       ),
     [weatherScenario, weatherSol, simLmstHour, minPressurePa],
   );
 
-  const renderSlopeOverlay = useCallback(
-    (signal: AbortSignal) => renderSlopeMaskUrl(maxSlopeDeg, signal),
-    [maxSlopeDeg],
-  );
+  const fieldOverlayOpacity = showPressureLayer && showTemperatureLayer ? 0.56 : 0.74;
+
+  useDebouncedSiteOverlay({
+    mapRef,
+    site,
+    visible: showSoilLayer,
+    renderUrl: renderSoilOverlay,
+    opacity: 0.56,
+    zIndex: 1,
+    debounceMs: 80,
+  });
 
   useDebouncedSiteOverlay({
     mapRef,
@@ -567,88 +607,230 @@ export function MapView({
     debounceMs: 150,
   });
 
-  // Render candidate and selected routes with visual contrast halo + click selection
+  const {
+    unitId: u1Id,
+    waypoints: u1Waypoints,
+    routes: u1Routes,
+    selectedRouteId: u1SelectedRouteId,
+    simPosition: simPos1,
+  } = unit1;
+  const {
+    unitId: u2Id,
+    waypoints: u2Waypoints,
+    routes: u2Routes,
+    selectedRouteId: u2SelectedRouteId,
+    simPosition: simPos2,
+  } = unit2;
+
+  // Render candidate and selected routes for both units with visual contrast halo + click selection
   useEffect(() => {
     const group = routesGroupRef.current;
     if (!group) return;
     group.clearLayers();
 
-    const ordered = [...routes].sort((a, b) =>
-      a.id === selectedRouteId ? 1 : b.id === selectedRouteId ? -1 : 0,
-    );
+    const unitsToDraw = [
+      { unitId: u1Id, routes: u1Routes, selectedRouteId: u1SelectedRouteId },
+      { unitId: u2Id, routes: u2Routes, selectedRouteId: u2SelectedRouteId },
+    ].sort((a, b) => (a.unitId === activeUnitId ? 1 : b.unitId === activeUnitId ? -1 : 0));
 
-    for (const route of ordered) {
-      const isSelected = route.id === selectedRouteId;
-      const latlngs = route.points.map((p): [number, number] => [p.lat, p.lon]);
-      const visual = getRouteStrategyVisual(route.strategy);
-      const strokeColor = isSelected ? visual.selectedColor : visual.color;
+    for (const unit of unitsToDraw) {
+      if (unit.routes.length === 0) continue;
+      const isUnitActive = unit.unitId === activeUnitId;
+      const unitColor = UNIT_ACCENT_COLORS[unit.unitId];
+      const selectedRoute =
+        unit.routes.find((r) => r.id === unit.selectedRouteId) ?? unit.routes[0] ?? null;
 
-      if (isSelected) {
-        L.polyline(latlngs, {
-          color: "#050709",
-          weight: 6.5,
-          opacity: 0.72,
-          interactive: false,
-        }).addTo(group);
+      if (isSimMode || !isUnitActive) {
+        if (!selectedRoute) continue;
+        const latlngs = selectedRoute.points.map((p): [number, number] => [p.lat, p.lon]);
+        if (isSimMode) {
+          L.polyline(latlngs, {
+            color: "#050709",
+            weight: 6.5,
+            opacity: 0.78,
+            interactive: false,
+          }).addTo(group);
+        }
+        const line = L.polyline(latlngs, {
+          color: unitColor,
+          weight: isSimMode ? 3.5 : 2.5,
+          opacity: isSimMode ? 0.96 : 0.62,
+          dashArray: isSimMode ? undefined : "5 5",
+          interactive: true,
+        });
+        line.bindTooltip(
+          `U${unit.unitId} · ${formatRouteDistance(selectedRoute.totalDistanceM)} · ${selectedRoute.maxSlopeDeg.toFixed(1)}°`,
+          {
+            sticky: true,
+            className: "route-map-tooltip",
+            direction: "top",
+            offset: [0, -6],
+          },
+        );
+        line.on("click", (ev) => {
+          L.DomEvent.stopPropagation(ev);
+          callbacksRef.current.onSelectRoute?.(unit.unitId, selectedRoute.id);
+        });
+        line.addTo(group);
+        continue;
       }
 
-      const line = L.polyline(latlngs, {
-        color: strokeColor,
-        weight: isSelected ? 3.5 : 2.3,
-        opacity: isSelected ? 0.98 : 0.78,
-        dashArray: isSelected ? undefined : "6 5",
-        interactive: true,
-      });
-
-      line.bindTooltip(
-        `${visual.shortLabel} · ${formatRouteDistance(route.totalDistanceM)} · ${route.maxSlopeDeg.toFixed(1)}°`,
-        {
-          sticky: true,
-          className: "route-map-tooltip",
-          direction: "top",
-          offset: [0, -6],
-        },
+      const ordered = [...unit.routes].sort((a, b) =>
+        a.id === selectedRoute?.id ? 1 : b.id === selectedRoute?.id ? -1 : 0,
       );
 
-      line.on("click", (ev) => {
-        L.DomEvent.stopPropagation(ev);
-        callbacksRef.current.onSelectRoute?.(route.id);
-      });
+      for (const route of ordered) {
+        const isSelected = route.id === selectedRoute?.id;
+        const latlngs = route.points.map((p): [number, number] => [p.lat, p.lon]);
+        const visual = getRouteStrategyVisual(route.strategy);
+        const strokeColor = isSelected ? visual.selectedColor : visual.color;
 
-      line.addTo(group);
+        if (isSelected) {
+          L.polyline(latlngs, {
+            color: "#050709",
+            weight: 6.5,
+            opacity: 0.72,
+            interactive: false,
+          }).addTo(group);
+        }
+
+        const line = L.polyline(latlngs, {
+          color: strokeColor,
+          weight: isSelected ? 3.5 : 2.3,
+          opacity: isSelected ? 0.98 : 0.78,
+          dashArray: isSelected ? undefined : "6 5",
+          interactive: true,
+        });
+
+        line.bindTooltip(
+          `U${unit.unitId} ${visual.shortLabel} · ${formatRouteDistance(route.totalDistanceM)} · ${route.maxSlopeDeg.toFixed(1)}°`,
+          {
+            sticky: true,
+            className: "route-map-tooltip",
+            direction: "top",
+            offset: [0, -6],
+          },
+        );
+
+        line.on("click", (ev) => {
+          L.DomEvent.stopPropagation(ev);
+          callbacksRef.current.onSelectRoute?.(unit.unitId, route.id);
+        });
+
+        line.addTo(group);
+      }
     }
-  }, [routes, selectedRouteId]);
+  }, [
+    u1Id,
+    u1Routes,
+    u1SelectedRouteId,
+    u2Id,
+    u2Routes,
+    u2SelectedRouteId,
+    activeUnitId,
+    isSimMode,
+  ]);
 
-  // Render Waypoint A and Waypoint B pins
+  // Render numbered waypoint pins (1, 2, 3...) colored by character
   useEffect(() => {
     const group = markersGroupRef.current;
     if (!group) return;
     group.clearLayers();
 
-    if (waypointA) {
-      L.marker([waypointA.lat, waypointA.lon], {
-        icon: L.divIcon({
-          className: "",
-          html: '<div class="waypoint-pin">A</div>',
-          iconSize: [24, 24],
-          iconAnchor: [12, 12],
-        }),
-        interactive: false,
-      }).addTo(group);
-    }
+    for (const unit of [
+      { unitId: u1Id, waypoints: u1Waypoints },
+      { unitId: u2Id, waypoints: u2Waypoints },
+    ]) {
+      const secondaryClass = !isSimMode && unit.unitId !== activeUnitId ? " is-secondary" : "";
+      const zBase = unit.unitId === activeUnitId ? 200 : 100;
+      const total = unit.waypoints.length;
 
-    if (waypointB) {
-      L.marker([waypointB.lat, waypointB.lon], {
+      unit.waypoints.forEach((wp, idx) => {
+        const num = idx + 1;
+        const isEnd = total > 1 && idx === total - 1;
+        const roleClass = idx === 0 ? "is-start" : isEnd ? "is-end" : "is-mid";
+        const canDrag = moveWaypoints && !isSimMode && unit.unitId === activeUnitId;
+        const marker = L.marker([wp.lat, wp.lon], {
+          zIndexOffset: (canDrag ? 700 : zBase) + idx,
+          draggable: canDrag,
+          autoPan: canDrag,
+          icon: L.divIcon({
+            className: "",
+            html: `<div class="waypoint-pin is-u${unit.unitId} ${roleClass}${secondaryClass}${canDrag ? " is-draggable" : ""}">${num}</div>`,
+            iconSize: [26, 24],
+            iconAnchor: [13, 12],
+          }),
+          interactive: true,
+        });
+        marker.bindTooltip(canDrag ? `#${num} · DRAG` : `#${num}`, {
+          direction: "top",
+          offset: [0, -12],
+          className: "route-map-tooltip",
+        });
+        if (canDrag) {
+          marker.on("dragstart", () => {
+            marker.closeTooltip();
+            callbacksRef.current.onCloseContextMenu();
+          });
+          marker.on("drag", () => {
+            const ll = marker.getLatLng();
+            callbacksRef.current.onCursorMove({
+              lat: ll.lat,
+              lon: normalizeLon180(ll.lng),
+            });
+          });
+          marker.on("dragend", () => {
+            const ll = marker.getLatLng();
+            callbacksRef.current.onDragWaypoint?.(unit.unitId, idx, {
+              lat: ll.lat,
+              lon: normalizeLon180(ll.lng),
+            });
+          });
+        }
+        marker.addTo(group);
+      });
+    }
+  }, [u1Id, u1Waypoints, u2Id, u2Waypoints, activeUnitId, isSimMode, moveWaypoints]);
+
+  // Render animated character simulation positions along routes
+  const wpCount1 = u1Waypoints.length;
+  const wpCount2 = u2Waypoints.length;
+  useEffect(() => {
+    const group = simMoversGroupRef.current;
+    if (!group) return;
+    group.clearLayers();
+
+    for (const item of [
+      { unitId: 1 as const, pos: simPos1, wpCount: wpCount1 },
+      { unitId: 2 as const, pos: simPos2, wpCount: wpCount2 },
+    ]) {
+      const { unitId, pos, wpCount } = item;
+      if (!pos) continue;
+      if (!isSimMode && pos.elapsedHours <= 0) continue;
+
+      const endTag = wpCount >= 2 ? `AT #${wpCount}` : "ARRIVED";
+      const label = pos.arrived
+        ? `U${unitId} ${endTag}`
+        : `U${unitId} ${(pos.progressRatio * 100).toFixed(0)}% · ${(pos.speedMPerH / 1000).toFixed(1)} km/h`;
+
+      const marker = L.marker([pos.lat, pos.lon], {
+        zIndexOffset: 900 + unitId,
         icon: L.divIcon({
           className: "",
-          html: '<div class="waypoint-pin is-b">B</div>',
-          iconSize: [24, 24],
-          iconAnchor: [12, 12],
+          html: `<div class="sim-mover-pin is-u${unitId} ${pos.arrived ? "is-arrived" : "is-walking"}"><span>U${unitId}</span></div>`,
+          iconSize: [28, 28],
+          iconAnchor: [14, 14],
         }),
-        interactive: false,
-      }).addTo(group);
+        interactive: true,
+      });
+      marker.bindTooltip(label, {
+        direction: "top",
+        offset: [0, -14],
+        className: "route-map-tooltip",
+      });
+      marker.addTo(group);
     }
-  }, [waypointA, waypointB]);
+  }, [simPos1, simPos2, wpCount1, wpCount2, isSimMode]);
 
   // Render hovered point from Elevation Profile
   useEffect(() => {
@@ -712,30 +894,37 @@ export function MapView({
 
       marker.bindPopup(
         () =>
-          buildPointPopupElement(point, cls, !readOnlyPoints, {
-            onSetA: (coord) => {
-              marker.closePopup();
-              callbacksRef.current.onPointSetA(coord);
+          buildPointPopupElement(
+            point,
+            cls,
+            activeUnitId,
+            activeNextNumRef.current,
+            !readOnlyPoints,
+            {
+              onAppendWaypoint: (coord) => {
+                marker.closePopup();
+                callbacksRef.current.onPointAppendWaypoint(coord);
+              },
+              onInsertWaypoint: (coord) => {
+                marker.closePopup();
+                callbacksRef.current.onPointInsertWaypoint(coord);
+              },
+              onEdit: (pt) => {
+                marker.closePopup();
+                callbacksRef.current.onEditPoint(pt);
+              },
+              onDelete: (id) => {
+                marker.closePopup();
+                callbacksRef.current.onDeletePoint(id);
+              },
             },
-            onSetB: (coord) => {
-              marker.closePopup();
-              callbacksRef.current.onPointSetB(coord);
-            },
-            onEdit: (pt) => {
-              marker.closePopup();
-              callbacksRef.current.onEditPoint(pt);
-            },
-            onDelete: (id) => {
-              marker.closePopup();
-              callbacksRef.current.onDeletePoint(id);
-            },
-          }),
+          ),
         { closeButton: false, minWidth: 210, maxWidth: 260 },
       );
 
       marker.addTo(group);
     }
-  }, [points, pointClasses, selectedPointId, readOnlyPoints]);
+  }, [points, pointClasses, selectedPointId, readOnlyPoints, activeUnitId]);
 
   return <div ref={containerRef} className="map-root" />;
 }

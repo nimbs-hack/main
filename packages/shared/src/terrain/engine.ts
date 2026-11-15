@@ -1,4 +1,17 @@
 import { type MarsCoord, normalizeLon180, surfaceDistanceMeters } from "../coords";
+import {
+  DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
+  SOIL_SPEED_FACTOR_MAX,
+  SOIL_SPEED_FACTOR_MIN,
+  SOIL_TYPE_CATALOG,
+  type SoilSpeedFactors,
+  type SoilTypeId,
+  classifyMarsSoilMatrix,
+  createEmptySoilBreakdown,
+  maxSoilSpeedFactor,
+  resolveSoilSpeedFactors,
+  soilCodeToId,
+} from "../soil";
 import type {
   ComputedRoute,
   RouteBlockedReason,
@@ -150,6 +163,7 @@ class MinHeap {
 export class TerrainGraph {
   readonly meta: SiteMetadata;
   readonly elevations: Float32Array;
+  readonly soilMatrix: Uint8Array;
   readonly rows: number;
   readonly cols: number;
   readonly dxM: number;
@@ -214,6 +228,24 @@ export class TerrainGraph {
     this.localMaxSlope = new Float32Array(this.totalCells);
     this.precomputeLocalMaxSlopes();
 
+    if (dataset.soilTypes && dataset.soilTypes.length === this.totalCells) {
+      const matrix = new Uint8Array(this.totalCells);
+      for (let i = 0; i < this.totalCells; i += 1) {
+        const raw = dataset.soilTypes[i] ?? 0;
+        matrix[i] = raw >= 0 && raw <= 3 ? raw : 1;
+      }
+      this.soilMatrix = matrix;
+    } else {
+      this.soilMatrix = classifyMarsSoilMatrix({
+        elevationsM: this.elevations,
+        rows: this.rows,
+        cols: this.cols,
+        dxM: this.dxM,
+        dyM: this.dyM,
+        nodataValue: this.meta.nodataValue,
+      });
+    }
+
     this.gScoreBuf = new Float64Array(this.totalCells);
     this.parentBuf = new Int32Array(this.totalCells);
     this.closedBuf = new Uint8Array(this.totalCells);
@@ -253,6 +285,24 @@ export class TerrainGraph {
 
   isCellValid(idx: number): boolean {
     return this.validMask[idx] === 1;
+  }
+
+  /** Classified Martian substrate type at nearest valid cell, or null outside bounds. */
+  soilAt(coord: MarsCoord): SoilTypeId | null {
+    const pos = this.coordToFractionalGrid(coord);
+    if (!pos) return null;
+    const nr = Math.round(pos.r);
+    const nc = Math.round(pos.c);
+    const ni = nr * this.cols + nc;
+    if (!this.isValidCell(ni)) return null;
+    return soilCodeToId(this.soilMatrix[ni] ?? 0);
+  }
+
+  private edgeSoilSpeedFactor(u: number, v: number, soilFactors: SoilSpeedFactors): number {
+    const fU = soilFactors[soilCodeToId(this.soilMatrix[u] ?? 0)];
+    const fV = soilFactors[soilCodeToId(this.soilMatrix[v] ?? 0)];
+    const avg = (fU + fV) * 0.5;
+    return Math.max(SOIL_SPEED_FACTOR_MIN, Math.min(SOIL_SPEED_FACTOR_MAX, avg));
   }
 
   private isValidCell(idx: number): boolean {
@@ -478,6 +528,7 @@ export class TerrainGraph {
     maxSlopeDeg: number,
     mode: RouteStrategy,
     weatherCtx?: ResolvedWeatherContext,
+    soilFactors: SoilSpeedFactors = DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
   ): number[] | null {
     if (
       weatherCtx &&
@@ -491,9 +542,23 @@ export class TerrainGraph {
     const rows = this.rows;
     const dxM = this.dxM;
     const dyM = this.dyM;
+    const diagM = this.diagM;
     const elev = this.elevations;
     const valid = this.validMask;
     const penalty = this.penaltyBuf;
+    const soil = this.soilMatrix;
+    const soilLut = new Float64Array([
+      Math.max(SOIL_SPEED_FACTOR_MIN, Math.min(SOIL_SPEED_FACTOR_MAX, soilFactors.bedrock)),
+      Math.max(
+        SOIL_SPEED_FACTOR_MIN,
+        Math.min(SOIL_SPEED_FACTOR_MAX, soilFactors["coarse-regolith"]),
+      ),
+      Math.max(
+        SOIL_SPEED_FACTOR_MIN,
+        Math.min(SOIL_SPEED_FACTOR_MAX, soilFactors["fine-regolith"]),
+      ),
+      Math.max(SOIL_SPEED_FACTOR_MIN, Math.min(SOIL_SPEED_FACTOR_MAX, soilFactors["loose-sand"])),
+    ]);
 
     const gScore = this.gScoreBuf;
     const parent = this.parentBuf;
@@ -515,11 +580,23 @@ export class TerrainGraph {
 
     const slopeDenom = Math.max(1, maxSlopeDeg);
     const radToDeg = 180 / Math.PI;
+    const invMaxSoilFactor = 1 / maxSoilSpeedFactor(soilFactors);
+    // Keep shortest mode strictly admissible; allow a bounded heuristic factor on secondary
+    // multi-objective modes so 1001x1001 grids do not flood the whole map when edge weights > 1.
+    const heuristicWeight = mode === "shortest" ? 1 : 1.35;
+    const heuristicScale = invMaxSoilFactor * heuristicWeight;
+    const octile = (rr: number, cc: number): number => {
+      const dr = rr > goalR ? rr - goalR : goalR - rr;
+      const dc = cc > goalC ? cc - goalC : goalC - cc;
+      const dMin = dr < dc ? dr : dc;
+      const base = dMin * diagM + (dr > dc ? (dr - dc) * dyM : (dc - dr) * dxM);
+      return base * heuristicScale;
+    };
     const startR = (startIdx / cols) | 0;
     const startC = startIdx - startR * cols;
 
     gScore[startIdx] = 0;
-    heap.push(startIdx, Math.hypot((startR - goalR) * dyM, (startC - goalC) * dxM));
+    heap.push(startIdx, octile(startR, startC));
 
     while (heap.popInto()) {
       const u = heap.poppedNode;
@@ -540,6 +617,7 @@ export class TerrainGraph {
       const c = u - r * cols;
       const uCost = gScore[u] ?? Number.POSITIVE_INFINITY;
       const elevU = elev[u] ?? 0;
+      const soilFactorU = soilLut[soil[u] ?? 0] ?? 1;
 
       for (let d = 0; d < 8; d += 1) {
         const dir = DIRS[d];
@@ -555,7 +633,8 @@ export class TerrainGraph {
         if (dh > (maxDh[d] ?? 0)) continue;
 
         const dist = this.dirDists[d] ?? 0;
-        let stepCost = dist;
+        const soilTimeScale = 2 / (soilFactorU + (soilLut[soil[v] ?? 0] ?? 1));
+        let stepCost = dist * soilTimeScale;
         if (mode === "gentlest") {
           const slope = Math.atan(dh / Math.max(1e-6, dist)) * radToDeg;
           const ratio = slope / slopeDenom;
@@ -563,7 +642,7 @@ export class TerrainGraph {
             weatherCtx && weatherCtx.thermalWeight > 0
               ? weatherCtx.thermalWeight * 1.0 * this.computeThermalRisk(v, weatherCtx)
               : 0;
-          stepCost = dist * (1 + 4.5 * ratio * ratio + thermalTerm);
+          stepCost = dist * soilTimeScale * (1 + 4.5 * ratio * ratio + thermalTerm);
         } else if (mode === "weather-safe") {
           const slope = Math.atan(dh / Math.max(1e-6, dist)) * radToDeg;
           const ratio = slope / slopeDenom;
@@ -573,16 +652,16 @@ export class TerrainGraph {
                 WEATHER_SAFE_THERMAL_GAIN *
                 this.computeThermalRisk(v, weatherCtx)
               : 0;
-          stepCost = dist * (1 + thermalTerm + 0.5 * ratio * ratio);
+          stepCost = dist * soilTimeScale * (1 + thermalTerm + 0.5 * ratio * ratio);
         } else if (mode === "alternate" && penalty[v]) {
-          stepCost = dist * 3.5;
+          stepCost = dist * soilTimeScale * 3.5;
         }
 
         const nextG = uCost + stepCost;
         if (nextG < (gScore[v] ?? Number.POSITIVE_INFINITY)) {
           gScore[v] = nextG;
           parent[v] = u;
-          heap.push(v, nextG + Math.hypot((nr - goalR) * dyM, (nc - goalC) * dxM));
+          heap.push(v, nextG + octile(nr, nc));
         }
       }
     }
@@ -723,8 +802,10 @@ export class TerrainGraph {
     strategy: RouteStrategy,
     nodePath: number[],
     weatherCtx?: ResolvedWeatherContext,
+    soilFactors: SoilSpeedFactors = DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
   ): ComputedRoute {
     const points: RoutePoint[] = [];
+    const soilBreakdown = createEmptySoilBreakdown();
     let cumulativeDist = 0;
     let gain = 0;
     let loss = 0;
@@ -742,6 +823,8 @@ export class TerrainGraph {
       const c = idx % this.cols;
       const coord = this.coordForCell(r, c);
       const elev = this.elevations[idx] ?? 0;
+      const nodeSoil = soilCodeToId(this.soilMatrix[idx] ?? 0);
+      let segSoilFactor = soilFactors[nodeSoil];
 
       let segSlope = 0;
       const prevIdx = i > 0 ? nodePath[i - 1] : undefined;
@@ -758,6 +841,8 @@ export class TerrainGraph {
         if (segSlope > maxSlope) maxSlope = segSlope;
         weightedSlopeSum += segSlope * segDist;
         cumulativeDist += segDist;
+        segSoilFactor = this.edgeSoilSpeedFactor(prevIdx, idx, soilFactors);
+        soilBreakdown[nodeSoil] += segDist;
       }
 
       const point: RoutePoint = {
@@ -766,6 +851,8 @@ export class TerrainGraph {
         elevationM: Math.round(elev * 100) / 100,
         distanceM: Math.round(cumulativeDist * 10) / 10,
         slopeDeg: Math.round(segSlope * 100) / 100,
+        soilType: nodeSoil,
+        soilSpeedFactor: Math.round(segSoilFactor * 1000) / 1000,
       };
 
       if (weatherCtx) {
@@ -794,6 +881,12 @@ export class TerrainGraph {
       maxSlopeDeg: Math.round(maxSlope * 100) / 100,
       meanSlopeDeg:
         cumulativeDist > 0 ? Math.round((weightedSlopeSum / cumulativeDist) * 100) / 100 : 0,
+      soilBreakdown: {
+        bedrock: Math.round(soilBreakdown.bedrock * 10) / 10,
+        "coarse-regolith": Math.round(soilBreakdown["coarse-regolith"] * 10) / 10,
+        "fine-regolith": Math.round(soilBreakdown["fine-regolith"] * 10) / 10,
+        "loose-sand": Math.round(soilBreakdown["loose-sand"] * 10) / 10,
+      },
       points,
     };
 
@@ -944,13 +1037,61 @@ export class TerrainGraph {
     };
   }
 
-  /** Build candidate routes from waypointA to waypointB constrained by maxSlopeDeg and optional weather. */
+  /** Build candidate routes from waypointA to waypointB constrained by maxSlopeDeg, soil factors, and optional weather. */
   planRoutes(
     waypointA: MarsCoord,
     waypointB: MarsCoord,
     maxSlopeDeg: number,
     weatherFilter?: TerrainWeatherFilter,
+    soilSpeedFactors?: Partial<SoilSpeedFactors>,
   ): RoutePlanResponse {
+    return this.planWaypointsRoutes(
+      [waypointA, waypointB],
+      maxSlopeDeg,
+      weatherFilter,
+      soilSpeedFactors,
+    );
+  }
+
+  /** Stitch A* legs across sequential waypoints [1, 2, ..., N] for one strategy. */
+  private solveMultiLegPath(
+    waypointIndices: number[],
+    maxSlopeDeg: number,
+    mode: RouteStrategy,
+    weatherCtx?: ResolvedWeatherContext,
+    soilFactors: SoilSpeedFactors = DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
+  ): { path: number[] | null; failedLegIndex: number } {
+    const combined: number[] = [];
+    for (let leg = 0; leg < waypointIndices.length - 1; leg += 1) {
+      const startIdx = waypointIndices[leg];
+      const goalIdx = waypointIndices[leg + 1];
+      if (startIdx === undefined || goalIdx === undefined) {
+        return { path: null, failedLegIndex: leg };
+      }
+      const legPath = this.runAStar(startIdx, goalIdx, maxSlopeDeg, mode, weatherCtx, soilFactors);
+      if (!legPath) {
+        return { path: null, failedLegIndex: leg };
+      }
+      if (leg === 0) {
+        combined.push(...legPath);
+      } else {
+        for (let i = 1; i < legPath.length; i += 1) {
+          const node = legPath[i];
+          if (node !== undefined) combined.push(node);
+        }
+      }
+    }
+    return { path: combined, failedLegIndex: -1 };
+  }
+
+  /** Build candidate routes sequentially through ordered waypoints `[1, 2, ..., N]`. */
+  planWaypointsRoutes(
+    waypoints: MarsCoord[],
+    maxSlopeDeg: number,
+    weatherFilter?: TerrainWeatherFilter,
+    soilSpeedFactors?: Partial<SoilSpeedFactors>,
+  ): RoutePlanResponse {
+    const soilFactors = resolveSoilSpeedFactors(soilSpeedFactors);
     const clampedSlope = Math.max(0.5, Math.min(89, maxSlopeDeg));
     const passableEdgeRatio = this.computePassableEdgeRatio(clampedSlope);
     const widthKm = Math.round(this.meta.widthMeters / 100) / 10;
@@ -964,10 +1105,10 @@ export class TerrainGraph {
         }
       : {};
 
-    if (!this.isInsideBounds(waypointA) || !this.isInsideBounds(waypointB)) {
+    if (waypoints.length < 2) {
       return {
         status: "out_of_bounds",
-        message: `Place both Waypoint A and Waypoint B inside the ${widthKm}x${heightKm} km terrain bounds.`,
+        message: "Place at least two waypoints inside terrain bounds.",
         maxSlopeDeg: clampedSlope,
         ...weatherMeta,
         passableEdgeRatio,
@@ -975,44 +1116,76 @@ export class TerrainGraph {
       };
     }
 
-    const startIdx = this.snapToNode(waypointA);
-    const goalIdx = this.snapToNode(waypointB);
-    if (startIdx === null || goalIdx === null) {
-      return {
-        status: "out_of_bounds",
-        message: "Waypoints fell on missing elevation pixels.",
-        maxSlopeDeg: clampedSlope,
-        ...weatherMeta,
-        passableEdgeRatio,
-        routes: [],
-      };
+    for (let i = 0; i < waypoints.length; i += 1) {
+      const wp = waypoints[i];
+      if (!wp || !this.isInsideBounds(wp)) {
+        return {
+          status: "out_of_bounds",
+          message: `Place Waypoint ${i + 1} inside the ${widthKm}x${heightKm} km terrain bounds.`,
+          maxSlopeDeg: clampedSlope,
+          ...weatherMeta,
+          passableEdgeRatio,
+          routes: [],
+        };
+      }
     }
 
-    const snappedA = {
-      ...this.coordForCell(Math.floor(startIdx / this.cols), startIdx % this.cols),
-      elevationM: Math.round((this.elevations[startIdx] ?? 0) * 100) / 100,
-    };
-    const snappedB = {
-      ...this.coordForCell(Math.floor(goalIdx / this.cols), goalIdx % this.cols),
-      elevationM: Math.round((this.elevations[goalIdx] ?? 0) * 100) / 100,
-    };
+    const waypointIndices: number[] = [];
+    const snappedWaypoints: Array<MarsCoord & { elevationM: number }> = [];
+    for (const wp of waypoints) {
+      const idx = this.snapToNode(wp);
+      if (idx === null) {
+        return {
+          status: "out_of_bounds",
+          message: "Waypoints fell on missing elevation pixels.",
+          maxSlopeDeg: clampedSlope,
+          ...weatherMeta,
+          passableEdgeRatio,
+          routes: [],
+        };
+      }
+      waypointIndices.push(idx);
+      snappedWaypoints.push({
+        ...this.coordForCell(Math.floor(idx / this.cols), idx % this.cols),
+        elevationM: Math.round((this.elevations[idx] ?? 0) * 100) / 100,
+      });
+    }
 
+    const snappedA = snappedWaypoints[0];
+    const snappedB = snappedWaypoints[snappedWaypoints.length - 1];
     const weatherCtx = weatherFilter ? this.buildWeatherContext(weatherFilter) : undefined;
 
-    const shortestPath = this.runAStar(startIdx, goalIdx, clampedSlope, "shortest", weatherCtx);
-    if (!shortestPath) {
-      return this.diagnoseUnreachable(
-        startIdx,
-        goalIdx,
+    const shortestRes = this.solveMultiLegPath(
+      waypointIndices,
+      clampedSlope,
+      "shortest",
+      weatherCtx,
+      soilFactors,
+    );
+    if (!shortestRes.path) {
+      const failIdx = Math.max(0, Math.min(waypointIndices.length - 2, shortestRes.failedLegIndex));
+      const failStart = waypointIndices[failIdx] ?? 0;
+      const failGoal = waypointIndices[failIdx + 1] ?? 0;
+      const diag = this.diagnoseUnreachable(
+        failStart,
+        failGoal,
         clampedSlope,
         passableEdgeRatio,
-        snappedA,
-        snappedB,
+        snappedWaypoints[failIdx] ?? { lat: 0, lon: 0, elevationM: 0 },
+        snappedWaypoints[failIdx + 1] ?? { lat: 0, lon: 0, elevationM: 0 },
         weatherFilter,
         weatherCtx,
       );
+      return {
+        ...diag,
+        blockedLegIndex: failIdx,
+        snappedA,
+        snappedB,
+        snappedWaypoints,
+      };
     }
 
+    const shortestPath = shortestRes.path;
     const routes: ComputedRoute[] = [
       this.buildRouteSummary(
         "route-shortest",
@@ -1020,56 +1193,53 @@ export class TerrainGraph {
         "shortest",
         shortestPath,
         weatherCtx,
+        soilFactors,
       ),
     ];
     const discoveredPaths: number[][] = [shortestPath];
 
-    const gentlestPath = this.runAStar(startIdx, goalIdx, clampedSlope, "gentlest", weatherCtx);
-    if (gentlestPath && this.overlapRatio(gentlestPath, shortestPath) < 0.9) {
-      routes.push(
-        this.buildRouteSummary(
-          "route-gentlest",
-          "LOWEST SLOPE",
-          "gentlest",
-          gentlestPath,
-          weatherCtx,
-        ),
+    const appendCandidateIfDistinct = (
+      id: string,
+      label: string,
+      strategy: RouteStrategy,
+      maxOverlap: number,
+    ) => {
+      const solved = this.solveMultiLegPath(
+        waypointIndices,
+        clampedSlope,
+        strategy,
+        weatherCtx,
+        soilFactors,
       );
-      discoveredPaths.push(gentlestPath);
-    }
+      if (solved.path) {
+        const candidatePath = solved.path;
+        if (
+          discoveredPaths.every(
+            (existing) => this.overlapRatio(candidatePath, existing) < maxOverlap,
+          )
+        ) {
+          routes.push(
+            this.buildRouteSummary(id, label, strategy, candidatePath, weatherCtx, soilFactors),
+          );
+          discoveredPaths.push(candidatePath);
+        }
+      }
+    };
+
+    appendCandidateIfDistinct("route-gentlest", "LOWEST SLOPE", "gentlest", 0.9);
 
     if (weatherCtx && weatherCtx.thermalWeight > 0) {
-      const weatherSafePath = this.runAStar(
-        startIdx,
-        goalIdx,
-        clampedSlope,
-        "weather-safe",
-        weatherCtx,
-      );
-      if (
-        weatherSafePath &&
-        discoveredPaths.every((existing) => this.overlapRatio(weatherSafePath, existing) < 0.88)
-      ) {
-        routes.push(
-          this.buildRouteSummary(
-            "route-weather-safe",
-            "THERMAL SAFE",
-            "weather-safe",
-            weatherSafePath,
-            weatherCtx,
-          ),
-        );
-        discoveredPaths.push(weatherSafePath);
-      }
+      appendCandidateIfDistinct("route-weather-safe", "THERMAL SAFE", "weather-safe", 0.88);
     }
 
-    // Penalize cells near existing routes to discover a distinct alternate corridor
+    // Penalize cells near existing routes while preserving all intermediate waypoints
     const penaltyMask = this.penaltyBuf;
     penaltyMask.fill(0);
+    const waypointNodeSet = new Set(waypointIndices);
     const penaltyRad = Math.max(2, Math.min(8, Math.round(this.cols / 100)));
     for (const path of discoveredPaths) {
       for (const idx of path) {
-        if (idx === startIdx || idx === goalIdx) continue;
+        if (waypointNodeSet.has(idx)) continue;
         const pr = Math.floor(idx / this.cols);
         const pc = idx % this.cols;
         for (let dr = -penaltyRad; dr <= penaltyRad; dr += 1) {
@@ -1086,21 +1256,7 @@ export class TerrainGraph {
       }
     }
 
-    const alternatePath = this.runAStar(startIdx, goalIdx, clampedSlope, "alternate", weatherCtx);
-    if (
-      alternatePath &&
-      discoveredPaths.every((existing) => this.overlapRatio(alternatePath, existing) < 0.85)
-    ) {
-      routes.push(
-        this.buildRouteSummary(
-          "route-alternate",
-          "ALT CORRIDOR",
-          "alternate",
-          alternatePath,
-          weatherCtx,
-        ),
-      );
-    }
+    appendCandidateIfDistinct("route-alternate", "ALT CORRIDOR", "alternate", 0.85);
 
     return {
       status: "ok",
@@ -1109,6 +1265,7 @@ export class TerrainGraph {
       passableEdgeRatio,
       snappedA,
       snappedB,
+      snappedWaypoints,
       routes,
     };
   }
@@ -1136,6 +1293,21 @@ export class TerrainGraph {
       }
     }
 
+    return rgba;
+  }
+
+  /** Render raw RGBA pixels coloring the 4 Martian substrate / soil classes across the site. */
+  renderSoilMaskRgba(): Uint8Array<ArrayBuffer> {
+    const rgba = new Uint8Array(this.totalCells * 4);
+    for (let u = 0; u < this.totalCells; u += 1) {
+      if (!this.validMask[u]) continue;
+      const spec = SOIL_TYPE_CATALOG[soilCodeToId(this.soilMatrix[u] ?? 0)];
+      const p = u * 4;
+      rgba[p] = spec.rgba[0];
+      rgba[p + 1] = spec.rgba[1];
+      rgba[p + 2] = spec.rgba[2];
+      rgba[p + 3] = spec.rgba[3];
+    }
     return rgba;
   }
 }

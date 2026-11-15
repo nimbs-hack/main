@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { SiteDataset } from "../types";
-import { decodeTerrainBinary, encodeTerrainBinary } from "./binary";
+import {
+  decodeSoilBinary,
+  decodeTerrainBinary,
+  encodeSoilBinary,
+  encodeTerrainBinary,
+} from "./binary";
 import { TerrainGraph } from "./engine";
 
 const DATA_DIR = resolve(import.meta.dir, "../../../../data");
@@ -29,14 +34,20 @@ describe.skipIf(!hasRealSite)("Real Jezero Crater site dataset", () => {
 
     expect(graph.isInsideBounds(meta.center)).toBe(true);
     expect(graph.elevationAt(meta.center)).not.toBeNull();
+    expect(graph.soilAt(meta.center)).not.toBeNull();
+    expect(dataset.soilTypes?.length).toBe(meta.rows * meta.cols);
     expect(graph.isInsideBounds({ lat: 0, lon: 0 })).toBe(false);
     expect(graph.elevationAt({ lat: 0, lon: 0 })).toBeNull();
 
     const encoded = encodeTerrainBinary(dataset.elevationsM);
     expect(encoded.byteLength).toBe(meta.rows * meta.cols * 4);
     const decoded = decodeTerrainBinary(encoded.buffer as ArrayBuffer, meta.rows * meta.cols);
-    const binGraph = new TerrainGraph({ meta, elevationsM: decoded });
+    const soilBytes = encodeSoilBinary(dataset.soilTypes ?? []);
+    expect(soilBytes.byteLength).toBe(meta.rows * meta.cols);
+    const decodedSoil = decodeSoilBinary(soilBytes.buffer as ArrayBuffer, meta.rows * meta.cols);
+    const binGraph = new TerrainGraph({ meta, elevationsM: decoded, soilTypes: decodedSoil });
     expect(binGraph.elevationAt(meta.center)).toBeCloseTo(graph.elevationAt(meta.center) ?? 0, 3);
+    expect(binGraph.soilAt(meta.center)).toBe(graph.soilAt(meta.center));
   });
 
   test("plans routes respecting maxSlopeDeg and reports unreachable minimum slope", () => {
@@ -79,6 +90,9 @@ describe.skipIf(!hasRealSite)("Real Jezero Crater site dataset", () => {
 
     const maskRgba = graph.renderSlopeMaskRgba(10);
     expect(maskRgba.byteLength).toBe(graph.totalCells * 4);
+
+    const soilRgba = graph.renderSoilMaskRgba();
+    expect(soilRgba.byteLength).toBe(graph.totalCells * 4);
 
     if (existsSync(HILLSHADE_PNG_PATH)) {
       const hsBytes = new Uint8Array(readFileSync(HILLSHADE_PNG_PATH));

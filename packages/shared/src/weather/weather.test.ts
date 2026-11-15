@@ -295,5 +295,33 @@ describe("Weather RSS parsing, hybrid adaptation, and tile URLs", () => {
     const trekUrl = buildDirectMarsTileUrl("mola-trek", 5, 10, 12);
     expect(trekUrl).toContain("trek.nasa.gov/tiles/Mars/");
     expect(buildDirectMarsTileUrl("mola-trek", 9, 0, 0)).toBeNull();
+
+    // 4 soil type speed coefficients scale traverse hours accurately
+    const soilEval = evaluateEvaWeather(snapshot, {
+      limits: {
+        ...DEFAULT_EVA_LIMITS,
+        flatSpeedMPerH: 2000,
+        soilSpeedFactors: {
+          bedrock: 1.0,
+          "coarse-regolith": 0.8,
+          "fine-regolith": 0.5,
+          "loose-sand": 0.25,
+        },
+      },
+      route: {
+        totalDistanceM: 2500,
+        elevationGainM: 0,
+        elevationLossM: 0,
+        maxElevationM: -2000,
+        soilBreakdown: {
+          bedrock: 1000,
+          "coarse-regolith": 0,
+          "fine-regolith": 1000,
+          "loose-sand": 500,
+        },
+      },
+      siteMeta: graph.meta,
+    });
+    expect(soilEval.estimatedRouteHours).toBe(2.5);
   });
 });

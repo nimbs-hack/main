@@ -1,4 +1,4 @@
-const STATIC_CACHE = "nimbs-static-v1";
+const STATIC_CACHE = "nimbs-static-v2";
 const TILE_CACHE = "nimbs-tiles-v1";
 const MAX_CACHED_TILES = 600;
 
@@ -7,6 +7,7 @@ const STATIC_DATA_URLS = [
   "/index.html",
   "/data/site-meta.json",
   "/data/site-terrain.bin",
+  "/data/site-soil.bin",
   "/data/site-hillshade.png",
   "/data/site-weather.json",
 ];

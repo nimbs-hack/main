@@ -7,24 +7,24 @@ This document covers the client-side deployment architecture (`deploy-v1`) for M
 The root `package.json`, named `mars-mission-planner`, configures Bun workspaces across `apps/*` and `packages/*`.
 
 ```text
-packages/shared/src/     Coordinate geodesy, basemap tile URLs, binary DEM packing, TerrainGraph, spatial weather field, weather generator, and RSS parsers for @nimbs/shared
-apps/web/src/            React and Leaflet console UI, terrain Web Worker, IndexedDB and localStorage caches, RGBA canvas overlay encoding, and client weather service for @nimbs/web
+packages/shared/src/     Coordinate geodesy, basemap tile URLs, 4-class Martian soil classification, binary DEM/soil packing, dual-unit traverse timelines, TerrainGraph, spatial weather field, weather generator, and RSS parsers for @nimbs/shared
+apps/web/src/            React and Leaflet console UI, terrain Web Worker, IndexedDB and localStorage caches, RGBA canvas overlay encoding, dual-unit simulation service, and client weather service for @nimbs/web
 apps/web/public/         Service worker (sw.js) for tile and static asset CacheStorage, plus packaged static /data/* assets generated at build time
 scripts/dev.ts           Launcher preparing static /data assets and running the @nimbs/web Vite dev server
 scripts/serve-static.ts  Static-only Bun file server serving apps/web/dist/ with zero backend API routes
 scripts/data/            Terrain and weather ingestion plus prepare-static-data.ts binary packager
 scripts/assets/          FGDC geologic symbol extractor (extract-fgdc-symbols.ts)
 data/                    Gitignored terrain grid, hillshade PNG, site-weather.json, and tracked SOURCES.md
-docs/                    Visual language, tool extension guide, and architecture documentation
+docs/                    Visual language, tool extension guide, Martian soil sources, and architecture documentation
 ```
 
-`@nimbs/shared` exposes `coords.ts`, `layers.ts`, `tiles.ts`, `types.ts`, `terrain/*`, and `weather/*` directly as TypeScript through `packages/shared/src/index.ts`. `@nimbs/web` runs all computations inside the browser and imports `@nimbs/shared` via `workspace:*`.
+`@nimbs/shared` exposes `coords.ts`, `layers.ts`, `soil.ts`, `traverse.ts`, `tiles.ts`, `types.ts`, `terrain/*`, and `weather/*` directly as TypeScript through `packages/shared/src/index.ts`. `@nimbs/web` runs all computations inside the browser and imports `@nimbs/shared` via `workspace:*`.
 
 ```mermaid
 flowchart LR
-  COG["USGS STAC MRO CTX COG"] -->|HTTP Range| Fetch["scripts/data/fetch-site.ts"]
+  COG["USGS STAC MRO CTX & THEMIS NIR COGs"] -->|HTTP Range| Fetch["scripts/data/fetch-site.ts"]
   Fetch -->|writes| Data["data/site-terrain.json and site-hillshade.png"]
-  Data -->|packages Float32 binary| Static["apps/web/public/data and dist/data"]
+  Data -->|packages Float32 + Uint8 binaries| Static["apps/web/public/data and dist/data"]
   Static -->|"Served statically + IndexedDB"| Worker["apps/web: Web Worker TerrainGraph"]
   WMS["USGS WMS and Mars Trek WMTS"] -->|"Direct CORS + CacheStorage (sw.js)"| Web["apps/web: React and Leaflet EPSG:4326"]
   Worker -->|"OffscreenCanvas Blob URLs and routes"| Web
@@ -70,18 +70,20 @@ Each dependency keeps deployment static-only while running all compute in the br
 
 The fetched Jezero Crater Delta and Rim dataset in `data/site-terrain.json` contains `1001` rows by `1001` columns, `1,002,001` elevation nodes at `20 m` spacing across `1000` intervals, bbox `[77.26644047791001, 18.49529395141885, 77.62258148283172, 18.832706048581155]`, center `{ lat: 18.664, lon: 77.44451098037086 }`, and elevations between `-2590.35 m` and `-1696.52 m`.
 
-### Basemap tile proxy and disk caching
+### Martian soil classification
 
-`apps/api/src/routes/tiles.ts` proxies and caches global basemaps at `GET /api/tiles/:layer/:z/:x/:y`.
+Alongside elevation, `scripts/data/fetch-site.ts` streams the matching `100 m/px` Mars Odyssey THEMIS Nighttime IR controlled mosaic (`mc13_syrtis_major_nir.tif` for Jezero, `mc23_aeolis_nir.tif` for Gale) and bilinearly resamples it onto the `1001 x 1001` grid. `classifyMarsSoilMatrix` in `packages/shared/src/soil.ts` fuses THEMIS IR brightness, `20 m` local slope, and a `7 x 7` focal Topographic Position Index (`TPI`) to label every cell with one of 4 soil codes (`Uint8Array` / `number[]`):
 
-- **Layer mapping.** `USGS_WMS_LAYERS` maps `usgs-mdim` to `MDIM21_color`, `usgs-themis` to `THEMIS`, `usgs-mola-themis` to `MOLA_THEMIS_blend`, and `usgs-hillshade` to `HRSC_MOLA_Blend_Hillshade`. `mola-trek` fetches NASA Mars Trek MOLA colorized shaded relief JPEGs for `z <= 7`. In `packages/shared/src/layers.ts`, `MARS_BASE_LAYERS` exposes `usgs-mdim`, `usgs-themis`, `usgs-mola-themis`, and `mola-trek` to the frontend, with `usgs-mdim` as `DEFAULT_MARS_BASE_LAYER`.
-- **Tile grid validation.** `EPSG:4326` spans `360°` by `180°`, so valid tile indices satisfy `0 <= z <= 14`, `0 <= x < 2^(z+1)`, and `0 <= y < 2^z`.
-- **WMS request math.** For USGS layers, `tileDeg = 180 / 2^z`, `west = -180 + x * tileDeg`, `east = west + tileDeg`, `north = 90 - y * tileDeg`, and `south = north - tileDeg`. The proxy requests `256 x 256` `image/png` tiles from `planetarymaps.usgs.gov/cgi-bin/mapserv` using `WMS 1.1.1` and `SRS=EPSG:4326`.
-- **Disk cache.** Tiles persist at `data/cache/tiles/<layer>/<z>_<x>_<y>.<ext>` using `.jpg` for `mola-trek` and `.png` for USGS layers. Upstream calls enforce a `12,000 ms` `AbortSignal.timeout` and reject non-image `content-type` headers with `502`. Responses set `Cache-Control: public, max-age=86400` and `X-Tile-Cache: HIT` or `MISS`.
+- `0` (`bedrock`, default factor human `1.00`, rover `1.00`): high-IR fractured rock and scarps (`>= 12 deg`).
+- `1` (`coarse-regolith`, default human `0.85`, rover `0.88`): moderately thermal-inert 1 to 2 mm rocky aprons.
+- `2` (`fine-regolith`, default human `0.70`, rover `0.72`): ferric dust mantles and silt plains.
+- `3` (`loose-sand`, default human `0.45`, rover `0.42`): low-IR windblown ripples and sand traps on flat or concave terrain (`<= 7.5 deg`).
+
+When an older dataset omits `soilTypes`, `TerrainGraph` derives the matrix on startup with `classifyMarsSoilMatrix`. Full dataset URLs and planetary mobility references live in [Martian soil sources](martian-soil-sources.md).
 
 ## Terrain graph and pathfinding algorithms
 
-`TerrainGraph` in `apps/api/src/terrain/engine.ts` loads `SiteDataset` elevations into a row-major `Float32Array` ordered north-to-south and west-to-east. From `meta.bbox`, the constructor measures exact Martian surface spacing along the grid midlines:
+`TerrainGraph` in `packages/shared/src/terrain/engine.ts` loads `SiteDataset` elevations (`Float32Array`) and substrate classes (`Uint8Array`) ordered north-to-south and west-to-east. From `meta.bbox`, the constructor measures exact Martian surface spacing along the grid midlines:
 
 ```text
 dyM = surfaceDistanceMeters({ lat: north, lon: midLon }, { lat: south, lon: midLon }) / max(1, rows - 1)
@@ -104,15 +106,17 @@ slopeDeg = atan(dh / max(1e-6, distM)) * 180 / pi
 
 ### Priority queue and A* search
 
-`planRoutes` clamps `maxSlopeDeg` to `[0.5, 89]` and checks `isInsideBounds` for both endpoints. `snapToNode` rounds fractional grid coordinates to the nearest valid cell, expanding outward in square rings of radius `1..5` if the exact pixel is nodata.
+`packages/shared/src/terrain/engine.ts` provides `planWaypointsRoutes(waypoints, maxSlopeDeg, weatherFilter, soilSpeedFactors)` for arbitrary sequential waypoint lists `[1, 2, ..., N]`, while `planRoutes(A, B, ...)` delegates to `[A, B]`. `snapToNode` rounds fractional grid coordinates to the nearest valid cell, expanding outward in square rings of radius `1..5` if the exact pixel is nodata.
 
-`runAStar(startIdx, goalIdx, maxSlopeDeg, mode)` uses a custom zero-allocation binary `MinHeap` (`popInto()` writing `poppedNode` and `poppedScore` instead of allocating objects) alongside preallocated reusable typed buffers (`Float64Array` `gScoreBuf`, `Int32Array` `parentBuf`, `Uint8Array` `closedBuf`, `Uint8Array` `validMask`). Neighbor passability avoids per-edge `Math.atan` by precomputing `maxDh[d] = tan(maxSlopeDeg) * dirDists[d]` for all 8 directions and comparing `abs(elev[v] - elev[u]) <= maxDh[d]`. The heuristic estimates remaining distance in meters on the local grid plane:
+`runAStar(startIdx, goalIdx, maxSlopeDeg, mode, weatherCtx, soilFactors)` uses a custom zero-allocation binary `MinHeap` alongside preallocated typed buffers (`gScoreBuf`, `parentBuf`, `closedBuf`, `validMask`) and a 4-entry `soilLut`. Neighbor passability compares `abs(elev[v] - elev[u]) <= maxDh[d]`. Each step is scaled by `soilTimeScale = 2 / (soilFactorU + soilFactorV)`, and the octile grid-plane heuristic is scaled by `1 / maxSoilSpeedFactor(soilFactors)` (keeping `heuristicWeight = 1` on `"shortest"` and `1.35` on multi-objective modes). On unreachable multi-leg routes, `planWaypointsRoutes` returns `blockedLegIndex` along with minimax Dijkstra diagnostics on the failed leg.
 
-```text
-h(r, c) = hypot((r - goalR) * dyM, (c - goalC) * dxM)
-```
+`renderSlopeMaskRgba(maxSlopeDeg)` and `renderSoilMaskRgba()` return zero-copy transferable `Uint8Array` RGBA pixel buffers to the browser UI without Node dependencies. `buildRouteSummary` attaches per-point `soilType`, `soilSpeedFactor`, `tempC`, `pressurePa`, and route-level `soilBreakdown` (distance in meters per substrate class).
 
-Because every strategy weight function returns at least `stepDist`, `h` is admissible and never overestimates path cost.
+### Dual-unit mission planning and synchronized SIM
+
+`apps/web/src/App.tsx` maintains independent mission state for Unit `1` (`#de233d`, defaulting to Human EVA) and Unit `2` (`#38bdf8`, defaulting to Rover) switched via the left-rail `1 / 2` toggle, plus ordered waypoints (`[1, 2, ..., N]`) supporting `MID` insertion (`findBestWaypointInsertIndex`), reordering, reversal, deletion, and Leaflet `MOVE` marker dragging.
+
+`packages/shared/src/traverse.ts` and `apps/web/src/services/dualSim.ts` compute synchronized dual-unit timelines (`buildUnitTraverseTimeline`, `buildDualSimBundle`, `evaluateDualSimFrame`) so both units start at the same `simDepartureLmstHour` and advance side by side across soil, slope, elevation, ambient air temperature, pressure, and cumulative suit limit margin charts until the slower unit reaches its final waypoint.
 
 ### Route strategies
 
@@ -141,14 +145,11 @@ When `shortestPath` returns `null`, `findMinRequiredSlope(startIdx, goalIdx)` fi
 ### Bilinear elevation lookup and passability masks
 
 - **Bilinear interpolation.** `elevationAt(coord)` maps coordinates to fractional `(r, c)`. When all four surrounding corner indices `(r0, c0)`, `(r0, c1)`, `(r1, c0)`, and `(r1, c1)` are valid, it interpolates linearly in both axes and rounds to `0.01 m`. If any corner is nodata, it falls back to the nearest rounded cell if valid, or returns `null`.
-- **Passability mask PNG.** `renderSlopeMaskPng(maxSlopeDeg)` reads `localMaxSlope` precomputed once in the `TerrainGraph` constructor (`precomputeLocalMaxSlopes`) and encodes a `1001 x 1001` RGBA PNG via `encodeRgbaPng` at zlib compression level `1` (~23 ms encode time):
-  - `localMaxSlope > maxSlopeDeg` writes amber-orange `rgba(245, 158, 11, 175)`, keeping terrain hazards visually separate from the `#de233d` selection accent.
-  - `localMaxSlope > maxSlopeDeg * 0.75` writes caution yellow `rgba(234, 179, 8, 55)`.
-  - Safer cells remain transparent `rgba(0, 0, 0, 0)`.
+- **Passability and soil RGBA masks.** `renderSlopeMaskRgba(maxSlopeDeg)` reads `localMaxSlope` precomputed once in the `TerrainGraph` constructor (`precomputeLocalMaxSlopes`) and returns raw `1001 x 1001` RGBA bytes (`rgba(245, 158, 11, 175)` above limit, `rgba(234, 179, 8, 55)` in caution band). `renderSoilMaskRgba()` colors valid cells across the 4 classified soil classes using `SOIL_TYPE_CATALOG` colors. The browser encodes these transferable buffers into PNG `Blob` URLs via `rgbaBlob.ts`.
 
 ### Spatial weather fields and weather-constrained routing
 
-`apps/api/src/terrain/weatherField.ts` turns a `MarsWeatherSnapshot` into per-cell temperature and pressure over the site grid, and `apps/api/src/terrain/engine.ts` folds that field into `planRoutes` as an optional `TerrainWeatherFilter` (`lmstHour`, optional `lmstLabel`, `minAirTempC`, `minPressurePa`, optional `thermalWeight`, and the `cellTempK`/`cellPressurePa` arrays).
+`packages/shared/src/terrain/weatherField.ts` turns a `MarsWeatherSnapshot` into per-cell temperature and pressure over the site grid, and `packages/shared/src/terrain/engine.ts` folds that field into `planWaypointsRoutes` as an optional `TerrainWeatherFilter` (`lmstHour`, optional `lmstLabel`, `minAirTempC`, `minPressurePa`, optional `thermalWeight`, and the `cellTempK`/`cellPressurePa` arrays).
 
 **Hour interpolation.** `interpolateWeatherAtHour(snapshot, lmstHour)` clamps `lmstHour` to `[0, 48]`, floors to `h0`, takes `h1 = min(48, h0 + 1)`, and linearly blends `tempK`, `pressurePa`, and `solarIrradianceWm2` by the fractional hour. `isDaylight` is true when the blended irradiance is positive and either endpoint hour is daylight. `lsDeg` is interpolated with wrap when `snapshot.nextSol` is present, `sol` becomes `nextSol.sol` (or `snapshot.sol + 1`) past hour `24`, and dust opacity and reference elevation switch to `nextSol` for the second sol. `lmstLabel` is the wrapped `HH:MM` clock.
 
@@ -158,9 +159,9 @@ When `shortestPath` returns `null`, `findMinRequiredSlope(startIdx, goalIdx)` fi
 - A barometric height factor `exp(-elev / MARS_SCALE_HEIGHT_M)` with `MARS_SCALE_HEIGHT_M = 10_800`.
 - Topographic basin depth from an `O(N)` separable sliding-window local mean, with radius `clamp(2, 10, round(200 / cellSizeMeters))`.
 
-Pressure follows `p = pScale * exp(-elev / 10800)` where `pScale = sample.pressurePa * exp(referenceElevationM / 10800)`. Temperature starts from `baseTempAtZero = sample.tempK - MARS_LAPSE_RATE_K_PER_M * referenceElevationM` and adds `MARS_LAPSE_RATE_K_PER_M * elev` with `MARS_LAPSE_RATE_K_PER_M = -0.0025`. During daylight a solar term uses the sun unit vector built from `MARS_OBLIQUITY_RAD` (`25.19°`), season, latitude, and hour angle: `cosInc = normal · sun`, the incidence delta is clamped to `[-1.0, 1.2]`, and `solarAmp = 5.0 * exp(-0.55 * tau) * min(1.15, irradiance / 350)`. At night a clear-sky `exp(-0.3 * tau)` term cools basin cells up to `2.5 K` with a `0.02` per-meter pool slope. Field and PNG results are cached in small LRU maps (`8` fields, `16` PNGs) keyed by graph id, site, sol, scenario, and rounded sample values.
+Pressure follows `p = pScale * exp(-elev / 10800)` where `pScale = sample.pressurePa * exp(referenceElevationM / 10800)`. Temperature starts from `baseTempAtZero = sample.tempK - MARS_LAPSE_RATE_K_PER_M * referenceElevationM` and adds `MARS_LAPSE_RATE_K_PER_M * elev` with `MARS_LAPSE_RATE_K_PER_M = -0.0025`. During daylight a solar term uses the sun unit vector built from `MARS_OBLIQUITY_RAD` (`25.19°`), season, latitude, and hour angle: `cosInc = normal · sun`, the incidence delta is clamped to `[-1.0, 1.2]`, and `solarAmp = 5.0 * exp(-0.55 * tau) * min(1.15, irradiance / 350)`. At night a clear-sky `exp(-0.3 * tau)` term cools basin cells up to `2.5 K` with a `0.02` per-meter pool slope. Field results are cached per `TerrainGraph`, site, sol, scenario, and rounded sample values.
 
-**Summary and masks.** `toSiteEnvironmentSummary(field)` returns the `SiteEnvironmentSummary` served by `GET /api/site/environment-summary`. `renderPressureMaskPng(graph, field, minPressurePa)` and `renderTemperatureMaskPng(graph, field, minAirTempC)` encode RGBA PNGs at the graph resolution through a 256-entry lookup table and `encodeRgbaPng` at zlib level `1`. The pressure mask shows blocked cells below `minPressurePa` in magenta-violet (`#d946ef` to `#a21caf`), a caution band below `minPressurePa * 1.04` in `#eab308`, and safe cells in a teal-cyan gradient (`#38bdf8` to `#0d9488`). The temperature mask shows blocked cold cells below `minAirTempC` in icy blue (`#0284c7` to `#2563eb`), a `5 °C` near-limit band in `#38bdf8`, and warm safe cells in amber-orange (`#f59e0b` to `#fb923c`).
+**Summary and masks.** `toSiteEnvironmentSummary(field)` returns the `SiteEnvironmentSummary` computed by `terrainWorker.ts`. `renderPressureMaskRgba(graph, field, minPressurePa)` and `renderTemperatureMaskRgba(graph, field, minAirTempC)` return RGBA pixel buffers via 256-entry lookup tables for client PNG encoding. The pressure mask shows blocked cells below `minPressurePa` in magenta-violet (`#d946ef` to `#a21caf`), a caution band below `minPressurePa * 1.04` in `#eab308`, and safe cells in a teal-cyan gradient (`#38bdf8` to `#0d9488`). The temperature mask shows blocked cold cells below `minAirTempC` in icy blue (`#0284c7` to `#2563eb`), a `5 °C` near-limit band in `#38bdf8`, and warm safe cells in amber-orange (`#f59e0b` to `#fb923c`).
 
 **Hard filter and soft bias.** `buildWeatherContext` validates that both weather arrays match `totalCells`, clamps `thermalWeight` to `[0, 1]`, and derives the temperature and pressure spans used for scoring. `isCellWeatherPassable` then makes a cell impassable when its temperature is below `minAirTempK = celsiusToKelvin(minAirTempC)` or its pressure is below `minPressurePa`. `runAStar` returns `null` when the start or goal cell is impassable and skips impassable neighbors, so a hard filter can turn a route `unreachable`.
 
@@ -247,8 +248,9 @@ The `deploy-v1` architecture removes `apps/api` and runs all terrain routing, we
 
 | Static file | Source | Format and purpose |
 | --- | --- | --- |
-| `/data/site-meta.json` | `data/site-terrain.json` | Grid metadata (`StaticSiteManifest`) excluding raw elevation arrays |
+| `/data/site-meta.json` | `data/site-terrain.json` | Grid metadata (`StaticSiteManifest` v2) referencing terrain and soil binaries |
 | `/data/site-terrain.bin` | `data/site-terrain.json` | Little-endian `Float32Array` binary storing `rows * cols` elevation values in meters |
+| `/data/site-soil.bin` | `data/site-terrain.json` | Single-byte `Uint8Array` binary storing `rows * cols` 4-class soil substrate codes (`0..3`) |
 | `/data/site-hillshade.png` | `data/site-hillshade.png` | Pre-rendered static hillshade raster overlay |
 | `/data/site-weather.json` | `data/site-weather.json` | Persisted NASA MEDA/REMS observations used as a static fallback |
 
@@ -261,10 +263,10 @@ The `deploy-v1` architecture removes `apps/api` and runs all terrain routing, we
 
 ### Client compute and browser persistence layers
 
-- **Web Worker and engine (`apps/web/src/workers/terrainWorker.ts`, `apps/web/src/services/clientEngine.ts`):** Decodes `/data/site-terrain.bin`, builds `TerrainGraph`, runs elevation lookups, plans four-strategy A-B routes (`FASTEST`, `FLATTEST`, `THERMAL`, `DETOUR`), computes site environment summaries, and returns zero-copy transferable RGBA buffers for slope, pressure, and temperature masks. `apps/web/src/services/rgbaBlob.ts` encodes masks to PNG `Blob` object URLs (LRU cache max 32 entries). Falls back to in-thread execution if `Worker` is unavailable.
-- **IndexedDB (`apps/web/src/services/browserCache.ts`, DB `nimbs-mars-cache-v1`):** Persists `datasets`, `weather`, computed PNG `overlays` (LRU max 24), and cached `routes` (LRU max 32).
-- **`localStorage`:** Persists mission, waypoint, layer, and weather UI state under `nimbs.mars-mission-state.v1` and map point classes under `nimbs.mars-map-points.v1`.
-- **Service Worker (`apps/web/public/sw.js`):** Caches static assets and `/data/*` in `nimbs-static-v1` (`CacheStorage`) and caches upstream USGS WMS / Mars Trek tiles in `nimbs-tiles-v1` (LRU max 600 tiles).
+- **Web Worker and engine (`apps/web/src/workers/terrainWorker.ts`, `apps/web/src/services/clientEngine.ts`):** Decodes `/data/site-terrain.bin` and `/data/site-soil.bin`, builds `TerrainGraph`, runs elevation + soil substrate lookups, plans multi-waypoint soil- and weather-weighted routes, computes site environment summaries, and returns zero-copy transferable RGBA buffers for slope, soil, pressure, and temperature masks. `apps/web/src/services/rgbaBlob.ts` encodes masks to PNG `Blob` object URLs (LRU cache max 32 entries). Falls back to in-thread execution if `Worker` is unavailable.
+- **IndexedDB (`apps/web/src/services/browserCache.ts`, DB `nimbs-mars-cache-v1`):** Persists `datasets` (`terrainBuffer` + `soilBuffer`), `weather`, computed PNG `overlays` (LRU max 24), and cached `routes` keyed by waypoints, slope, soil factors, and weather filters (LRU max 32).
+- **`localStorage`:** Persists dual-unit (`unit1`, `unit2`) waypoints, presets, `soilSpeedFactors`, SIM departure/playback settings, and layer flags as schema `version: 2` under `nimbs.mars-mission-state.v1` (with automatic migration of legacy `v1` payloads into `unit1`), plus map point classes under `nimbs.mars-map-points.v1`.
+- **Service Worker (`apps/web/public/sw.js`):** Caches static assets and `/data/*` (including `/data/site-soil.bin`) in `nimbs-static-v2` (`CacheStorage`) and caches upstream USGS WMS / Mars Trek tiles in `nimbs-tiles-v1` (LRU max 600 tiles).
 
 ### Static file host (`scripts/serve-static.ts`)
 
@@ -293,13 +295,15 @@ If `bun` is installed at `~/.local/bin/bun` outside the default shell `PATH`, ex
 
 ### Automated test suites and lint scope
 
-The repository runs 32 `test` cases across 6 test files:
+The repository runs 39 `test` cases across 8 test files:
 
-- `packages/shared/src/coords.test.ts`: checks `[-180, 180)` longitude normalization, USGS Jezero HiRISE origin round-trip transforms, and `surfaceDistanceMeters` against `metersToLatDeg` and `metersToLonDeg`.
-- `packages/shared/src/terrain/engine.test.ts`: verifies `TerrainGraph` slope detours, `unreachable` threshold recovery (`minRequiredSlopeDeg`), `out_of_bounds` handling, slope/pressure/temperature RGBA mask generation, and weather-constrained routing with 48-hour wrap interpolation.
-- `packages/shared/src/terrain/real-site.test.ts`: gated on `data/site-terrain.json`, verifies `1001 x 1001` Jezero grid loading, binary terrain round-trip, elevation queries, `minRequiredSlopeDeg` recovery, passability RGBA overlay rendering, and static hillshade asset validation.
-- `packages/shared/src/weather/weather.test.ts`: verifies barometric scale height adjustment, compass sectors and `K`/`C` conversions, nominal/dust-storm/cold-snap scenarios, hybrid real-channel provenance, crater-rim pressure checks, thermal daylight windows, MEDA RSS `--` filtering, and direct Mars basemap URL generation.
-- `apps/web/src/services/pointStore.test.ts`: checks point filtering by class visibility, custom class creation and `localStorage` persistence, corrupted payload recovery, MIL-STD-2525C catalog and 15-char SIDC validation, legacy FGDC icon migration, and unknown icon stripping.
-- `apps/web/src/services/clientCache.test.ts`: verifies `loadMissionState`/`saveMissionState` validation and persistence plus `ClientWeatherService` fallback behavior.
+- `packages/shared/src/coords.test.ts` (3 tests): checks `[-180, 180)` longitude normalization, USGS Jezero HiRISE origin round-trip transforms, and `surfaceDistanceMeters` against `metersToLatDeg` and `metersToLonDeg`.
+- `packages/shared/src/traverse.test.ts` (3 tests): verifies soil-scaled traverse duration, simultaneous dual-unit timeline interpolation ending at the slower unit's arrival, and closest-leg `findBestWaypointInsertIndex`.
+- `packages/shared/src/terrain/engine.test.ts` (12 tests): verifies `TerrainGraph` slope detours, `unreachable` recovery (`minRequiredSlopeDeg`), soil classification, soil-cost detours and `renderSoilMaskRgba` / `encodeSoilBinary` roundtrips, sequential multi-waypoint planning with `blockedLegIndex`, and weather-constrained routing.
+- `packages/shared/src/terrain/real-site.test.ts` (3 tests): gated on `data/site-terrain.json`, verifies `1001 x 1001` Jezero grid loading, binary terrain/soil roundtrips, elevation and soil queries, `minRequiredSlopeDeg` recovery, RGBA passability/soil masks, and static hillshade asset validation.
+- `packages/shared/src/weather/weather.test.ts` (9 tests): verifies barometric scale height adjustment, compass sectors and `K`/`C` conversions, nominal/dust-storm/cold-snap scenarios, hybrid real-channel provenance, crater-rim pressure checks, thermal daylight windows, soil speed breakdown timing, MEDA/REMS RSS parsing, and direct Mars basemap URL generation.
+- `apps/web/src/services/pointStore.test.ts` (5 tests): checks point filtering by class visibility, custom class creation and `localStorage` persistence, corrupted payload recovery, MIL-STD-2525C validation, legacy FGDC icon migration, and unknown icon stripping.
+- `apps/web/src/services/clientCache.test.ts` (3 tests): verifies `loadMissionState`/`saveMissionState` v2 dual-unit persistence and legacy v1 migration, plus `ClientWeatherService` live/bundled/offline fallback caching.
+- `apps/web/src/services/dualSim.test.ts` (1 test): verifies `buildDualSimBundle` and `evaluateDualSimFrame` synchronized state across Human and Rover units.
 
 `bun run lint` runs `biome check apps packages scripts`, checking `apps/`, `packages/`, and `scripts/` while ignoring `docs/`, `data/`, `local/`, `node_modules/`, `dist/`, and `apps/web/src/styles/tokens.css` per `biome.json`.

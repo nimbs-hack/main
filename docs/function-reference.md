@@ -1,17 +1,14 @@
 # Function reference
 
-Module and function reference for every TypeScript source file across `@nimbs/shared`, `@nimbs/api`, `@nimbs/web`, and `scripts`. For system architecture, coordinate rules, and HTTP payloads, see [Algorithms and architecture](algorithms-and-architecture.md).
+Module and function reference for every TypeScript source file across `@nimbs/shared`, `@nimbs/web`, and `scripts`. For system architecture, coordinate rules, and client cache layout, see [Algorithms and architecture](algorithms-and-architecture.md).
 
 ## Package overview
 
-| Package or folder | Source files | Documented callables | Primary role |
-| --- | --- | --- | --- |
-| `@nimbs/shared` | 4 | 8 | Canonical Mars geodesy, basemap layer metadata, shared TypeScript contracts |
-| `@nimbs/api` | 8 | 115 | Hono HTTP server, 8-connected DEM `TerrainGraph`, 2D weather field, weather generator and evaluator, tile proxy, PNG encoder |
-| `@nimbs/web` | 18 | 71 | React and Leaflet console UI, tool rail registry, point persistence, MIL-STD-2525C symbol renderer, weather and route panels |
-| `scripts` | 4 | 34 | Process launcher, remote COG DEM cropper, NASA/PDS weather prober, legacy FGDC symbol extractor |
-
-Note on callable counts: totals count every exported function, class constructor, class method or getter, React component, custom hook, top-level route handler, and internal helper documented below, while the 12 HTTP handlers mounted inside `createApp` and `createWeatherRouter` are documented within their factory entries.
+| Package or folder | Source files | Primary role |
+| --- | --- | --- |
+| `@nimbs/shared` | 12 | Canonical Mars geodesy, soil matrix and traverse timelines, binary DEM/soil codec, A* routing `TerrainGraph`, 2D weather field, weather generator/evaluator, RSS parsers, basemap URL builders |
+| `@nimbs/web` | 25 | React and Leaflet console UI, Web Worker and main-thread terrain engine, IndexedDB/localStorage cache layer, dual-unit simulation, MIL-STD-2525C symbol renderer |
+| `scripts` | 6 | Static asset packager (`site-terrain.bin` + `site-soil.bin`), static preview server, dev launcher, remote COG/THEMIS ingest, NASA/PDS weather prober, FGDC extractor |
 
 ---
 
@@ -89,84 +86,43 @@ Exported function that converts an east-west span in meters to east-positive lon
 
 ### packages/shared/src/layers.ts
 
-Declares verified global Mars basemap layer metadata proxied through `/api/tiles` in [packages/shared/src/layers.ts](../packages/shared/src/layers.ts).
+Declares verified global Mars basemap layer metadata loaded directly by the browser from USGS Astrogeology WMS and NASA JPL Mars Trek in [packages/shared/src/layers.ts](../packages/shared/src/layers.ts).
 
 Defines `DEFAULT_MARS_BASE_LAYER` (`id: "usgs-mdim"`, `maxNativeZoom: 9`) and `MARS_BASE_LAYERS` (`usgs-mdim`, `usgs-themis`, `usgs-mola-themis`, `mola-trek`). Contains no functions.
 
+### packages/shared/src/tiles.ts
+
+Builds upstream EPSG:4326 basemap tile URLs for client-side Leaflet rendering in [packages/shared/src/tiles.ts](../packages/shared/src/tiles.ts).
+
+Module constants: `USGS_WMS_BASE_URL`, `MARS_TREK_MOLA_TILE_TEMPLATE`, and `USGS_WMS_LAYERS`. Exports `buildDirectMarsTileUrl(layerId, z, x, y)` computing `180 / 2 ** z` tile bounds for USGS WMS `GetMap` PNG requests or NASA Mars Trek WMTS JPEG URLs (`z <= 7`).
+
+### packages/shared/src/soil.ts
+
+Defines the 4 Martian substrate classes (`"bedrock"`, `"coarse-regolith"`, `"fine-regolith"`, `"loose-sand"` mapped to codes `0..3`), per-preset traverse speed factors, validation helpers, and THEMIS NIR + CTX soil matrix classification in [packages/shared/src/soil.ts](../packages/shared/src/soil.ts).
+
+Exports `SOIL_TYPE_ORDER`, `SOIL_TYPE_CATALOG`, `SOIL_SPEED_FACTOR_MIN` (`0.1`), `SOIL_SPEED_FACTOR_MAX` (`1.5`), `DEFAULT_HUMAN_SOIL_SPEED_FACTORS`, `DEFAULT_ROVER_SOIL_SPEED_FACTORS`, `resolveSoilSpeedFactors`, `maxSoilSpeedFactor`, `parsePartialSoilSpeedFactors`, `soilCodeToId`, `soilIdToCode`, `createEmptySoilBreakdown`, and `classifyMarsSoilMatrix`. See [Martian soil sources](martian-soil-sources.md) for physical criteria and references.
+
+### packages/shared/src/traverse.ts
+
+Computes soil- and slope-scaled traverse timelines and best-leg intermediate waypoint insertion indices in [packages/shared/src/traverse.ts](../packages/shared/src/traverse.ts).
+
+Exports `computeSegmentHours`, `resolvePointSoilFactor`, `buildUnitTraverseTimeline`, `sampleUnitTimelineAt`, and `findBestWaypointInsertIndex`.
+
+### packages/shared/src/terrain/binary.ts
+
+Encodes and decodes binary elevation (`Float32Array`) and soil (`Uint8Array`) arrays plus `StaticSiteManifest` in [packages/shared/src/terrain/binary.ts](../packages/shared/src/terrain/binary.ts).
+
+Exports `encodeTerrainBinary`, `decodeTerrainBinary`, `encodeSoilBinary`, and `decodeSoilBinary`.
+
 ### packages/shared/src/types.ts
 
-Defines shared TypeScript interfaces, union types, and `DEFAULT_EVA_WEATHER_LIMITS` in [packages/shared/src/types.ts](../packages/shared/src/types.ts).
+Defines shared TypeScript interfaces, union types, `TRAVERSE_PRESETS`, and `DEFAULT_EVA_WEATHER_LIMITS` in [packages/shared/src/types.ts](../packages/shared/src/types.ts).
 
-Exports `DEFAULT_EVA_WEATHER_LIMITS` (`minAirTempC: -75`, `maxWindSpeedMps: 15`, `minPressurePa: 650`, `maxPressureSwingPa: 35`, `maxEvaHours: 4`) and 30 type contracts covering terrain grids, routes, weather snapshots, 48-hour traverse slots, and map layers. Contains no functions.
+Exports `DEFAULT_EVA_WEATHER_LIMITS`, `TRAVERSE_PRESETS` (including per-soil speed defaults), and type contracts covering terrain grids, soil matrices and breakdowns, routes, multi-waypoint requests, weather snapshots, 48-hour traverse slots, and map layers. Contains no functions.
 
----
+### packages/shared/src/terrain/engine.ts
 
-## @nimbs/api
-
-### apps/api/src/index.ts
-
-Builds the Hono API application, mounts tile and weather routers, and runs `Bun.serve` when executed as main in [apps/api/src/index.ts](../apps/api/src/index.ts).
-
-#### `getTerrainGraph(): Promise<TerrainGraph | null>`
-
-Internal async helper that lazily loads and caches `data/site-terrain.json` into module-level `cachedGraph`.
-
-1. Returns `cachedGraph` immediately when already populated.
-2. Checks `existsSync(TERRAIN_JSON_PATH)` and returns `null` when missing.
-3. Reads UTF-8 JSON, parses `SiteDataset`, constructs `new TerrainGraph(dataset)`, stores `cachedGraph`, and returns it.
-
-#### `parseScenario(raw: unknown): WeatherScenario | null`
-
-Internal helper that validates query or JSON scenario values against `VALID_SCENARIOS` (`auto`, `nominal`, `dust-storm`, `cold-snap`). Returns `"auto"` when `raw` is `undefined` or `""`, the string if valid, or `null`.
-
-#### `parseOptionalSol(raw: unknown): number | undefined | null`
-
-Internal helper that validates optional Mars sol numbers. Returns `undefined` when omitted or empty, the integer when `Number.isInteger(num)` and `0 <= num <= 100_000`, or `null` when invalid.
-
-#### `parseClampedQueryNumber(raw: string | undefined, fallback: number, min: number, max: number): number`
-
-Internal helper that parses numeric query params and clamps finite numbers to `[min, max]`, returning `fallback` when missing or non-finite.
-
-#### `validateRouteWeatherConstraints(raw: unknown): { constraints?: RouteWeatherConstraints; error?: string }`
-
-Internal validator for `body.weatherConstraints` on `POST /api/graph/routes`.
-
-1. Returns `{}` when `raw` is `undefined`; rejects non-object or array payloads.
-2. Requires `enabled` to be a boolean.
-3. Validates `scenario` via `parseScenario` and `sol` via `parseOptionalSol`.
-4. Rejects non-finite or out-of-range `lmstHour` outside `[0, 48]`, `minAirTempC` outside `[-180, 60]`, `minPressurePa` outside `[0, 2500]`, and `thermalWeight` outside `[0, 1]`.
-5. Returns normalized `{ constraints }` on success or `{ error }` on the first failure.
-
-#### `resolveSiteWeatherField(c: Context, resolveGraph: () => Promise<TerrainGraph | null>, activeWeatherService: WeatherService): Promise<{ graph: TerrainGraph; field: SiteWeatherField } | Response>`
-
-Internal async helper shared by `/api/site/pressure.png`, `/api/site/temperature.png`, and `/api/site/environment-summary`.
-
-1. Resolves the active `TerrainGraph`, returning HTTP `503` if the terrain dataset is missing.
-2. Parses `scenario` and `sol` query params, returning HTTP `400` on invalid values.
-3. Clamps `lmstHour` to `[0, 48]` with default `12`, fetches the `MarsWeatherSnapshot` via `activeWeatherService.getWeather`, and computes the spatial field with `computeSiteWeatherField(graph, snapshot, lmstHour)`.
-
-#### `createApp(injectedGraph?: TerrainGraph, weatherService?: WeatherService): Hono`
-
-Exported factory that constructs the Hono application, allowing tests to inject a synthetic `TerrainGraph` and mock `WeatherService`. Registers 10 route handlers directly and mounts `tilesRouter` at `/api/tiles` and `createWeatherRouter` at `/api/weather`:
-
-| Route | Behavior |
-| --- | --- |
-| `GET /api/health` | Resolves graph and returns `{ ok: true, siteLoaded, siteId }` with status `200`. |
-| `GET /api/layers` | Returns `{ layers: MARS_BASE_LAYERS }` with status `200`. |
-| `GET /api/site` | Returns `{ meta: graph.meta }` or HTTP `503` when no terrain file exists. |
-| `GET /api/site/hillshade.png` | Reads `data/site-hillshade.png` and returns `image/png` with `Cache-Control: public, max-age=3600`, or HTTP `404`. |
-| `GET /api/site/passability.png` | Clamps `maxSlopeDeg` query param to `[0.5, 89]` with default `15`, encodes `graph.renderSlopeMaskPng`, and returns `image/png` with `Cache-Control: public, max-age=300`. |
-| `GET /api/site/pressure.png` | Calls `resolveSiteWeatherField`, clamps `minPressurePa` to `[0, 2500]` with default `650`, renders PNG via `renderPressureMaskPng`, and attaches `X-Layer-Min`, `X-Layer-Max`, `X-Layer-Mean`, `X-Layer-Lmst`, and `X-Layer-Unit: Pa` headers with `max-age=120`. |
-| `GET /api/site/temperature.png` | Calls `resolveSiteWeatherField`, clamps `minAirTempC` to `[-180, 60]` with default `-75`, renders PNG via `renderTemperatureMaskPng`, and attaches `X-Layer-Min`, `X-Layer-Max`, `X-Layer-Mean`, `X-Layer-Lmst`, and `X-Layer-Unit: C` headers with `max-age=120`. |
-| `GET /api/site/environment-summary` | Calls `resolveSiteWeatherField` and returns `toSiteEnvironmentSummary(resolved.field)` JSON. |
-| `GET /api/terrain/elevation` | Validates finite `lat` and `lon` query params and returns `{ lat, lon, insideSite, elevationM }` from `graph.isInsideBounds` and `graph.elevationAt`. |
-| `POST /api/graph/routes` | Validates `waypointA`, `waypointB`, `maxSlopeDeg`, and `weatherConstraints`. When weather constraints are enabled, builds a `TerrainWeatherFilter` from `computeSiteWeatherField` with defaults `lmstHour: 12`, `minAirTempC: -75`, `minPressurePa: 650`, and `thermalWeight: 0.35`, then returns `graph.planRoutes(...)`. |
-
-When `import.meta.main` is true, starts `Bun.serve` on `Number(process.env.API_PORT ?? 3001)` serving `app.fetch`.
-
-### apps/api/src/terrain/engine.ts
-
-Implements the 8-connected elevation graph, zero-allocation binary min-heap, multi-strategy A* router, weather-constrained routing, minimax/maximin bottleneck diagnostics, and slope mask PNG renderer in [apps/api/src/terrain/engine.ts](../apps/api/src/terrain/engine.ts).
+Implements the 8-connected elevation and soil graph, zero-allocation binary min-heap, soil-weighted multi-strategy A* router, sequential multi-waypoint stitching, weather-constrained routing, minimax/maximin bottleneck diagnostics, and raw RGBA slope/soil mask renderers in [packages/shared/src/terrain/engine.ts](../packages/shared/src/terrain/engine.ts).
 
 #### Internal class `MinHeap`
 
@@ -186,11 +142,11 @@ Builds an in-memory graph over `SiteDataset` elevations ordered row-major north-
 
 ##### `constructor(dataset: SiteDataset)`
 
-1. Loads `elevations` into a `Float32Array` of length `rows * cols`.
+1. Loads `elevations` into a `Float32Array` of length `rows * cols` (zero-copy when already a `Float32Array`).
 2. Measures grid spacing `dyM` and `dxM` along bbox midlines using `surfaceDistanceMeters` divided by `max(1, rows - 1)` and `max(1, cols - 1)`, plus `diagM = Math.hypot(dyM, dxM)`.
 3. Precomputes `dirOffsets` (`dr * cols + dc`) and `dirDists` (`hypot(dr * dyM, dc * dxM)`) for the 8 neighbor directions `DIRS`.
 4. Marks `validMask[i] = 1` where `elevations[i]` is finite and `> nodataValue + 10`.
-5. Preallocates `gScoreBuf`, `parentBuf`, `closedBuf`, `penaltyBuf`, and `bestSlopeBuf` typed arrays, then invokes `precomputeLocalMaxSlopes()`.
+5. Preallocates typed search arrays, invokes `precomputeLocalMaxSlopes()`, and loads `soilTypes` into `soilMatrix` (`Uint8Array` codes `0..3`) or classifies them via `classifyMarsSoilMatrix` when absent.
 
 ##### `private precomputeLocalMaxSlopes(): void`
 
@@ -203,6 +159,14 @@ Returns the precomputed `validMask` byte array (`1` = valid elevation, `0` = nod
 ##### `isCellValid(idx: number): boolean`
 
 Public accessor returning `this.validMask[idx] === 1`.
+
+##### `soilAt(coord: MarsCoord): SoilTypeId | null`
+
+Returns the classified `SoilTypeId` (`"bedrock"`, `"coarse-regolith"`, `"fine-regolith"`, or `"loose-sand"`) at `coord`, or `null` when out of bounds or on a nodata cell.
+
+##### `private edgeSoilSpeedFactor(u: number, v: number, soilFactors: SoilSpeedFactors): number`
+
+Returns the harmonic-style cell pair soil factor `(soilFactors[soilU] + soilFactors[soilV]) * 0.5` used for segment speed reporting.
 
 ##### `private isValidCell(idx: number): boolean`
 
@@ -268,15 +232,15 @@ Computes a soft thermal-and-pressure penalty score used by `"gentlest"` and `"we
 2. Computes proximity caution factors `nearTemp` over a `5` K margin above `minAirTempK` and `nearPress` over `pressCautionSpanPa` above `minPressurePa`.
 3. Returns `0.55 * tempDeficit + 0.45 * pressDeficit + 0.6 * Math.max(nearTemp, nearPress)`.
 
-##### `private runAStar(startIdx: number, goalIdx: number, maxSlopeDeg: number, mode: RouteStrategy, weatherCtx?: ResolvedWeatherContext): number[] | null`
+##### `private runAStar(startIdx: number, goalIdx: number, maxSlopeDeg: number, mode: RouteStrategy, weatherCtx?: ResolvedWeatherContext, soilFactors?: SoilSpeedFactors): number[] | null`
 
-Runs single-source A* search over the grid graph using preallocated typed buffers.
+Runs single-source A* search over the grid graph using preallocated typed buffers and a 4-entry `Float64Array` `soilLut`.
 
 1. Immediately returns `null` when `weatherCtx` is active and either `startIdx` or `goalIdx` fails `isCellWeatherPassable`.
 2. Resets `gScoreBuf` to `+Infinity`, `parentBuf` to `-1`, `closedBuf` to `0`, and clears `MinHeap`.
 3. Precomputes `maxDh[d] = dirDists[d] * Math.tan(maxSlopeDeg) + 1e-9` to reject steep edges without calling `Math.atan` on every step.
-4. Seeds the heap with admissible Euclidean grid-plane distance `Math.hypot((r - goalR) * dyM, (c - goalC) * dxM)`.
-5. Applies strategy weights per step: `"shortest"` uses `dist`; `"gentlest"` uses `dist * (1 + 4.5 * ratio^2 + thermalWeight * 1.0 * thermalRisk)`; `"weather-safe"` uses `dist * (1 + thermalWeight * 80 * thermalRisk + 0.5 * ratio^2)` with `WEATHER_SAFE_THERMAL_GAIN = 80`; `"alternate"` multiplies `dist` by `3.5` when `penaltyBuf[v]` is set.
+4. Seeds the heap with an Octile grid-plane distance estimate scaled by inverse max soil speed factor (`heuristicWeight = 1` on `"shortest"`, `1.35` on secondary modes).
+5. Scales each step by `soilTimeScale = 2 / (soilFactorU + soilFactorV)`: `"shortest"` uses `dist * soilTimeScale`; `"gentlest"` uses `dist * soilTimeScale * (1 + 4.5 * ratio^2 + thermalWeight * 1.0 * thermalRisk)`; `"weather-safe"` uses `dist * soilTimeScale * (1 + thermalWeight * 80 * thermalRisk + 0.5 * ratio^2)` with `WEATHER_SAFE_THERMAL_GAIN = 80`; `"alternate"` multiplies `dist * soilTimeScale` by `3.5` when `penaltyBuf[v]` is set.
 6. Walks `parentBuf` backward from `goalIdx` on success, reverses, and returns node indices, or returns `null`.
 
 ##### `private findMaxFeasibleNodeValue(startIdx: number, goalIdx: number, maxSlopeDeg: number, values: Float32Array): number | null`
@@ -287,9 +251,9 @@ Runs maximin Dijkstra over slope-passable edges using `bestSlopeBuf` and `MinHea
 
 Runs minimax Dijkstra over all valid cells to find the tightest `maxSlopeDeg` threshold that connects `startIdx` and `goalIdx`. Relaxes `candSlope = Math.max(uSlope, edgeSlope)` and returns `Math.ceil(heap.poppedScore * 10) / 10` when `goalIdx` pops, or `null` when no valid cell path exists.
 
-##### `private buildRouteSummary(id: string, label: string, strategy: RouteStrategy, nodePath: number[], weatherCtx?: ResolvedWeatherContext): ComputedRoute`
+##### `private buildRouteSummary(id: string, label: string, strategy: RouteStrategy, nodePath: number[], weatherCtx?: ResolvedWeatherContext, soilFactors: SoilSpeedFactors = DEFAULT_HUMAN_SOIL_SPEED_FACTORS): ComputedRoute`
 
-Converts cell indices into a `ComputedRoute` payload. Accumulates distance, elevation gain/loss, peak slope, and distance-weighted mean slope; rounds `lat`/`lon` to 6 decimals, elevation to `0.01` m, distance to `0.1` m, and slope to `0.01` deg. When `weatherCtx` is defined, attaches per-point `tempC` and `pressurePa` plus route-level min/max telemetry.
+Converts cell indices into a `ComputedRoute` payload. Accumulates distance, elevation gain/loss, peak slope, distance-weighted mean slope, and per-class `soilBreakdown` distance; rounds `lat`/`lon` to 6 decimals, elevation to `0.01` m, distance/soil lengths to `0.1` m, slope to `0.01` deg, and attaches `soilType` and 3-decimal `soilSpeedFactor` per point. When `weatherCtx` is defined, attaches per-point `tempC` and `pressurePa` plus route-level min/max telemetry.
 
 ##### `private overlapRatio(pathA: number[], pathB: number[]): number`
 
@@ -301,31 +265,41 @@ Wraps `lmstHour` modulo `24` and formats as `HH:MM`.
 
 ##### `private diagnoseUnreachable(...): RoutePlanResponse`
 
-Determines why A* returned `null` and finds relaxable bottleneck bounds.
+Determines why multi-waypoint A* returned `null` and identifies the failing leg (`blockedLegIndex`) and relaxable bounds.
 
-1. When no weather filter is present or when a slope-only `"shortest"` search fails, runs `findMinRequiredSlope` to return `blockedReason: "slope"` with `minRequiredSlopeDeg`, or `"nodata"` if disconnected.
-2. When slope-only succeeds but weather blocks the path, runs temperature-only and pressure-only A* searches to classify `blockedReason` as `"temperature"`, `"pressure"`, or `"combined"`.
+1. When no weather filter is present or when slope-only leg search fails, runs `findMinRequiredSlope` across the blocked pair to return `blockedReason: "slope"` with `minRequiredSlopeDeg` and `blockedLegIndex`, or `"nodata"` if disconnected.
+2. When slope-only succeeds but weather blocks a leg, runs temperature-only and pressure-only leg searches to classify `blockedReason` as `"temperature"`, `"pressure"`, or `"combined"`.
 3. Calls `findMaxFeasibleNodeValue` on `cellTempK` and `cellPressurePa`, floors values to `0.01`, sets `maxFeasibleMinTempC` and `maxFeasibleMinPressurePa`, and formats a diagnostic message.
 
-##### `planRoutes(waypointA: MarsCoord, waypointB: MarsCoord, maxSlopeDeg: number, weatherFilter?: TerrainWeatherFilter): RoutePlanResponse`
+##### `planRoutes(waypointA: MarsCoord, waypointB: MarsCoord, maxSlopeDeg: number, weatherFilter?: TerrainWeatherFilter, soilSpeedFactors?: Partial<SoilSpeedFactors>): RoutePlanResponse`
 
-Public entry point called by `POST /api/graph/routes`.
+Convenience wrapper delegating 2-point `[waypointA, waypointB]` queries to `planWaypointsRoutes`.
 
-1. Clamps `maxSlopeDeg` to `[0.5, 89]` and computes `passableEdgeRatio`.
-2. Returns `status: "out_of_bounds"` if either waypoint is outside `meta.bbox` or fails `snapToNode`.
-3. Builds `weatherCtx` if `weatherFilter` is provided and runs `"shortest"` A*, calling `diagnoseUnreachable` if blocked.
-4. Runs `"gentlest"`, keeping it if `overlapRatio < 0.9`.
-5. If `weatherCtx && weatherCtx.thermalWeight > 0`, runs `"weather-safe"`, keeping it if `overlapRatio < 0.88` against all discovered routes.
-6. Paints `penaltyBuf` around intermediate cells of all discovered routes with square radius `Math.max(2, Math.min(8, Math.round(cols / 100)))` and runs `"alternate"`, keeping it if `overlapRatio < 0.85` against all discovered routes.
-7. Returns `{ status: "ok", ..., snappedA, snappedB, routes }`.
+##### `private solveMultiLegPath(waypointIndices: number[], maxSlopeDeg: number, mode: RouteStrategy, weatherCtx?: ResolvedWeatherContext, soilFactors?: SoilSpeedFactors): { path: number[] | null; failedLegIndex: number }`
 
-##### `renderSlopeMaskPng(maxSlopeDeg: number): Uint8Array`
+Runs `runAStar` sequentially across consecutive snapped waypoint pairs and concatenates paths while deduplicating shared leg endpoints. Stops on the first unreachable leg and returns `{ path: null, failedLegIndex }`.
 
-Renders an RGBA PNG mask for `GET /api/site/passability.png`. Sets valid cells with `localMaxSlope > maxSlopeDeg` to amber-orange `rgba(245, 158, 11, 175)`, cells with `localMaxSlope > maxSlopeDeg * 0.75` to caution yellow `rgba(234, 179, 8, 55)`, and remaining cells transparent, encoding with `encodeRgbaPng(cols, rows, rgba, 1)`.
+##### `planWaypointsRoutes(waypoints: MarsCoord[], maxSlopeDeg: number, weatherFilter?: TerrainWeatherFilter, soilSpeedFactors?: Partial<SoilSpeedFactors>): RoutePlanResponse`
 
-### apps/api/src/terrain/weatherField.ts
+Public multi-waypoint routing entry point invoked by the Web Worker and main-thread fallback.
 
-Projects hourly weather snapshots across every valid DEM cell with terrain normals, solar incidence, scale height, and cold-air basin cooling, and encodes pressure/temperature mask PNGs in [apps/api/src/terrain/weatherField.ts](../apps/api/src/terrain/weatherField.ts).
+1. Resolves soil speed factors (`resolveSoilSpeedFactors`), clamps `maxSlopeDeg` to `[0.5, 89]`, and computes `passableEdgeRatio`.
+2. Returns `status: "out_of_bounds"` if fewer than 2 waypoints are supplied or any waypoint lies outside `meta.bbox` or fails `snapToNode`.
+3. Builds `weatherCtx` if `weatherFilter` is provided and runs `"shortest"` across all legs via `solveMultiLegPath`, calling `diagnoseUnreachable` if blocked.
+4. Runs `"gentlest"` (`overlapRatio < 0.9`), `"weather-safe"` when `thermalWeight > 0` (`overlapRatio < 0.88`), and `"alternate"` with `penaltyBuf` corridor radius `clamp(2, 8, round(cols / 100))` (`overlapRatio < 0.85`).
+5. Returns `{ status: "ok", ..., snappedA, snappedB, snappedWaypoints, routes }`.
+
+##### `renderSlopeMaskRgba(maxSlopeDeg: number): Uint8Array<ArrayBuffer>`
+
+Renders an RGBA buffer highlighting valid cells with `localMaxSlope > maxSlopeDeg` in amber-orange `rgba(245, 158, 11, 175)` and `localMaxSlope > maxSlopeDeg * 0.75` in caution yellow `rgba(234, 179, 8, 55)`.
+
+##### `renderSoilMaskRgba(): Uint8Array<ArrayBuffer>`
+
+Renders an RGBA buffer mapping every valid cell's `soilMatrix` code (`0..3`) through `SOIL_TYPE_CATALOG` colors (`bedrock`, `coarse-regolith`, `fine-regolith`, `loose-sand`).
+
+### packages/shared/src/terrain/weatherField.ts
+
+Projects hourly weather snapshots across every valid DEM cell with terrain normals, solar incidence, scale height, and cold-air basin cooling, and produces raw RGBA pressure/temperature buffers in [packages/shared/src/terrain/weatherField.ts](../packages/shared/src/terrain/weatherField.ts).
 
 #### Internal class `LruCache<K, V>`
 
@@ -383,11 +357,11 @@ Exported function computing per-cell air temperature in Kelvin and pressure in P
 5. When `isDaylight && solarIrradianceWm2 > 0 && sunZ > 0.02`, adds slope solar heating `solarAmp * clamp((max(0, normal · sun) - cosFlat) / max(0.2, cosFlat), -1.0, 1.2)` where `solarAmp = 5.0 * Math.exp(-0.55 * tau) * Math.min(1.15, irrad / 350)`.
 6. Computes nocturnal clear-sky cold-air basin pooling cooling `min(nightMaxCooling, basinDepthM[u] * nightPoolSlope)` with `nightMaxCooling = 2.5 * nightStrength * Math.exp(-0.3 * tau)` and `nightPoolSlope = 0.02 * nightStrength * clearSkyFactor`.
 7. Aggregates min, max, and mean summary values in Celsius and Pascals, registers the field key in `fieldKeyByField`, caches the result, and returns `SiteWeatherField`.
-8. Called by `resolveSiteWeatherField` and `POST /api/graph/routes` in `apps/api/src/index.ts`.
+8. Called by `terrainWorker.ts`, main-thread fallback in `clientEngine.ts`, and `TerrainGraph.planWaypointsRoutes` callers.
 
 #### `toSiteEnvironmentSummary(field: SiteWeatherField): SiteEnvironmentSummary`
 
-Exported function projecting scalar summary metadata and min/max/mean Celsius and Pascal bounds from `SiteWeatherField` for `GET /api/site/environment-summary`.
+Exported function projecting scalar summary metadata and min/max/mean Celsius and Pascal bounds from `SiteWeatherField`.
 
 #### `packRgba(r: number, g: number, b: number, a: number): number`
 
@@ -401,22 +375,22 @@ Internal helper linearly interpolating an 8-bit color channel and rounding to an
 
 Internal helper populating a contiguous slice of the 256-entry `Uint32Array` and `Uint8Array` color lookup tables between `c0` and `c1`.
 
-#### `encodeMaskFromBins(graph: TerrainGraph, values: Float32Array, lut32: Uint32Array, lutBytes: Uint8Array, binOf: (val: number) => number): Uint8Array`
+#### `encodeMaskFromBins(graph: TerrainGraph, values: Float32Array, lut32: Uint32Array, lutBytes: Uint8Array, binOf: (val: number) => number): Uint8Array<ArrayBuffer>`
 
-Internal helper mapping every valid cell in `values` through `binOf` into the prebuilt LUT via a `Uint32Array` fast path on little-endian hosts and encoding with `encodeRgbaPng(cols, rows, rgba, 1)`.
+Internal helper mapping every valid cell in `values` through `binOf` into the prebuilt LUT via a `Uint32Array` fast path on little-endian hosts and returning raw `Uint8Array` RGBA pixels for `OffscreenCanvas` / canvas PNG encoding in the browser.
 
-#### `renderPressureMaskPng(graph: TerrainGraph, field: SiteWeatherField, minPressurePa: number): Uint8Array`
+#### `renderPressureMaskRgba(graph: TerrainGraph, field: SiteWeatherField, minPressurePa: number): Uint8Array<ArrayBuffer>`
 
-Exported function generating the pressure overlay PNG for `GET /api/site/pressure.png`. Checks `pngLruCache`; maps values `< minPressurePa` into bins `0..85` (`#d946ef` to `#a21caf`), caution band `[minPressurePa, minPressurePa * 1.04)` into bins `86..127` (`#eab308`), and safe values into bins `128..255` (`#38bdf8` to `#0d9488`).
+Exported function generating raw RGBA bytes for the pressure overlay. Maps values `< minPressurePa` into bins `0..85` (`#d946ef` to `#a21caf`), caution band `[minPressurePa, minPressurePa * 1.04)` into bins `86..127` (`#eab308`), and safe values into bins `128..255` (`#38bdf8` to `#0d9488`).
 
-#### `renderTemperatureMaskPng(graph: TerrainGraph, field: SiteWeatherField, minAirTempC: number): Uint8Array`
+#### `renderTemperatureMaskRgba(graph: TerrainGraph, field: SiteWeatherField, minAirTempC: number): Uint8Array<ArrayBuffer>`
 
-Exported function generating the temperature overlay PNG for `GET /api/site/temperature.png`. Checks `pngLruCache`; maps values `< minAirTempC` into bins `0..85` (`#0284c7` to `#2563eb`), near-limit band `[minAirTempC, minAirTempC + 5 C)` into bins `86..127` (`#38bdf8`), and warm safe values into bins `128..255` (`#f59e0b` to `#fb923c`).
+Exported function generating raw RGBA bytes for the temperature overlay. Maps values `< minAirTempC` into bins `0..85` (`#0284c7` to `#2563eb`), near-limit band `[minAirTempC, minAirTempC + 5 C)` into bins `86..127` (`#38bdf8`), and warm safe values into bins `128..255` (`#f59e0b` to `#fb923c`).
 
 
-### apps/api/src/weather/generator.ts
+### packages/shared/src/weather/generator.ts
 
-Synthesizes physically calibrated Jezero and Gale Crater climatology, hourly diurnal profiles, 48-hour next-sol forecasts, traverse departure windows, and EVA checks in [apps/api/src/weather/generator.ts](../apps/api/src/weather/generator.ts).
+Synthesizes physically calibrated Jezero and Gale Crater climatology, hourly diurnal profiles, 48-hour next-sol forecasts, soil-adjusted traverse departure windows, and EVA checks in [packages/shared/src/weather/generator.ts](../packages/shared/src/weather/generator.ts).
 
 Module constants: `MARS_SCALE_HEIGHT_M = 10_800`, `MARS_SOL_SECONDS = 88_775.244`, `MARS_SOL_EARTH_HOURS = MARS_SOL_SECONDS / 3600`, `MARS_OBLIQUITY_RAD = (25.19 * Math.PI) / 180`, `MARS_ECCENTRICITY = 0.0934`, `MARS_PERIHELION_LS_DEG = 251`, `MARS_SOLAR_CONSTANT_WM2 = 589`, `MARS_LAPSE_RATE_K_PER_M = -0.0025`, `COMPASS_SECTORS` with 16 headings from `"N"` to `"NNW"`, `DEFAULT_EVA_LIMITS = DEFAULT_EVA_WEATHER_LIMITS`, `JEZERO_PRESET`, and `GALE_PRESET`.
 
@@ -556,23 +530,23 @@ Internal helper returning finite positive speed values or the fallback constant.
 
 #### `resolveLimits(partial?: Partial<EvaWeatherLimits>): EvaWeatherLimits`
 
-Internal helper merging partial suit thresholds and traverse speeds (`flatSpeedMPerH`, `climbSpeedMPerH`, `descentSpeedMPerH`) with `DEFAULT_EVA_LIMITS`.
-
-#### `computeSegmentHours(distM: number, gainM: number, lossM: number, limits: EvaWeatherLimits): number`
-
-Internal helper calculating segment travel time in hours as `distM / limits.flatSpeedMPerH + gainM / limits.climbSpeedMPerH + lossM / limits.descentSpeedMPerH`.
+Internal helper merging partial suit thresholds, traverse speeds (`flatSpeedMPerH`, `climbSpeedMPerH`, `descentSpeedMPerH`), and `soilSpeedFactors` with `DEFAULT_EVA_LIMITS`.
 
 #### `computePointsDurationHours(points: readonly TraversePointSample[], limits: EvaWeatherLimits): number`
 
-Internal helper integrating segment travel time over consecutive route samples using `computeSegmentHours`.
+Internal helper integrating soil- and slope-scaled travel time over consecutive route samples using `resolvePointSoilFactor` and shared `computeSegmentHours`.
+
+#### `computeSoilBreakdownFlatHours(route: Pick<EvaRouteContext, "soilBreakdown">, limits: EvaWeatherLimits): number | null`
+
+Internal helper integrating flat horizontal traverse time across each soil category in `route.soilBreakdown` weighted by `limits.soilSpeedFactors`.
 
 #### `resolveRouteDurationHours(route: EvaRouteContext | undefined, limits: EvaWeatherLimits): number | null`
 
-Internal helper computing rounded traverse duration in hours from `route.totalDistanceM`, `elevationGainM`, and `elevationLossM` using `computeSegmentHours`, or falling back to `computePointsDurationHours(route.points, limits)`.
+Internal helper computing rounded traverse duration in hours using `computeSoilBreakdownFlatHours` plus climb/descent hours when `soilBreakdown` exists, otherwise integrating `computePointsDurationHours` or `computeSegmentHours`.
 
 #### `buildWalkTimeProfile(route: EvaRouteContext | undefined, floorElevationM: number, evaluationElevationM: number, fallbackDurationHours: number, limits: EvaWeatherLimits): { durationHours: number; timeGrid: WalkTimeSample[]; extremaPoints: WalkTimeSample[] }`
 
-Internal helper building an evenly spaced `timeGrid` of `8..64` samples for daylight integration and `extremaPoints` for worst-case elevation exposure. Uses cumulative route progress when route points exist or a symmetric floor-to-rim-to-floor triangle otherwise.
+Internal helper building an evenly spaced `timeGrid` of `8..64` samples for daylight integration and `extremaPoints` for worst-case elevation exposure, advancing timestamps using soil-weighted `computeSegmentHours`.
 
 #### `statusPriority(status: EvaStatus): number`
 
@@ -604,11 +578,11 @@ Exported function computing the EVA verdict, 5 suit checks, selected-hour teleme
 2. Evaluates checks `"air_temp"`, `"wind_speed"`, `"pressure"`, `"pressure_swing"`, and `"eva_duration"` against `limits` with near-limit caution bands at `+5` C temp, `1.04x` pressure, `0.8x` wind, `0.85x` pressure swing, and `+1.0` h window margin.
 3. Combines worst check status into overall verdict `status`, formats human-readable `summary`, and attaches provenance metadata.
 
-### apps/api/src/weather/service.ts
+### packages/shared/src/weather/rss.ts
 
-Coordinates NASA Mars 2020 MEDA and MSL REMS RSS feeds, local `data/site-weather.json` telemetry, 15-minute memory/disk caches, and synthetic fallback in [apps/api/src/weather/service.ts](../apps/api/src/weather/service.ts).
+Parses NASA Mars 2020 MEDA and MSL REMS telemetry JSON feeds in [packages/shared/src/weather/rss.ts](../packages/shared/src/weather/rss.ts).
 
-Module constants: `MEDA_RSS_URL`, `REMS_RSS_URL`, `INSIGHT_RSS_URL`, `DEFAULT_CACHE_DIR`, `DEFAULT_SITE_WEATHER_PATH`, and `defaultWeatherService`.
+Module constants: `MEDA_RSS_URL`, `REMS_RSS_URL`, and `INSIGHT_RSS_URL`.
 
 #### `parseFiniteField(val: unknown): number | undefined`
 
@@ -622,106 +596,9 @@ Exported function parsing Mars 2020 MEDA RSS JSON: sorts `payload.sols` descendi
 
 Exported function parsing MSL REMS RSS JSON across `payload.soles ?? payload.sols`, skipping entries without temperature or pressure, converting Celsius to Kelvin, and returning a `"gale"` record.
 
-#### `toObservedInput(record: PersistedSiteWeatherRecord): ObservedWeatherInput`
+#### `persistedWeatherToObservedInput(record: PersistedSiteWeatherRecord): ObservedWeatherInput`
 
-Internal helper projecting a `PersistedSiteWeatherRecord` into `ObservedWeatherInput` for `generateMartianWeather`.
-
-#### Class `WeatherService`
-
-##### `constructor(options: WeatherServiceOptions = {})`
-
-Initializes `cacheDir`, `siteWeatherPath`, `cacheTtlMs` defaulting to `15 * 60 * 1000`, `liveTimeoutMs` defaulting to `4000`, `fetcher` defaulting to global `fetch`, and `enableLiveFetch` defaulting to `true`.
-
-##### `readDiskCache(siteId: string): Promise<CacheEntry | null>`
-
-Private method loading `<cacheDir>/<siteId>.json` and validating required snapshot blocks and non-empty `hourly` array.
-
-##### `writeDiskCache(siteId: string, entry: CacheEntry): Promise<void>`
-
-Private method creating `cacheDir` and writing `<cacheDir>/<siteId>.json`, swallowing disk errors so cache I/O never interrupts weather responses.
-
-##### `readPersistedSiteWeather(siteId: "jezero" | "gale"): Promise<PersistedSiteWeatherRecord | null>`
-
-Private method reading `siteWeatherPath` (`data/site-weather.json`) and returning `file.sites[siteId]`.
-
-##### `fetchLiveRecord(siteId: "jezero" | "gale"): Promise<PersistedSiteWeatherRecord | null>`
-
-Private method fetching `REMS_RSS_URL` for Gale or `MEDA_RSS_URL` for Jezero with `AbortSignal.timeout(liveTimeoutMs)` and delegating JSON parsing to `parseRemsRssLatest` or `parseMedaRssLatest`.
-
-##### `getWeather(params: GetWeatherParams = {}): Promise<MarsWeatherSnapshot>`
-
-Public method returning a `MarsWeatherSnapshot` for `params.site` and `params.scenario`:
-
-1. Bypasses real telemetry and caching when `scenario !== "auto"`, returning purely simulated output from `generateMartianWeather`.
-2. For `"auto"` without a pinned `sol` or `refresh`, checks `memCache` and disk cache within `cacheTtlMs`, realigning site metadata and upgrading cached snapshots lacking `nextSol` via `ensureNextSolForecast`.
-3. On miss or refresh, loads persisted telemetry and live RSS telemetry, picks whichever record matches a requested `sol` or has the newer `sol`, runs `generateMartianWeather` with `observedOverrides` when available, and caches the result to memory and disk.
-
-### apps/api/src/routes/tiles.ts
-
-Proxies and disk-caches NASA Mars Trek and USGS Planetary WMS EPSG:4326 basemap tiles in [apps/api/src/routes/tiles.ts](../apps/api/src/routes/tiles.ts).
-
-Module constants: `TILE_CACHE_DIR` pointing to `data/cache/tiles`, and `USGS_WMS_LAYERS` mapping `"usgs-mdim"`, `"usgs-themis"`, `"usgs-mola-themis"`, and `"usgs-hillshade"` to USGS WMS layer names.
-
-#### `buildUpstreamUrl(layer: string, z: number, x: number, y: number): string | null`
-
-Internal helper rejecting `z > 7` for `"mola-trek"` or constructing `trek.nasa.gov` WMTS `.jpg` URLs, and converting EPSG:4326 `(z, x, y)` tile bounds via `tileDeg = 180 / 2 ** z` into 256x256 USGS WMS 1.1.1 `GetMap` PNG URLs.
-
-#### Route `GET /:layer/:z/:x/:y` on `tilesRouter`
-
-Hono handler validating `0 <= z <= 14`, `0 <= x < 2^(z + 1)`, and `0 <= y < 2^z` with HTTP `400`, returning `404` for unsupported layer or zoom, serving cached files from `data/cache/tiles/<layer>/<z>_<x>_<y>.<ext>` with `X-Tile-Cache: HIT` and `Cache-Control: public, max-age=86400`, or fetching upstream with a `12_000` ms timeout, verifying `image/*` MIME headers, persisting to disk, and returning HTTP `502` or `504` on upstream failures.
-
-### apps/api/src/routes/weather.ts
-
-Validates inputs and implements the weather REST endpoints in [apps/api/src/routes/weather.ts](../apps/api/src/routes/weather.ts).
-
-#### `readFallbackSiteMeta(): Promise<SiteMetadata | null>`
-
-Internal helper memoizing `data/site-terrain.json` `.meta` in `cachedFallbackMeta` when callers omit a custom `getSiteMeta` resolver.
-
-#### `parseScenario(raw: string | undefined): WeatherScenario | null`
-
-Internal helper defaulting empty inputs to `"auto"` and validating membership in `VALID_SCENARIOS`.
-
-#### `parseOptionalSol(raw: unknown): number | undefined | null`
-
-Internal helper accepting blank inputs as `undefined` and integer sols in `[0, 100_000]`.
-
-#### `parseQueryLmstHour(raw: string | undefined): number | undefined | null`
-
-Internal helper accepting blank inputs as `undefined` and finite hours in `[0, 48]`.
-
-#### `validateRoute(rawRoute: unknown): { route?: EvaRouteContext; error?: string }`
-
-Internal helper checking `totalDistanceM`, `elevationGainM`, `elevationLossM`, `minElevationM`, `maxElevationM`, and every sample in `points` for non-decreasing `distanceM`, finite `elevationM`, `slopeDeg` in `[0, 90]`, `lat` in `[-90, 90]`, and `lon` in `[-360, 360]`.
-
-#### `validateLimits(rawLimits: Partial<EvaWeatherLimits> | undefined): { limits: Partial<EvaWeatherLimits>; error?: string }`
-
-Internal helper enforcing `minAirTempC` in `[-180, 60]`, `maxWindSpeedMps` in `[0, 100]`, `minPressurePa` in `[0, 2500]`, `maxPressureSwingPa` in `[0, 500]`, `maxEvaHours` in `(0, 24]`, `flatSpeedMPerH` in `[100, 50_000]`, `climbSpeedMPerH` in `[25, 10_000]`, and `descentSpeedMPerH` in `[25, 15_000]`.
-
-#### `createWeatherRouter(options: WeatherRouterOptions = {}): Hono`
-
-Exported factory returning a Hono router and instantiating default `weatherRouter`:
-
-1. `GET /`: validates `scenario`, `sol`, `lmstHour`, `site`, and `refresh` query parameters, loads site metadata, fetches weather via `service.getWeather`, evaluates default suit limits with `evaluateEvaWeather`, and returns `WeatherApiResponse`.
-2. `POST /evaluate`: validates JSON body fields, `limits`, `elevationM`, `lmstHour`, and optional `route`, backfills `nextSol` via `ensureNextSolForecast` if `body.weather` is supplied or fetches fresh weather otherwise, runs `evaluateEvaWeather`, and returns `WeatherApiResponse`.
-
-### apps/api/src/utils/png.ts
-
-Encodes raw RGBA pixel buffers into standard compressed PNG bytes using `node:zlib` in [apps/api/src/utils/png.ts](../apps/api/src/utils/png.ts).
-
-Module constant: `CRC_TABLE` holding the precomputed 256-entry IEEE 802.3 CRC-32 table with polynomial `0xedb88320`.
-
-#### `crc32(bytes: Uint8Array): number`
-
-Internal helper computing unsigned 32-bit CRC-32 over chunk type and payload bytes.
-
-#### `makeChunk(type: string, data: Uint8Array): Uint8Array`
-
-Internal helper framing a PNG chunk as big-endian length, 4-character ASCII chunk type, `data`, and big-endian `crc32`.
-
-#### `encodeRgbaPng(width: number, height: number, rgba: Uint8Array, compressionLevel = 6): Uint8Array`
-
-Exported function prepending scanline filter byte `0` to every row, building a 13-byte `IHDR` chunk configured for 8-bit RGBA, compressing pixel scanlines with `deflateSync`, and concatenating the 8-byte PNG signature with `IHDR`, `IDAT`, and `IEND` chunks. Called by `TerrainGraph.renderSlopeMaskPng` and `weatherField.ts` `encodeMaskFromBins`.
+Exported helper converting a persisted or live RSS weather record into an `ObservedWeatherInput` override for `generateMartianWeather`.
 
 
 ---
@@ -736,7 +613,7 @@ Imports CSS stylesheets including Leaflet styles, design tokens, and app styles,
 
 ### apps/web/src/App.tsx
 
-Owns mission state, API debounces, simulation playback timer, point persistence, and the 5-tool console layout in [apps/web/src/App.tsx](../apps/web/src/App.tsx).
+Owns dual-unit mission state (`unit1` Human default, `unit2` Rover default), sequential waypoint routing, soil speed matrix updates, live dual simulation clock, `IndexedDB` + `localStorage` persistence, and the 6-tool console layout in [apps/web/src/App.tsx](../apps/web/src/App.tsx).
 
 Module constant: `DEFAULT_THERMAL_WEIGHT = 0.35`.
 
@@ -748,19 +625,23 @@ Internal helper formatting east-positive longitude to 5 decimal places with a de
 
 Internal helper returning `true` when `err` is a `DOMException` with `name === "AbortError"`.
 
+#### `useUnitMissionSync(options)`
+
+Internal hook running debounced Web Worker route planning (`120` ms) with sequential waypoints, `soilSpeedFactors`, `maxSlopeDeg`, and weather constraints, plus debounced `evaluateWeatherConstraints` (`80` ms) for one mission unit.
+
 #### `sampleRoutePoints(points: RoutePoint[], maxSamples = 80): TraversePointSample[]`
 
-Internal helper downsampling `points` uniformly to at most `maxSamples` `TraversePointSample` records, deduplicating repeated indices and preserving route endpoints for `POST /api/weather/evaluate`.
+Internal helper downsampling `points` uniformly to at most `maxSamples` `TraversePointSample` records while preserving endpoints and soil attributes for `evaluateWeatherConstraints`.
 
 #### `App()`
 
-Exported React root component coordinating all panels, overlays, and server calls:
+Exported React root component coordinating client engines, overlays, simulation, and persistence:
 
-1. Hydrates `pointClasses`, `points`, and `hiddenClassIds` synchronously from `loadPointState()` and writes updates back through `savePointState()`.
-2. Loads `SiteMetadata` via `fetchSiteMeta()`, basemap layers via `fetchBaseLayers()`, and initial weather via `fetchWeatherSnapshot()`.
-3. Advances `simLmstHour` by `+0.5` hours every `600` ms while `isPlayingTime` is true, wrapping from `48` back to `0`.
-4. Debounces cursor elevation lookups against `fetchElevation` by `45` ms when inside `site.bbox`, route planning against `planGraphRoutes` with `DEFAULT_THERMAL_WEIGHT = 0.35` and `AbortController` by `120` ms, weather constraint evaluation against `evaluateWeatherConstraints` by `80` ms, and site weather summary requests against `fetchEnvironmentSummary` by `160` ms when temperature or pressure overlays are active.
-5. Registers 5 `ToolDefinition` panels in `ToolRegistry` with ids `"route"`, `"points"`, `"weather"`, `"layers"`, and `"settings"`, sets `leftHudOffset = panelOpen ? 480 : 64`, manages `uiMode` (`"basic"` vs `"advance"`) and `presetId` (`"human"` vs `"rover"`) via the rail `BSC`/`ADV` switch, locks map point/class editing when `uiMode === "basic"`, and renders the rail, drawer, `MapView`, telemetry HUD, floating `TimeSimulationControl`, and `ContextMenu`.
+1. Hydrates `pointClasses`, `points`, and `hiddenClassIds` from `loadPointState()` and dual-unit waypoints, presets, limits, soil toggles, and simulation speed from `loadMissionState()` (migrating legacy `v1` records into `unit1`), saving updates asynchronously.
+2. Initializes `SiteMetadata`, `MARS_BASE_LAYERS`, and weather snapshots via client services (`clientEngine` + `clientWeather`).
+3. Runs 48-hour weather preview playback (`simLmstHour += 0.5` every `600` ms) and synchronized dual-unit simulation playback (`dualSimPlaying`) stopping when both active units reach their final waypoint.
+4. Debounces cursor elevation and soil lookups via `fetchElevation` (`45` ms) inside `site.bbox`, and computes environment summaries (`160` ms) when temperature or pressure overlays are active.
+5. Registers 6 `ToolDefinition` panels in `ToolRegistry` (`"route"`, `"sim"`, `"points"`, `"weather"`, `"layers"`, and `"settings"`), manages `uiMode` (`"basic"` vs `"advance"`) and active unit (`1 / 2`), and renders the rail, drawer, `MapView`, telemetry HUD, floating `TimeSimulationControl`, soil mask legend, and `ContextMenu`.
 
 ### apps/web/src/registry/toolRegistry.ts
 
@@ -782,37 +663,121 @@ Returns the matching `ToolDefinition` or `undefined`. Called by `App.tsx`.
 
 ### apps/web/src/services/api.ts
 
-Typed HTTP client wrappers and shared type re-exports communicating with `@nimbs/api` in [apps/web/src/services/api.ts](../apps/web/src/services/api.ts).
+Client service facade bridging UI components to `clientEngine`, `defaultClientWeatherService`, and `@nimbs/shared` in [apps/web/src/services/api.ts](../apps/web/src/services/api.ts).
 
-Every function throws an `Error` containing the HTTP status code when `res.ok` is false.
+Module constant: `STATIC_HILLSHADE_URL = "/data/site-hillshade.png"`.
 
 #### `fetchSiteMeta(): Promise<SiteMetadata>`
 
-Exported async function fetching `GET /api/site` and returning `data.meta`.
+Returns `clientEngine.ensureInitialized()`.
 
 #### `fetchBaseLayers(): Promise<MapLayerMeta[]>`
 
-Exported async function fetching `GET /api/layers` and returning `data.layers`.
+Returns a cloned array of `MARS_BASE_LAYERS`.
 
 #### `fetchElevation(lat: number, lon: number): Promise<ElevationResponse>`
 
-Exported async function fetching `GET /api/terrain/elevation` with `lat` and `lon` query params.
+Returns `clientEngine.queryElevation(lat, lon)` (including `soilType`, `soilLabel`, and `soilSpeedFactor`).
 
 #### `planGraphRoutes(payload: RoutePlanRequest, signal?: AbortSignal): Promise<RoutePlanResponse>`
 
-Exported async function posting `payload` to `POST /api/graph/routes` with cancellation support via `AbortSignal`.
+Delegates sequential multi-waypoint route queries to `clientEngine.planRoutes(payload, signal)`.
 
 #### `fetchWeatherSnapshot(params?, signal?: AbortSignal): Promise<WeatherApiResponse>`
 
-Exported async function requesting `GET /api/weather` with optional `site`, `scenario`, `sol`, `lmstHour`, and `refresh` query parameters.
+Fetches weather via `defaultClientWeatherService.getWeather` and evaluates default EVA limits with `evaluateEvaWeather`.
 
 #### `evaluateWeatherConstraints(payload, signal?: AbortSignal): Promise<WeatherApiResponse>`
 
-Exported async function posting `limits`, `site`, `scenario`, `sol`, `lmstHour`, `elevationM`, `route`, and optional cached `weather` snapshot to `POST /api/weather/evaluate`.
+Re-uses an inline snapshot or fetches weather via `defaultClientWeatherService`, runs `evaluateEvaWeather` on the main thread, and returns a `WeatherApiResponse`.
 
 #### `fetchEnvironmentSummary(params?, signal?: AbortSignal): Promise<SiteEnvironmentSummary>`
 
-Exported async function requesting `GET /api/site/environment-summary` with optional `scenario`, `sol`, and `lmstHour` parameters.
+Fetches the active snapshot and delegates spatial summary calculation to `clientEngine.computeEnvironmentSummary`.
+
+#### `renderSlopeMaskUrl(maxSlopeDeg: number, signal?: AbortSignal): Promise<string>`
+
+Returns an object URL for the client-rendered slope hazard PNG mask via `clientEngine.renderSlopeMaskUrl`.
+
+#### `renderSoilMaskUrl(signal?: AbortSignal): Promise<string>`
+
+Returns an object URL for the client-rendered 4-class Martian soil PNG overlay via `clientEngine.renderSoilMaskUrl`.
+
+#### `renderPressureMaskUrl(params: { scenario?: WeatherScenario; sol?: number; lmstHour?: number; minPressurePa?: number }, signal?: AbortSignal): Promise<string>`
+
+Fetches the weather snapshot and returns an object URL for the pressure overlay PNG via `clientEngine.renderPressureMaskUrl`.
+
+#### `renderTemperatureMaskUrl(params: { scenario?: WeatherScenario; sol?: number; lmstHour?: number; minAirTempC?: number }, signal?: AbortSignal): Promise<string>`
+
+Fetches the weather snapshot and returns an object URL for the temperature overlay PNG via `clientEngine.renderTemperatureMaskUrl`.
+
+### apps/web/src/services/clientEngine.ts
+
+Loads `/data/site-meta.json`, `/data/site-terrain.bin`, and `/data/site-soil.bin`, manages the Web Worker (`terrainWorker.ts`) with a main-thread fallback, caches routes and PNG overlay blobs in IndexedDB, and serves `clientEngine` in [apps/web/src/services/clientEngine.ts](../apps/web/src/services/clientEngine.ts).
+
+#### Class `ClientTerrainEngine`
+
+##### `ensureInitialized(): Promise<SiteMetadata>`
+
+Validates the remote `/data/site-meta.json` manifest `version`, `siteId`, and `generatedAt` against the `datasets` IndexedDB store (`"active"`), re-downloads missing or mismatched `site-terrain.bin` and optional `site-soil.bin`, stores both buffers locally, and initializes the Web Worker or main-thread `TerrainGraph`. Falls back to the cached dataset when offline.
+
+##### `queryElevation(lat: number, lon: number): Promise<ElevationResponse>`
+
+Initializes the engine and queries elevation plus soil metadata at `{ lat, lon }`.
+
+##### `planRoutes(payload: RoutePlanRequest, signal?: AbortSignal): Promise<RoutePlanResponse>`
+
+Computes a deterministic cache key from active waypoints, `maxSlopeDeg`, resolved `soilSpeedFactors`, and optional weather constraints, checks `routes` IndexedDB cache, delegates missing queries to the worker (or main thread), and persists valid responses.
+
+##### `computeEnvironmentSummary(snapshot: MarsWeatherSnapshot, lmstHour: number, signal?: AbortSignal): Promise<SiteEnvironmentSummary>`
+
+Computes spatial min/max/mean temperature and pressure statistics in the worker or main thread.
+
+##### `renderSlopeMaskUrl(maxSlopeDeg: number, signal?: AbortSignal): Promise<string>`
+
+Coalesces identical in-flight slope overlay requests, checks memory + IndexedDB `overlays` cache, requests raw RGBA bytes from the worker, encodes via `encodeRgbaBufferToPngBlob`, and returns an object URL.
+
+##### `renderSoilMaskUrl(signal?: AbortSignal): Promise<string>`
+
+Renders and caches the static 4-class soil substrate overlay PNG object URL for the active `siteId`.
+
+##### `renderPressureMaskUrl(snapshot: MarsWeatherSnapshot, lmstHour: number, minPressurePa: number, signal?: AbortSignal): Promise<string>`
+
+Renders and caches the animated pressure overlay PNG object URL keyed by `siteId`, `sol`, `scenario`, rounded `lmstHour`, and `minPressurePa`.
+
+##### `renderTemperatureMaskUrl(snapshot: MarsWeatherSnapshot, lmstHour: number, minAirTempC: number, signal?: AbortSignal): Promise<string>`
+
+Renders and caches the animated temperature overlay PNG object URL keyed by `siteId`, `sol`, `scenario`, rounded `lmstHour`, and `minAirTempC`.
+
+### apps/web/src/workers/terrainWorker.ts
+
+Executes `TerrainGraph` routing, elevation queries, `computeSiteWeatherField`, and RGBA raster generation off the UI thread in [apps/web/src/workers/terrainWorker.ts](../apps/web/src/workers/terrainWorker.ts).
+
+Responds to `"init"`, `"elevation"`, `"planRoutes"`, `"environmentSummary"`, `"renderSlopeMask"`, `"renderSoilMask"`, `"renderPressureMask"`, and `"renderTemperatureMask"` messages, transferring `ArrayBuffer` RGBA results back with zero-copy `Transferable` ownership.
+
+### apps/web/src/services/clientWeather.ts
+
+Loads `/data/site-weather.json`, optionally queries NASA Mars 2020 MEDA and MSL REMS RSS endpoints from the browser, caches results in IndexedDB (`weather` store, 15-minute TTL), and synthesizes deterministic diurnal weather via `generateMartianWeather` in [apps/web/src/services/clientWeather.ts](../apps/web/src/services/clientWeather.ts).
+
+Exports `ClientWeatherService` and singleton `defaultClientWeatherService`.
+
+### apps/web/src/services/browserCache.ts
+
+Manages IndexedDB (`nimbs-mars-cache`, stores `datasets`, `weather`, `overlays`, `routes`) and `localStorage` mission persistence (`nimbs.mars-mission-state.v1`) in [apps/web/src/services/browserCache.ts](../apps/web/src/services/browserCache.ts).
+
+Exports IndexedDB read/write helpers (`readCachedDataset`, `writeCachedDataset`, `readCachedWeather`, `writeCachedWeather`, `readCachedOverlay`, `writeCachedOverlay`, `readCachedRoute`, `writeCachedRoute`) plus `createDefaultUnitMissionState`, `createDefaultMissionState`, `loadMissionState` (migrating `v1` records to dual-unit `v2`), and `saveMissionState`.
+
+### apps/web/src/services/dualSim.ts
+
+Aligns both units onto a synchronized timeline ending when the slower unit arrives and samples live weather along each track in [apps/web/src/services/dualSim.ts](../apps/web/src/services/dualSim.ts).
+
+Exports `UNIT_ACCENT_COLORS` (`1 -> "#de233d"`, `2 -> "#38bdf8"`), `formatElapsedClock`, `estimateWeatherAtElevationAndHour`, `buildDualSimBundle`, and `evaluateDualSimFrame`.
+
+### apps/web/src/services/rgbaBlob.ts
+
+Encodes raw RGBA buffers into PNG Blobs on the client using `OffscreenCanvas` (or fallback `HTMLCanvasElement`) and maintains a bounded 32-entry LRU object-URL cache with in-flight deduplication in [apps/web/src/services/rgbaBlob.ts](../apps/web/src/services/rgbaBlob.ts).
+
+Exports `getCachedOverlayBlobUrl`, `cacheOverlayBlob`, `encodeRgbaBufferToPngBlob`, and `runCoalescedOverlayRender`.
 
 ### apps/web/src/services/pointStore.ts
 
@@ -880,7 +845,7 @@ Exported function mapping retired `"fgdc-*"` keys through `LEGACY_FGDC_TO_MIL252
 
 ### apps/web/src/components/MapView.tsx
 
-Renders the Leaflet EPSG:4326 Mars map, base tile layers, debounced terrain/weather PNG overlays, route polylines, hover marker, and interactive tactical points in [apps/web/src/components/MapView.tsx](../apps/web/src/components/MapView.tsx).
+Renders the Leaflet EPSG:4326 Mars map, direct Mars tile layers, debounced Web Worker PNG overlays, dual-unit polylines, draggable sequential waypoints, simulated unit beacons, and interactive tactical points in [apps/web/src/components/MapView.tsx](../apps/web/src/components/MapView.tsx).
 
 Module constants: `NICE_SCALE_METERS` spanning `50` m to `500_000` m, and `RASTER_PANE_NAME = "terrainRasterPane"`.
 
@@ -890,24 +855,28 @@ Internal helper creating a DOM wrapper element containing the bordered pin, an S
 
 #### `buildPointPopupElement(point: MapPoint, cls: MapPointClass | undefined, actions): HTMLElement`
 
-Internal helper constructing an HTML element popup with class dot, `shortCode`, `textContent` labels, elevation readout, optional description, and action buttons for `SET A`, `SET B`, `EDIT`, and `DEL`.
+Internal helper constructing an HTML element popup with class dot, `shortCode`, `textContent` labels, elevation readout, optional description, and action buttons for appending a waypoint, editing, or deleting.
+
+#### `class DirectMarsTileLayer extends L.TileLayer`
+
+Internal Leaflet layer subclass routing tile coordinates through `buildDirectMarsTileUrl` for USGS WMS and NASA Mars Trek without hitting a server proxy.
 
 #### `useDebouncedSiteOverlay(options)`
 
-Internal custom React hook managing a `L.ImageOverlay` inside `terrainRasterPane`. Creates or removes the overlay immediately when visibility toggles and debounces subsequent URL or opacity changes by `options.debounceMs`.
+Internal custom React hook managing a `L.ImageOverlay` inside `terrainRasterPane`. Creates or removes the overlay immediately when visibility toggles, calls `renderUrl(signal)` to produce PNG object URLs, and debounces updates by `options.debounceMs`.
 
 #### `MapView(props: MapViewProps)`
 
 Exported React component controlling the Leaflet map lifecycle:
 
-1. Initializes `L.map` with `L.CRS.EPSG4326`, initial center `[18.46, 77.523]`, zoom `13`, `terrainRasterPane` at `zIndex: 250`, and layers for routes, waypoints, and points.
+1. Initializes `L.map` with `L.CRS.EPSG4326`, initial center `[18.46, 77.523]`, zoom `13`, `terrainRasterPane` at `zIndex: 250`, and layers for routes, waypoints, simulated unit markers, and points.
 2. Computes true Martian geodesic scale bar width across a `120` px horizontal chord using `surfaceDistanceMeters`, selecting the largest step in `NICE_SCALE_METERS` fitting within `110` px.
-3. Updates active EPSG:4326 `L.TileLayer`, fits `site.bbox` with left drawer padding `leftInsetPx + 40`, toggles site hillshade and bounding box, and debounces temperature `160` ms at `zIndex: 2`, pressure `160` ms at `zIndex: 3`, with `0.56` opacity when both are active or `0.74` alone, and slope hazard `150` ms at `zIndex: 4` with `0.78` opacity.
-4. Draws non-selected routes translucent beneath the selected route casing and core stroke, renders `A` and `B` waypoints, and synchronizes point markers and popups.
+3. Updates active EPSG:4326 `DirectMarsTileLayer`, fits `site.bbox` with left drawer padding `leftInsetPx + 40`, toggles static `/data/site-hillshade.png` and bounding box, and debounces soil mask (`zIndex: 1`, `80` ms), temperature (`zIndex: 2`, `160` ms), pressure (`zIndex: 3`, `160` ms, opacity `0.56` when paired with temperature or `0.74` alone), and slope hazard (`zIndex: 4`, `150` ms).
+4. Draws both units' routes (dimmed non-active unit behind the active unit, plus alternative routes), numbered waypoints `1..N` with optional `moveWaypointsMode` dragging, live simulated unit markers, and interactive point pins.
 
 ### apps/web/src/components/RoutePlannerPanel.tsx
 
-Displays route planning controls, waypoint cards, alternative route cards with sparklines, weather routing toggles, and the detailed elevation profile in [apps/web/src/components/RoutePlannerPanel.tsx](../apps/web/src/components/RoutePlannerPanel.tsx).
+Displays dual-unit (`1 / 2`) switching, sequential waypoint chains with reordering/drag mode, soil composition breakdowns, alternative route cards with sparklines, weather routing toggles, and the elevation profile in [apps/web/src/components/RoutePlannerPanel.tsx](../apps/web/src/components/RoutePlannerPanel.tsx).
 
 #### `StrategyGlyph({ strategy, color }: { strategy: RouteStrategy; color: string })`
 
@@ -923,7 +892,7 @@ Internal helper returning CSS color tokens `"var(--color-accent)"` above `1.0x`,
 
 #### `RoutePlannerPanel(props: RoutePlannerPanelProps)`
 
-Exported React component rendering `TraversePresetControl` (in `"basic"` mode) or `MaxSlopeControl` (in `"advance"` mode), weather-aware routing status and toggle button, waypoint `A`/`B` readouts with swap and clear actions, reachable or blocked route cards with `buildSparklineGeometry` previews, estimated traverse duration in the EVA strip, and `ElevationProfile` for the selected route.
+Exported React component rendering the active unit switcher (`1 / 2`), `TraversePresetControl` (`"basic"`) or `MaxSlopeControl` (`"advance"`), weather-aware routing status toggle, sequential waypoint cards (`1..N` with move-up/down, remove, `MOVE` drag toggle, reverse, and clear), blocked-leg diagnostics (`blockedLegIndex`), reachable/blocked route cards with `buildSparklineGeometry` previews, route `soilBreakdown` bars and EVA traverse durations, and `ElevationProfile`.
 
 ### apps/web/src/components/routeVisuals.ts
 
@@ -989,7 +958,7 @@ Internal helper formatting coordinates to 4 decimal places using `[-180, 180)` o
 
 #### `PointsPanel(props: PointsPanelProps)`
 
-Exported React component maintaining local draft state synchronized with `editingPoint` and `pendingCoord`, computing point counts per class, filtering points across name, description, and class name, hiding creation/edit/delete forms and class creation when `readOnly` is true, rendering `ThemedIconPicker` in editable mode, and exposing class visibility toggles, focus, and waypoint `A`/`B` actions.
+Exported React component maintaining local draft state synchronized with `editingPoint` and `pendingCoord`, computing point counts per class, filtering points across name, description, and class name, hiding creation/edit/delete forms and class creation when `readOnly` is true, rendering `ThemedIconPicker` in editable mode, and exposing class visibility toggles, focus, and active-unit waypoint append (`+ U1`/`+ U2`) and intermediate insert actions.
 
 ### apps/web/src/components/PointClassIcon.tsx
 
@@ -1059,7 +1028,7 @@ Exported React component rendering `TRAVERSE_PRESETS` selector buttons (`HUMAN` 
 
 ### apps/web/src/components/WeatherPanel.tsx
 
-Displays mission presets (in `"basic"` mode) or suit limit and traverse speed sliders (in `"advance"` mode), scenario tabs, 24-hour temperature and wind SVG plot, 48-hour traverse integration, and EVA status verdict in [apps/web/src/components/WeatherPanel.tsx](../apps/web/src/components/WeatherPanel.tsx).
+Displays mission presets (in `"basic"` mode) or suit limits, traverse speeds, and soil speed matrix sliders (in `"advance"` mode), scenario tabs, 24-hour temperature and wind SVG plot, 48-hour traverse integration, and EVA status verdict for the active unit in [apps/web/src/components/WeatherPanel.tsx](../apps/web/src/components/WeatherPanel.tsx).
 
 Module constants: `THRESHOLD_SLIDERS` defining 5 EVA suit limits, `SPEED_SLIDERS` defining `flatSpeedMPerH`, `climbSpeedMPerH`, and `descentSpeedMPerH`, and `SCENARIO_OPTIONS` covering `"auto"`, `"nominal"`, `"dust-storm"`, and `"cold-snap"`. Re-exports `evaStatusClass` from `TimeSimulationControl.tsx`.
 
@@ -1077,7 +1046,7 @@ Internal helper component rendering a bound range slider, numeric input box, che
 
 #### `WeatherPanel(props: WeatherPanelProps)`
 
-Exported React component indexing evaluation checks by `WeatherCheckId`, computing the `384x92` 24-hour temperature and wind SVG curves with `06:00..18:00` daylight shading and active hour cursor, rendering `TimeSimulationControl` and `TraverseWindowsPanel`, and rendering either `TraversePresetControl` (`uiMode === "basic"`) or `THRESHOLD_SLIDERS` and `SPEED_SLIDERS` (`uiMode === "advance"`).
+Exported React component indexing evaluation checks by `WeatherCheckId`, computing the `384x92` 24-hour temperature and wind SVG curves with `06:00..18:00` daylight shading and active hour cursor, rendering `TimeSimulationControl` and `TraverseWindowsPanel`, and rendering either `TraversePresetControl` (`uiMode === "basic"`) or `THRESHOLD_SLIDERS`, `SPEED_SLIDERS`, and the 4 `SOIL SPEED MULTIPLIER` sliders (`uiMode === "advance"`).
 
 ### apps/web/src/components/TimeSimulationControl.tsx
 
@@ -1129,13 +1098,19 @@ Internal helper selecting the `TraverseDepartureSlot` whose `offsetHours` minimi
 
 Exported React component rendering interactive slot bars height-scaled to `score` with a 48-hour timeline cursor, selected slot telemetry readout, and up to 4 `recommendedWindows` cards with span bars and departure jump triggers.
 
+### apps/web/src/components/DualSimulationPanel.tsx
+
+Renders the synchronized two-unit playback console, speed/departure controls, dual timeline elevation/temperature/pressure/slope charts, and live telemetry cards in [apps/web/src/components/DualSimulationPanel.tsx](../apps/web/src/components/DualSimulationPanel.tsx).
+
+Exports `DualSimulationPanel` (with internal chart helpers `buildSeriesPath`, `DualTimelineMetricChart`, `UnitTimelineLane`, and `UnitLiveCard`).
+
 ### apps/web/src/components/ContextMenu.tsx
 
-Renders the right-click map context menu for waypoints and point creation in [apps/web/src/components/ContextMenu.tsx](../apps/web/src/components/ContextMenu.tsx).
+Renders the right-click map context menu for active-unit sequential waypoints and point creation in [apps/web/src/components/ContextMenu.tsx](../apps/web/src/components/ContextMenu.tsx).
 
 #### `ContextMenu(props: ContextMenuProps)`
 
-Exported React component clamping screen placement inside `window.innerWidth - 230` and `window.innerHeight - 190`, displaying clicked coordinates to 5 decimal places, and wiring `Set A Waypoint`, `Set B Waypoint`, optional `Add Classified Point` (hidden when `canAddPoint` is false in `"basic"` mode), and optional `Clear Waypoints`.
+Exported React component clamping screen placement inside `window.innerWidth - 240` and `window.innerHeight - 235`, displaying clicked coordinates to 5 decimal places alongside the active unit badge, and wiring `Add Waypoint`, optional `Insert Stop (MID)` when two or more waypoints exist, optional `Add Classified Point` (hidden when `canAddPoint` is false in `"basic"` mode), optional `Remove Last`, and `Clear Waypoints`.
 
 
 ---
@@ -1144,15 +1119,25 @@ Exported React component clamping screen placement inside `window.innerWidth - 2
 
 ### scripts/dev.ts
 
-Launches both `@nimbs/api` with `--hot` reload and the `@nimbs/web` Vite development server under one supervisor process in [scripts/dev.ts](../scripts/dev.ts).
+Ensures static public data is up to date via `scripts/data/prepare-static-data.ts` and starts the `@nimbs/web` Vite development server in [scripts/dev.ts](../scripts/dev.ts).
 
 #### `shutdown(): void`
 
-Internal helper terminating `apiProc` and `webProc` cleanly and exiting with status `0`. Registered on `SIGINT`, `SIGTERM`, and after `Promise.race([apiProc.exited, webProc.exited])`.
+Internal helper terminating `webProc` cleanly and exiting with status `0`. Registered on `SIGINT` and `SIGTERM`.
+
+### scripts/serve-static.ts
+
+Serves the production bundle in `apps/web/dist` over `Bun.serve` for static-only hosting in [scripts/serve-static.ts](../scripts/serve-static.ts).
+
+Uses `getMimeType`, `getCacheControl` (`no-cache` for `/`, `/index.html`, `/sw.js`, `/data/site-meta.json`, `/data/site-weather.json`; `immutable` for `/assets/*`; 24-hour caching for `/data/*.bin` and `/data/*.png`), and `resolveDistFile` with SPA fallback excluding missing `/assets/*` and `/data/*` paths.
+
+### scripts/data/prepare-static-data.ts
+
+Fetches missing site/weather source files if absent and writes static client bundle files (`apps/web/public/data/site-meta.json`, `site-terrain.bin`, `site-soil.bin`, `site-hillshade.png`, `site-weather.json`) using `encodeTerrainBinary` and `encodeSoilBinary` in [scripts/data/prepare-static-data.ts](../scripts/data/prepare-static-data.ts).
 
 ### scripts/data/fetch-site.ts
 
-Streams USGS MRO CTX Cloud-Optimized GeoTIFF DTMs and hillshade rasters to produce `data/site-terrain.json` and `data/site-hillshade.png` in [scripts/data/fetch-site.ts](../scripts/data/fetch-site.ts).
+Streams USGS MRO CTX Cloud-Optimized GeoTIFF DTMs, CTX hillshade rasters, and Mars Odyssey THEMIS Nighttime IR controlled mosaics to produce `data/site-terrain.json` (including classified `soilTypes`) and `data/site-hillshade.png` in [scripts/data/fetch-site.ts](../scripts/data/fetch-site.ts).
 
 Module constants: `PRESETS` for `"jezero"` and `"mount-sharp"`, `DEFAULT_SITE_SIZE_KM = 20`, `DEFAULT_CELL_SIZE_M = 20`, and `DEFAULT_HILLSHADE_SIZE = 1000`.
 
@@ -1195,7 +1180,8 @@ Internal entrypoint orchestrating remote ingestion:
 1. Parses `--site=`, `--size-km=`, and `--grid=`, opens the preset `dtmUrl` via `geotiff` `fromUrl`, and scales east-west projection width by `1 / cos(lat)`.
 2. Probes 6 candidate offsets on a `180` m/px overview, prioritizing `>= 99%` valid coverage and breaking ties by elevation relief.
 3. Resamples the chosen extent near `cellSizeM * 0.95`, calls `fillIsolatedNodata`, derives `bbox`, `center`, `widthMeters`, and `heightMeters` with `equirectangularToCoord` and `surfaceDistanceMeters`, and computes min/max elevation.
-4. Streams `hillshadeUrl`, encodes `1000x1000` `data/site-hillshade.png` via `encodeRgbaPng`, and writes `data/site-terrain.json`.
+4. Samples the preset `themisNirUrl` mosaic over the matching extent and runs `classifyMarsSoilMatrix` to generate the 4-class soil grid (`soilTypes`).
+5. Streams `hillshadeUrl`, writes `data/site-hillshade.png`, and writes `data/site-terrain.json`.
 
 ### scripts/data/fetch-weather.ts
 

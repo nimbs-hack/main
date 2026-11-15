@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import {
   type SiteDataset,
   type StaticSiteManifest,
+  encodeSoilBinary,
   encodeTerrainBinary,
 } from "../../packages/shared/src";
 
@@ -16,6 +17,7 @@ const WEATHER_SRC_PATH = resolve(DATA_DIR, "site-weather.json");
 const PUBLIC_DATA_DIR = resolve(ROOT_DIR, "apps/web/public/data");
 const MANIFEST_DST_PATH = resolve(PUBLIC_DATA_DIR, "site-meta.json");
 const TERRAIN_BIN_DST_PATH = resolve(PUBLIC_DATA_DIR, "site-terrain.bin");
+const SOIL_BIN_DST_PATH = resolve(PUBLIC_DATA_DIR, "site-soil.bin");
 const HILLSHADE_DST_PATH = resolve(PUBLIC_DATA_DIR, "site-hillshade.png");
 const WEATHER_DST_PATH = resolve(PUBLIC_DATA_DIR, "site-weather.json");
 
@@ -49,14 +51,16 @@ async function main(): Promise<void> {
   const hasOutputs =
     existsSync(MANIFEST_DST_PATH) &&
     existsSync(TERRAIN_BIN_DST_PATH) &&
+    existsSync(SOIL_BIN_DST_PATH) &&
     existsSync(HILLSHADE_DST_PATH) &&
     existsSync(WEATHER_DST_PATH);
 
   if (!force && hasOutputs) {
-    const [srcTerrainStat, dstBinStat, srcHsStat, dstHsStat, srcWxStat, dstWxStat] =
+    const [srcTerrainStat, dstBinStat, dstSoilStat, srcHsStat, dstHsStat, srcWxStat, dstWxStat] =
       await Promise.all([
         stat(TERRAIN_JSON_PATH),
         stat(TERRAIN_BIN_DST_PATH),
+        stat(SOIL_BIN_DST_PATH),
         stat(HILLSHADE_SRC_PATH),
         stat(HILLSHADE_DST_PATH),
         stat(WEATHER_SRC_PATH),
@@ -64,6 +68,7 @@ async function main(): Promise<void> {
       ]);
     const isFresh =
       dstBinStat.mtimeMs >= srcTerrainStat.mtimeMs &&
+      dstSoilStat.mtimeMs >= srcTerrainStat.mtimeMs &&
       dstHsStat.mtimeMs >= srcHsStat.mtimeMs &&
       dstWxStat.mtimeMs >= srcWxStat.mtimeMs;
     if (isFresh) {
@@ -75,27 +80,39 @@ async function main(): Promise<void> {
   const rawTerrain = await readFile(TERRAIN_JSON_PATH, "utf8");
   const dataset = JSON.parse(rawTerrain) as SiteDataset;
   const binBytes = encodeTerrainBinary(dataset.elevationsM);
+  const soilBytes = dataset.soilTypes?.length ? encodeSoilBinary(dataset.soilTypes) : null;
 
   const manifest: StaticSiteManifest = {
-    version: 1,
+    version: 2,
     generatedAt: new Date().toISOString(),
     meta: dataset.meta,
     terrainBinFile: "site-terrain.bin",
     terrainByteLength: binBytes.byteLength,
+    ...(soilBytes
+      ? {
+          soilBinFile: "site-soil.bin",
+          soilByteLength: soilBytes.byteLength,
+        }
+      : {}),
     hillshadeFile: "site-hillshade.png",
     weatherFallbackFile: "site-weather.json",
   };
 
-  await Promise.all([
+  const writes: Array<Promise<void>> = [
     writeFile(MANIFEST_DST_PATH, JSON.stringify(manifest), "utf8"),
     writeFile(TERRAIN_BIN_DST_PATH, binBytes),
     copyFile(HILLSHADE_SRC_PATH, HILLSHADE_DST_PATH),
     copyFile(WEATHER_SRC_PATH, WEATHER_DST_PATH),
-  ]);
+  ];
+  if (soilBytes) {
+    writes.push(writeFile(SOIL_BIN_DST_PATH, soilBytes));
+  }
+  await Promise.all(writes);
 
   const sizeMb = (binBytes.byteLength / (1024 * 1024)).toFixed(2);
+  const soilMb = soilBytes ? `, ${(soilBytes.byteLength / (1024 * 1024)).toFixed(2)} MiB soil` : "";
   console.log(
-    `Prepared static site data: ${dataset.meta.cols}x${dataset.meta.rows} DEM (${sizeMb} MiB binary), hillshade, and weather fallback.`,
+    `Prepared static site data: ${dataset.meta.cols}x${dataset.meta.rows} DEM (${sizeMb} MiB binary${soilMb}), hillshade, and weather fallback.`,
   );
 }
 

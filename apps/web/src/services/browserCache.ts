@@ -1,17 +1,20 @@
 import {
   DEFAULT_EVA_WEATHER_LIMITS,
+  DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
   DEFAULT_MARS_BASE_LAYER,
   type EvaWeatherLimits,
   type LonFormat,
   MARS_BASE_LAYERS,
   type MarsCoord,
   type MarsWeatherSnapshot,
+  type MissionUnitId,
   type RoutePlanResponse,
   type StaticSiteManifest,
   TRAVERSE_PRESETS,
   type TraversePresetId,
   type UiMode,
   type WeatherScenario,
+  resolveSoilSpeedFactors,
 } from "@nimbs/shared";
 
 const DB_NAME = "nimbs-mars-cache-v1";
@@ -30,6 +33,7 @@ export interface CachedTerrainDatasetRecord {
   key: string;
   manifest: StaticSiteManifest;
   terrainBuffer: ArrayBuffer;
+  soilBuffer?: ArrayBuffer;
   cachedAtMs: number;
 }
 
@@ -51,28 +55,37 @@ export interface CachedRouteRecord {
   createdAtMs: number;
 }
 
+export interface PersistedUnitMissionState {
+  presetId: TraversePresetId;
+  maxSlopeDeg: number;
+  weatherRoutingEnabled: boolean;
+  weatherLimits: EvaWeatherLimits;
+  waypoints: MarsCoord[];
+  selectedRouteId: string | null;
+}
+
 export interface PersistedMissionState {
-  version: 1;
+  version: 2;
   activeLayerId: string;
   showHillshade: boolean;
+  showSoilLayer: boolean;
   showSlopeHazard: boolean;
   showPressureLayer: boolean;
   showTemperatureLayer: boolean;
   showSiteBounds: boolean;
   showPointsOverlay: boolean;
   uiMode: UiMode;
-  presetId: TraversePresetId;
+  activeUnitId: MissionUnitId;
   activeToolId: string;
   panelOpen: boolean;
   lonFormat: LonFormat;
-  maxSlopeDeg: number;
-  weatherRoutingEnabled: boolean;
-  waypointA: MarsCoord | null;
-  waypointB: MarsCoord | null;
-  selectedRouteId: string | null;
   simLmstHour: number;
   weatherScenario: WeatherScenario;
-  weatherLimits: EvaWeatherLimits;
+  moveWaypointsMode: boolean;
+  dualSimSpeedMultiplier: number;
+  simDepartureLmstHour: number;
+  unit1: PersistedUnitMissionState;
+  unit2: PersistedUnitMissionState;
 }
 
 const VALID_LAYER_IDS = new Set(MARS_BASE_LAYERS.map((l) => l.id));
@@ -240,29 +253,49 @@ export async function writeCachedRoute(key: string, response: RoutePlanResponse)
   await idbPruneOldest(STORE_ROUTES, MAX_ROUTE_ENTRIES);
 }
 
+export function createDefaultUnitMissionState(
+  presetId: TraversePresetId,
+): PersistedUnitMissionState {
+  const preset = TRAVERSE_PRESETS[presetId];
+  return {
+    presetId,
+    maxSlopeDeg: preset.maxSlopeDeg,
+    weatherRoutingEnabled: true,
+    weatherLimits: {
+      ...preset.limits,
+      soilSpeedFactors: resolveSoilSpeedFactors(
+        preset.limits.soilSpeedFactors,
+        DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
+      ),
+    },
+    waypoints: [],
+    selectedRouteId: null,
+  };
+}
+
 export function createDefaultMissionState(): PersistedMissionState {
   return {
-    version: 1,
+    version: 2,
     activeLayerId: DEFAULT_MARS_BASE_LAYER.id,
     showHillshade: true,
+    showSoilLayer: false,
     showSlopeHazard: true,
     showPressureLayer: false,
     showTemperatureLayer: false,
     showSiteBounds: true,
     showPointsOverlay: true,
     uiMode: "basic",
-    presetId: "human",
+    activeUnitId: 1,
     activeToolId: "route",
     panelOpen: true,
     lonFormat: "180",
-    maxSlopeDeg: TRAVERSE_PRESETS.human.maxSlopeDeg,
-    weatherRoutingEnabled: true,
-    waypointA: null,
-    waypointB: null,
-    selectedRouteId: null,
     simLmstHour: 12,
     weatherScenario: "auto",
-    weatherLimits: { ...DEFAULT_EVA_WEATHER_LIMITS },
+    moveWaypointsMode: false,
+    dualSimSpeedMultiplier: 4,
+    simDepartureLmstHour: 12,
+    unit1: createDefaultUnitMissionState("human"),
+    unit2: createDefaultUnitMissionState("rover"),
   };
 }
 
@@ -285,13 +318,25 @@ function sanitizeCoord(raw: unknown): MarsCoord | null {
   return null;
 }
 
-function sanitizeWeatherLimits(raw: unknown): EvaWeatherLimits {
-  const base: EvaWeatherLimits = { ...DEFAULT_EVA_WEATHER_LIMITS };
+type NumericWeatherLimitKey = Exclude<keyof EvaWeatherLimits, "soilSpeedFactors">;
+
+function sanitizeWeatherLimits(
+  raw: unknown,
+  fallback: EvaWeatherLimits = DEFAULT_EVA_WEATHER_LIMITS,
+): EvaWeatherLimits {
+  const baseFactors = resolveSoilSpeedFactors(
+    fallback.soilSpeedFactors,
+    DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
+  );
+  const base: EvaWeatherLimits = {
+    ...fallback,
+    soilSpeedFactors: { ...baseFactors },
+  };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return base;
   const rec = raw as Record<string, unknown>;
 
   const assignBounded = (
-    key: keyof EvaWeatherLimits,
+    key: NumericWeatherLimitKey,
     minVal: number,
     maxVal: number,
     exclusiveMin = false,
@@ -311,7 +356,53 @@ function sanitizeWeatherLimits(raw: unknown): EvaWeatherLimits {
   assignBounded("flatSpeedMPerH", 100, 50_000);
   assignBounded("climbSpeedMPerH", 25, 10_000);
   assignBounded("descentSpeedMPerH", 25, 15_000);
+  if (rec.soilSpeedFactors && typeof rec.soilSpeedFactors === "object") {
+    base.soilSpeedFactors = resolveSoilSpeedFactors(
+      rec.soilSpeedFactors as EvaWeatherLimits["soilSpeedFactors"],
+      baseFactors,
+    );
+  }
   return base;
+}
+
+function sanitizeWaypoints(raw: unknown): MarsCoord[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MarsCoord[] = [];
+  for (const item of raw) {
+    const c = sanitizeCoord(item);
+    if (c) out.push(c);
+    if (out.length >= 25) break;
+  }
+  return out;
+}
+
+function sanitizeUnitState(
+  raw: unknown,
+  defaultPreset: TraversePresetId,
+): PersistedUnitMissionState {
+  const fallback = createDefaultUnitMissionState(defaultPreset);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return fallback;
+  const rec = raw as Record<string, unknown>;
+  const presetId: TraversePresetId =
+    rec.presetId === "rover" || rec.presetId === "human" ? rec.presetId : defaultPreset;
+  const presetDefaults = TRAVERSE_PRESETS[presetId];
+  return {
+    presetId,
+    maxSlopeDeg:
+      typeof rec.maxSlopeDeg === "number" &&
+      Number.isFinite(rec.maxSlopeDeg) &&
+      rec.maxSlopeDeg >= 0.5 &&
+      rec.maxSlopeDeg <= 89
+        ? rec.maxSlopeDeg
+        : presetDefaults.maxSlopeDeg,
+    weatherRoutingEnabled:
+      typeof rec.weatherRoutingEnabled === "boolean"
+        ? rec.weatherRoutingEnabled
+        : fallback.weatherRoutingEnabled,
+    weatherLimits: sanitizeWeatherLimits(rec.weatherLimits, presetDefaults.limits),
+    waypoints: sanitizeWaypoints(rec.waypoints),
+    selectedRouteId: typeof rec.selectedRouteId === "string" ? rec.selectedRouteId : null,
+  };
 }
 
 function resolveStorage(storage?: Storage): Storage | null {
@@ -330,6 +421,16 @@ function resolveStorage(storage?: Storage): Storage | null {
   return null;
 }
 
+interface LegacyPersistedV1 {
+  presetId?: unknown;
+  maxSlopeDeg?: unknown;
+  weatherRoutingEnabled?: unknown;
+  weatherLimits?: unknown;
+  waypointA?: unknown;
+  waypointB?: unknown;
+  selectedRouteId?: unknown;
+}
+
 export function loadMissionState(storage?: Storage): PersistedMissionState {
   const defaults = createDefaultMissionState();
   const store = resolveStorage(storage);
@@ -338,22 +439,38 @@ export function loadMissionState(storage?: Storage): PersistedMissionState {
   try {
     const raw = store.getItem(MISSION_STATE_STORAGE_KEY);
     if (!raw) return defaults;
-    const parsed = JSON.parse(raw) as Partial<PersistedMissionState> | null;
+    const parsed = JSON.parse(raw) as (Partial<PersistedMissionState> & LegacyPersistedV1) | null;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return defaults;
 
-    const presetId: TraversePresetId =
-      parsed.presetId === "rover" || parsed.presetId === "human" ? parsed.presetId : "human";
     const uiMode: UiMode = parsed.uiMode === "advance" ? "advance" : "basic";
     const activeLayerId =
       typeof parsed.activeLayerId === "string" && VALID_LAYER_IDS.has(parsed.activeLayerId)
         ? parsed.activeLayerId
         : defaults.activeLayerId;
 
+    const hasUnitObjects = Boolean(parsed.unit1 || parsed.unit2);
+    const unit1 = hasUnitObjects
+      ? sanitizeUnitState(parsed.unit1, "human")
+      : sanitizeUnitState(
+          {
+            presetId: parsed.presetId,
+            maxSlopeDeg: parsed.maxSlopeDeg,
+            weatherRoutingEnabled: parsed.weatherRoutingEnabled,
+            weatherLimits: parsed.weatherLimits,
+            waypoints: [parsed.waypointA, parsed.waypointB].filter(Boolean),
+            selectedRouteId: parsed.selectedRouteId,
+          },
+          "human",
+        );
+    const unit2 = sanitizeUnitState(parsed.unit2, "rover");
+
     return {
-      version: 1,
+      version: 2,
       activeLayerId,
       showHillshade:
         typeof parsed.showHillshade === "boolean" ? parsed.showHillshade : defaults.showHillshade,
+      showSoilLayer:
+        typeof parsed.showSoilLayer === "boolean" ? parsed.showSoilLayer : defaults.showSoilLayer,
       showSlopeHazard:
         typeof parsed.showSlopeHazard === "boolean"
           ? parsed.showSlopeHazard
@@ -375,27 +492,13 @@ export function loadMissionState(storage?: Storage): PersistedMissionState {
           ? parsed.showPointsOverlay
           : defaults.showPointsOverlay,
       uiMode,
-      presetId,
+      activeUnitId: parsed.activeUnitId === 2 ? 2 : 1,
       activeToolId:
         typeof parsed.activeToolId === "string" && parsed.activeToolId.length > 0
           ? parsed.activeToolId
           : defaults.activeToolId,
       panelOpen: typeof parsed.panelOpen === "boolean" ? parsed.panelOpen : defaults.panelOpen,
       lonFormat: parsed.lonFormat === "360" ? "360" : "180",
-      maxSlopeDeg:
-        typeof parsed.maxSlopeDeg === "number" &&
-        Number.isFinite(parsed.maxSlopeDeg) &&
-        parsed.maxSlopeDeg >= 0.5 &&
-        parsed.maxSlopeDeg <= 89
-          ? parsed.maxSlopeDeg
-          : defaults.maxSlopeDeg,
-      weatherRoutingEnabled:
-        typeof parsed.weatherRoutingEnabled === "boolean"
-          ? parsed.weatherRoutingEnabled
-          : defaults.weatherRoutingEnabled,
-      waypointA: sanitizeCoord(parsed.waypointA),
-      waypointB: sanitizeCoord(parsed.waypointB),
-      selectedRouteId: typeof parsed.selectedRouteId === "string" ? parsed.selectedRouteId : null,
       simLmstHour:
         typeof parsed.simLmstHour === "number" &&
         Number.isFinite(parsed.simLmstHour) &&
@@ -408,7 +511,26 @@ export function loadMissionState(storage?: Storage): PersistedMissionState {
         VALID_SCENARIOS.has(parsed.weatherScenario as WeatherScenario)
           ? (parsed.weatherScenario as WeatherScenario)
           : defaults.weatherScenario,
-      weatherLimits: sanitizeWeatherLimits(parsed.weatherLimits),
+      moveWaypointsMode:
+        typeof parsed.moveWaypointsMode === "boolean"
+          ? parsed.moveWaypointsMode
+          : defaults.moveWaypointsMode,
+      dualSimSpeedMultiplier:
+        typeof parsed.dualSimSpeedMultiplier === "number" &&
+        Number.isFinite(parsed.dualSimSpeedMultiplier) &&
+        parsed.dualSimSpeedMultiplier > 0 &&
+        parsed.dualSimSpeedMultiplier <= 60
+          ? parsed.dualSimSpeedMultiplier
+          : defaults.dualSimSpeedMultiplier,
+      simDepartureLmstHour:
+        typeof parsed.simDepartureLmstHour === "number" &&
+        Number.isFinite(parsed.simDepartureLmstHour) &&
+        parsed.simDepartureLmstHour >= 0 &&
+        parsed.simDepartureLmstHour <= 24
+          ? parsed.simDepartureLmstHour
+          : defaults.simDepartureLmstHour,
+      unit1,
+      unit2,
     };
   } catch {
     return defaults;

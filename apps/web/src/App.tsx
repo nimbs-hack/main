@@ -3,14 +3,16 @@ import {
   type LonFormat,
   MARS_BASE_LAYERS,
   type MarsCoord,
+  type MissionUnitId,
   type RoutePlanResponse,
   type RoutePoint,
   type SiteMetadata,
   lon180To360,
 } from "@nimbs/shared";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ContextMenu } from "./components/ContextMenu";
-import { MapView } from "./components/MapView";
+import { DualSimulationPanel } from "./components/DualSimulationPanel";
+import { type MapUnitDisplay, MapView } from "./components/MapView";
 import { MaxSlopeControl } from "./components/MaxSlopeControl";
 import { PointsPanel } from "./components/PointsPanel";
 import { RoutePlannerPanel } from "./components/RoutePlannerPanel";
@@ -25,26 +27,38 @@ import { TraversePresetControl } from "./components/TraversePresetControl";
 import { WeatherPanel, evaStatusClass } from "./components/WeatherPanel";
 import { ToolRegistry } from "./registry/toolRegistry";
 import {
-  DEFAULT_EVA_WEATHER_LIMITS,
+  type ComputedRoute,
+  DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
   type EvaRouteWeatherContext,
   type EvaWeatherEvaluation,
   type EvaWeatherLimits,
   type MarsWeatherSnapshot,
+  SOIL_TYPE_CATALOG,
+  SOIL_TYPE_ORDER,
   type SiteEnvironmentSummary,
+  type SoilTypeId,
   TRAVERSE_PRESETS,
   type TraversePointSample,
   type TraversePresetId,
   type UiMode,
   type WeatherScenario,
+  buildUnitTraverseTimeline,
   evaluateWeatherConstraints,
   fetchBaseLayers,
   fetchElevation,
   fetchEnvironmentSummary,
   fetchSiteMeta,
   fetchWeatherSnapshot,
+  findBestWaypointInsertIndex,
   planGraphRoutes,
+  resolveSoilSpeedFactors,
 } from "./services/api";
-import { loadMissionState, saveMissionState } from "./services/browserCache";
+import {
+  type PersistedUnitMissionState,
+  loadMissionState,
+  saveMissionState,
+} from "./services/browserCache";
+import { UNIT_ACCENT_COLORS, buildDualSimBundle, evaluateDualSimFrame } from "./services/dualSim";
 import {
   type MapPoint,
   type MapPointClass,
@@ -64,9 +78,237 @@ function formatLon(lonDeg: number, fmt: LonFormat): string {
 }
 
 const DEFAULT_THERMAL_WEIGHT = 0.35;
+const EMPTY_ROUTES: ComputedRoute[] = [];
 
 function isAbortError(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
+}
+
+function cloneWeatherLimits(limits: EvaWeatherLimits): EvaWeatherLimits {
+  return {
+    ...limits,
+    soilSpeedFactors: resolveSoilSpeedFactors(
+      limits.soilSpeedFactors,
+      DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
+    ),
+  };
+}
+
+interface UnitMissionState {
+  id: MissionUnitId;
+  presetId: TraversePresetId;
+  maxSlopeDeg: number;
+  weatherRoutingEnabled: boolean;
+  weatherLimits: EvaWeatherLimits;
+  waypoints: MarsCoord[];
+  routePlan: RoutePlanResponse | null;
+  selectedRouteId: string | null;
+  routingBusy: boolean;
+  weatherEval: EvaWeatherEvaluation | null;
+  weatherError: string | null;
+}
+
+function createInitialUnitState(
+  id: MissionUnitId,
+  presetIdOrPersisted: TraversePresetId | PersistedUnitMissionState,
+): UnitMissionState {
+  if (typeof presetIdOrPersisted === "string") {
+    const preset = TRAVERSE_PRESETS[presetIdOrPersisted];
+    return {
+      id,
+      presetId: presetIdOrPersisted,
+      maxSlopeDeg: preset.maxSlopeDeg,
+      weatherRoutingEnabled: true,
+      weatherLimits: cloneWeatherLimits(preset.limits),
+      waypoints: [],
+      routePlan: null,
+      selectedRouteId: null,
+      routingBusy: false,
+      weatherEval: null,
+      weatherError: null,
+    };
+  }
+  return {
+    id,
+    presetId: presetIdOrPersisted.presetId,
+    maxSlopeDeg: presetIdOrPersisted.maxSlopeDeg,
+    weatherRoutingEnabled: presetIdOrPersisted.weatherRoutingEnabled,
+    weatherLimits: cloneWeatherLimits(presetIdOrPersisted.weatherLimits),
+    waypoints: presetIdOrPersisted.waypoints,
+    routePlan: null,
+    selectedRouteId: presetIdOrPersisted.selectedRouteId,
+    routingBusy: false,
+    weatherEval: null,
+    weatherError: null,
+  };
+}
+
+function resolveSelectedRoute(unit: UnitMissionState): ComputedRoute | null {
+  return (
+    unit.routePlan?.routes.find((r) => r.id === unit.selectedRouteId) ??
+    unit.routePlan?.routes[0] ??
+    null
+  );
+}
+
+function buildRouteWeatherContext(route: ComputedRoute | null): EvaRouteWeatherContext | undefined {
+  if (!route) return undefined;
+  let minElevationM = Number.POSITIVE_INFINITY;
+  let maxElevationM = Number.NEGATIVE_INFINITY;
+  for (const pt of route.points) {
+    if (pt.elevationM < minElevationM) minElevationM = pt.elevationM;
+    if (pt.elevationM > maxElevationM) maxElevationM = pt.elevationM;
+  }
+  return {
+    totalDistanceM: route.totalDistanceM,
+    elevationGainM: route.elevationGainM,
+    elevationLossM: route.elevationLossM,
+    minElevationM: Number.isFinite(minElevationM) ? minElevationM : undefined,
+    maxElevationM: Number.isFinite(maxElevationM) ? maxElevationM : undefined,
+    soilBreakdown: route.soilBreakdown,
+    points: sampleRoutePoints(route.points, 80),
+  };
+}
+
+type UnitPatchUpdater = (
+  updater: Partial<UnitMissionState> | ((prev: UnitMissionState) => UnitMissionState),
+) => void;
+
+function useUnitMissionSync(
+  unit: UnitMissionState,
+  updateUnit: UnitPatchUpdater,
+  env: {
+    siteId?: string;
+    weatherScenario: WeatherScenario;
+    simLmstHour: number;
+    weatherSnapshotRef: RefObject<MarsWeatherSnapshot | null>;
+    weatherSnapshotRev: number;
+  },
+): ComputedRoute | null {
+  const { siteId, weatherScenario, simLmstHour, weatherSnapshotRef, weatherSnapshotRev } = env;
+
+  useEffect(() => {
+    const wps = unit.waypoints;
+    if (wps.length < 2) {
+      updateUnit({ routePlan: null, selectedRouteId: null, routingBusy: false });
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      updateUnit({ routingBusy: true });
+      planGraphRoutes(
+        {
+          waypoints: wps,
+          maxSlopeDeg: unit.maxSlopeDeg,
+          soilSpeedFactors: unit.weatherLimits.soilSpeedFactors,
+          weatherConstraints: {
+            enabled: unit.weatherRoutingEnabled,
+            scenario: weatherScenario,
+            sol: weatherSnapshotRef.current?.sol,
+            lmstHour: simLmstHour,
+            minAirTempC: unit.weatherLimits.minAirTempC,
+            minPressurePa: unit.weatherLimits.minPressurePa,
+            thermalWeight: DEFAULT_THERMAL_WEIGHT,
+          },
+        },
+        controller.signal,
+      )
+        .then((res) => {
+          if (cancelled) return;
+          updateUnit((prev) => ({
+            ...prev,
+            routePlan: res,
+            selectedRouteId: res.routes.some((r) => r.id === prev.selectedRouteId)
+              ? prev.selectedRouteId
+              : (res.routes[0]?.id ?? null),
+          }));
+        })
+        .catch((err: unknown) => {
+          if (cancelled || isAbortError(err)) return;
+          updateUnit({
+            routePlan: {
+              status: "unreachable",
+              maxSlopeDeg: unit.maxSlopeDeg,
+              passableEdgeRatio: 0,
+              routes: [],
+              message: err instanceof Error ? err.message : "Route request failed",
+            },
+          });
+        })
+        .finally(() => {
+          if (!cancelled) updateUnit({ routingBusy: false });
+        });
+    }, 120);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    unit.waypoints,
+    unit.maxSlopeDeg,
+    unit.weatherLimits.soilSpeedFactors,
+    unit.weatherRoutingEnabled,
+    unit.weatherLimits.minAirTempC,
+    unit.weatherLimits.minPressurePa,
+    weatherScenario,
+    simLmstHour,
+    weatherSnapshotRef,
+    updateUnit,
+  ]);
+
+  const selectedRoute = useMemo(() => resolveSelectedRoute(unit), [unit]);
+  const routeContext = useMemo(() => buildRouteWeatherContext(selectedRoute), [selectedRoute]);
+
+  useEffect(() => {
+    const snapshot = weatherSnapshotRef.current;
+    if (!snapshot || weatherSnapshotRev === 0) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      evaluateWeatherConstraints(
+        {
+          limits: unit.weatherLimits,
+          site: siteId,
+          scenario: weatherScenario,
+          lmstHour: simLmstHour,
+          route: routeContext,
+          weather: snapshot,
+        },
+        controller.signal,
+      )
+        .then((res) => {
+          if (cancelled) return;
+          updateUnit({ weatherEval: res.evaluation, weatherError: null });
+        })
+        .catch((err: unknown) => {
+          if (cancelled || isAbortError(err)) return;
+          updateUnit({
+            weatherError: err instanceof Error ? err.message : "Weather evaluation failed",
+          });
+        });
+    }, 80);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    unit.weatherLimits,
+    routeContext,
+    siteId,
+    weatherScenario,
+    simLmstHour,
+    weatherSnapshotRev,
+    weatherSnapshotRef,
+    updateUnit,
+  ]);
+
+  return selectedRoute;
 }
 
 function sampleRoutePoints(points: RoutePoint[], maxSamples = 80): TraversePointSample[] {
@@ -78,6 +320,8 @@ function sampleRoutePoints(points: RoutePoint[], maxSamples = 80): TraversePoint
       slopeDeg: pt.slopeDeg,
       lat: pt.lat,
       lon: pt.lon,
+      soilType: pt.soilType,
+      soilSpeedFactor: pt.soilSpeedFactor,
     }));
   }
 
@@ -96,6 +340,8 @@ function sampleRoutePoints(points: RoutePoint[], maxSamples = 80): TraversePoint
       slopeDeg: pt.slopeDeg,
       lat: pt.lat,
       lon: pt.lon,
+      soilType: pt.soilType,
+      soilSpeedFactor: pt.soilSpeedFactor,
     });
   }
   return sampled;
@@ -109,6 +355,7 @@ export function App() {
   const [layers, setLayers] = useState([...MARS_BASE_LAYERS]);
   const [activeLayerId, setActiveLayerId] = useState(initialMissionState.activeLayerId);
   const [showHillshade, setShowHillshade] = useState(initialMissionState.showHillshade);
+  const [showSoilLayer, setShowSoilLayer] = useState(initialMissionState.showSoilLayer);
   const [showSlopeHazard, setShowSlopeHazard] = useState(initialMissionState.showSlopeHazard);
   const [showPressureLayer, setShowPressureLayer] = useState(initialMissionState.showPressureLayer);
   const [showTemperatureLayer, setShowTemperatureLayer] = useState(
@@ -117,26 +364,31 @@ export function App() {
   const [showSiteBounds, setShowSiteBounds] = useState(initialMissionState.showSiteBounds);
 
   const [uiMode, setUiMode] = useState<UiMode>(initialMissionState.uiMode);
-  const [presetId, setPresetId] = useState<TraversePresetId>(initialMissionState.presetId);
+  const [activeUnitId, setActiveUnitId] = useState<MissionUnitId>(initialMissionState.activeUnitId);
+  const [unit1, setUnit1] = useState<UnitMissionState>(() =>
+    createInitialUnitState(1, initialMissionState.unit1),
+  );
+  const [unit2, setUnit2] = useState<UnitMissionState>(() =>
+    createInitialUnitState(2, initialMissionState.unit2),
+  );
   const [activeToolId, setActiveToolId] = useState(initialMissionState.activeToolId);
   const [panelOpen, setPanelOpen] = useState(initialMissionState.panelOpen);
   const [lonFormat, setLonFormat] = useState<LonFormat>(initialMissionState.lonFormat);
 
-  const [maxSlopeDeg, setMaxSlopeDeg] = useState<number>(initialMissionState.maxSlopeDeg);
-  const [weatherRoutingEnabled, setWeatherRoutingEnabled] = useState(
-    initialMissionState.weatherRoutingEnabled,
-  );
-  const [waypointA, setWaypointA] = useState<MarsCoord | null>(initialMissionState.waypointA);
-  const [waypointB, setWaypointB] = useState<MarsCoord | null>(initialMissionState.waypointB);
-  const [routePlan, setRoutePlan] = useState<RoutePlanResponse | null>(null);
-  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(
-    initialMissionState.selectedRouteId,
-  );
-  const [routingBusy, setRoutingBusy] = useState(false);
   const [hoveredProfilePoint, setHoveredProfilePoint] = useState<RoutePoint | null>(null);
+  const [moveWaypointsMode, setMoveWaypointsMode] = useState(initialMissionState.moveWaypointsMode);
+  const [dualSimElapsedHours, setDualSimElapsedHours] = useState(0);
+  const [dualSimPlaying, setDualSimPlaying] = useState(false);
+  const [dualSimSpeedMultiplier, setDualSimSpeedMultiplier] = useState(
+    initialMissionState.dualSimSpeedMultiplier,
+  );
+  const [simDepartureLmstHour, setSimDepartureLmstHour] = useState(
+    initialMissionState.simDepartureLmstHour,
+  );
 
   const [cursorCoord, setCursorCoord] = useState<MarsCoord | null>(null);
   const [cursorElevM, setCursorElevM] = useState<number | null>(null);
+  const [cursorSoilType, setCursorSoilType] = useState<SoilTypeId | null>(null);
   const [scaleHud, setScaleHud] = useState({ label: "500 m", widthPx: 80, zoom: 13 });
   const [focusCount, setFocusCount] = useState(0);
   const [zoomTrigger, setZoomTrigger] = useState<{ delta: number; seq: number } | null>(null);
@@ -164,15 +416,11 @@ export function App() {
 
   const [simLmstHour, setSimLmstHour] = useState(initialMissionState.simLmstHour);
   const [isPlayingTime, setIsPlayingTime] = useState(false);
-  const [weatherLimits, setWeatherLimits] = useState<EvaWeatherLimits>(
-    initialMissionState.weatherLimits,
-  );
   const [weatherScenario, setWeatherScenario] = useState<WeatherScenario>(
     initialMissionState.weatherScenario,
   );
   const [weatherSnapshot, setWeatherSnapshot] = useState<MarsWeatherSnapshot | null>(null);
   const [weatherSnapshotRev, setWeatherSnapshotRev] = useState(0);
-  const [weatherEval, setWeatherEval] = useState<EvaWeatherEvaluation | null>(null);
   const [weatherBusy, setWeatherBusy] = useState(false);
   const [weatherError, setWeatherError] = useState<string | null>(null);
   const [envSummary, setEnvSummary] = useState<SiteEnvironmentSummary | null>(null);
@@ -181,54 +429,105 @@ export function App() {
   const simLmstHourRef = useRef(simLmstHour);
   simLmstHourRef.current = simLmstHour;
 
+  const patchUnit1 = useCallback<UnitPatchUpdater>((updater) => {
+    setUnit1((prev) => (typeof updater === "function" ? updater(prev) : { ...prev, ...updater }));
+  }, []);
+
+  const patchUnit2 = useCallback<UnitPatchUpdater>((updater) => {
+    setUnit2((prev) => (typeof updater === "function" ? updater(prev) : { ...prev, ...updater }));
+  }, []);
+
+  const patchUnitById = useCallback(
+    (
+      id: MissionUnitId,
+      updater: Partial<UnitMissionState> | ((prev: UnitMissionState) => UnitMissionState),
+    ) => {
+      if (id === 1) patchUnit1(updater);
+      else patchUnit2(updater);
+    },
+    [patchUnit1, patchUnit2],
+  );
+
+  const activeUnit = activeUnitId === 1 ? unit1 : unit2;
+  const patchActiveUnit = useCallback<UnitPatchUpdater>(
+    (updater) => {
+      patchUnitById(activeUnitId, updater);
+    },
+    [activeUnitId, patchUnitById],
+  );
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       saveMissionState({
-        version: 1,
+        version: 2,
         activeLayerId,
         showHillshade,
+        showSoilLayer,
         showSlopeHazard,
         showPressureLayer,
         showTemperatureLayer,
         showSiteBounds,
         showPointsOverlay,
         uiMode,
-        presetId,
+        activeUnitId,
         activeToolId,
         panelOpen,
         lonFormat,
-        maxSlopeDeg,
-        weatherRoutingEnabled,
-        waypointA,
-        waypointB,
-        selectedRouteId,
         simLmstHour,
         weatherScenario,
-        weatherLimits,
+        moveWaypointsMode,
+        dualSimSpeedMultiplier,
+        simDepartureLmstHour,
+        unit1: {
+          presetId: unit1.presetId,
+          maxSlopeDeg: unit1.maxSlopeDeg,
+          weatherRoutingEnabled: unit1.weatherRoutingEnabled,
+          weatherLimits: unit1.weatherLimits,
+          waypoints: unit1.waypoints,
+          selectedRouteId: unit1.selectedRouteId,
+        },
+        unit2: {
+          presetId: unit2.presetId,
+          maxSlopeDeg: unit2.maxSlopeDeg,
+          weatherRoutingEnabled: unit2.weatherRoutingEnabled,
+          weatherLimits: unit2.weatherLimits,
+          waypoints: unit2.waypoints,
+          selectedRouteId: unit2.selectedRouteId,
+        },
       });
     }, 150);
     return () => window.clearTimeout(timer);
   }, [
     activeLayerId,
     showHillshade,
+    showSoilLayer,
     showSlopeHazard,
     showPressureLayer,
     showTemperatureLayer,
     showSiteBounds,
     showPointsOverlay,
     uiMode,
-    presetId,
+    activeUnitId,
     activeToolId,
     panelOpen,
     lonFormat,
-    maxSlopeDeg,
-    weatherRoutingEnabled,
-    waypointA,
-    waypointB,
-    selectedRouteId,
     simLmstHour,
     weatherScenario,
-    weatherLimits,
+    moveWaypointsMode,
+    dualSimSpeedMultiplier,
+    simDepartureLmstHour,
+    unit1.presetId,
+    unit1.maxSlopeDeg,
+    unit1.weatherRoutingEnabled,
+    unit1.weatherLimits,
+    unit1.waypoints,
+    unit1.selectedRouteId,
+    unit2.presetId,
+    unit2.maxSlopeDeg,
+    unit2.weatherRoutingEnabled,
+    unit2.weatherLimits,
+    unit2.waypoints,
+    unit2.selectedRouteId,
   ]);
 
   useEffect(() => {
@@ -303,11 +602,13 @@ export function App() {
       setCursorCoord(coord);
       if (!coord || !site) {
         setCursorElevM(null);
+        setCursorSoilType(null);
         return;
       }
       const [west, south, east, north] = site.bbox;
       if (coord.lat < south || coord.lat > north || coord.lon < west || coord.lon > east) {
         setCursorElevM(null);
+        setCursorSoilType(null);
         return;
       }
       if (elevTimerRef.current !== null) {
@@ -315,108 +616,150 @@ export function App() {
       }
       elevTimerRef.current = window.setTimeout(() => {
         fetchElevation(coord.lat, coord.lon)
-          .then((res) => setCursorElevM(res.elevationM))
-          .catch(() => setCursorElevM(null));
+          .then((res) => {
+            setCursorElevM(res.elevationM);
+            setCursorSoilType(res.soilType ?? null);
+          })
+          .catch(() => {
+            setCursorElevM(null);
+            setCursorSoilType(null);
+          });
       }, 45);
     },
     [site],
   );
 
-  // Recompute weather-constrained terrain graph routes with 120ms debounce
-  useEffect(() => {
-    if (!waypointA || !waypointB) {
-      setRoutePlan(null);
-      setSelectedRouteId(null);
-      setRoutingBusy(false);
-      return;
-    }
-
-    let cancelled = false;
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      setRoutingBusy(true);
-      planGraphRoutes(
-        {
-          waypointA,
-          waypointB,
-          maxSlopeDeg,
-          weatherConstraints: {
-            enabled: weatherRoutingEnabled,
-            scenario: weatherScenario,
-            sol: weatherSnapshotRef.current?.sol,
-            lmstHour: simLmstHour,
-            minAirTempC: weatherLimits.minAirTempC,
-            minPressurePa: weatherLimits.minPressurePa,
-            thermalWeight: DEFAULT_THERMAL_WEIGHT,
-          },
-        },
-        controller.signal,
-      )
-        .then((res) => {
-          if (cancelled) return;
-          setRoutePlan(res);
-          setSelectedRouteId((prev) =>
-            res.routes.some((r) => r.id === prev) ? prev : (res.routes[0]?.id ?? null),
-          );
-        })
-        .catch((err: unknown) => {
-          if (cancelled || isAbortError(err)) return;
-          setRoutePlan({
-            status: "unreachable",
-            maxSlopeDeg,
-            passableEdgeRatio: 0,
-            routes: [],
-            message: err instanceof Error ? err.message : "Route request failed",
-          });
-        })
-        .finally(() => {
-          if (!cancelled) setRoutingBusy(false);
-        });
-    }, 120);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [
-    waypointA,
-    waypointB,
-    maxSlopeDeg,
-    weatherRoutingEnabled,
+  const selectedRoute1 = useUnitMissionSync(unit1, patchUnit1, {
+    siteId: site?.id,
     weatherScenario,
     simLmstHour,
-    weatherLimits.minAirTempC,
-    weatherLimits.minPressurePa,
-  ]);
+    weatherSnapshotRef,
+    weatherSnapshotRev,
+  });
+
+  const selectedRoute2 = useUnitMissionSync(unit2, patchUnit2, {
+    siteId: site?.id,
+    weatherScenario,
+    simLmstHour,
+    weatherSnapshotRef,
+    weatherSnapshotRev,
+  });
+
+  const activeSelectedRoute = activeUnitId === 1 ? selectedRoute1 : selectedRoute2;
+
+  const timeline1 = useMemo(
+    () =>
+      selectedRoute1
+        ? buildUnitTraverseTimeline(
+            1,
+            selectedRoute1,
+            unit1.weatherLimits,
+            unit1.weatherEval?.estimatedRouteHours,
+          )
+        : null,
+    [selectedRoute1, unit1.weatherLimits, unit1.weatherEval?.estimatedRouteHours],
+  );
+
+  const timeline2 = useMemo(
+    () =>
+      selectedRoute2
+        ? buildUnitTraverseTimeline(
+            2,
+            selectedRoute2,
+            unit2.weatherLimits,
+            unit2.weatherEval?.estimatedRouteHours,
+          )
+        : null,
+    [selectedRoute2, unit2.weatherLimits, unit2.weatherEval?.estimatedRouteHours],
+  );
+
+  const dualSimBundle = useMemo(
+    () =>
+      buildDualSimBundle({
+        timeline1,
+        timeline2,
+        departureLmstHour: simDepartureLmstHour,
+        weather: weatherSnapshot,
+        sampleCount: 72,
+      }),
+    [timeline1, timeline2, simDepartureLmstHour, weatherSnapshot],
+  );
+
+  const effectiveDualElapsed =
+    dualSimBundle.totalDurationHours > 0
+      ? Math.max(0, Math.min(dualSimBundle.totalDurationHours, dualSimElapsedHours))
+      : 0;
+
+  useEffect(() => {
+    setDualSimElapsedHours((prev) =>
+      dualSimBundle.totalDurationHours > 0 ? Math.min(prev, dualSimBundle.totalDurationHours) : 0,
+    );
+  }, [dualSimBundle.totalDurationHours]);
+
+  useEffect(() => {
+    if (!dualSimPlaying || dualSimBundle.totalDurationHours <= 0) return;
+    const total = dualSimBundle.totalDurationHours;
+    const timer = window.setInterval(() => {
+      setDualSimElapsedHours((prev) => {
+        const next = prev + 0.025 * dualSimSpeedMultiplier;
+        if (next >= total) {
+          setDualSimPlaying(false);
+          return total;
+        }
+        return next;
+      });
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [dualSimPlaying, dualSimSpeedMultiplier, dualSimBundle.totalDurationHours]);
+
+  const dualSimFrame = useMemo(
+    () =>
+      evaluateDualSimFrame(
+        timeline1,
+        timeline2,
+        effectiveDualElapsed,
+        simDepartureLmstHour,
+        weatherSnapshot,
+      ),
+    [timeline1, timeline2, effectiveDualElapsed, simDepartureLmstHour, weatherSnapshot],
+  );
+
+  const mapUnit1 = useMemo<MapUnitDisplay>(
+    () => ({
+      unitId: 1,
+      waypoints: unit1.waypoints,
+      routes: unit1.routePlan?.routes ?? EMPTY_ROUTES,
+      selectedRouteId: selectedRoute1?.id ?? null,
+      simPosition: dualSimFrame.unit1.sample,
+    }),
+    [unit1.waypoints, unit1.routePlan?.routes, selectedRoute1?.id, dualSimFrame.unit1.sample],
+  );
+
+  const mapUnit2 = useMemo<MapUnitDisplay>(
+    () => ({
+      unitId: 2,
+      waypoints: unit2.waypoints,
+      routes: unit2.routePlan?.routes ?? EMPTY_ROUTES,
+      selectedRouteId: selectedRoute2?.id ?? null,
+      simPosition: dualSimFrame.unit2.sample,
+    }),
+    [unit2.waypoints, unit2.routePlan?.routes, selectedRoute2?.id, dualSimFrame.unit2.sample],
+  );
+
+  const handleToggleDualPlay = useCallback(() => {
+    if (dualSimBundle.totalDurationHours <= 0) return;
+    setDualSimPlaying((prevPlaying) => {
+      if (!prevPlaying && effectiveDualElapsed >= dualSimBundle.totalDurationHours - 1e-4) {
+        setDualSimElapsedHours(0);
+      }
+      return !prevPlaying;
+    });
+  }, [dualSimBundle.totalDurationHours, effectiveDualElapsed]);
 
   const activeBaseLayer = useMemo(
     () => layers.find((l) => l.id === activeLayerId) ?? layers[0] ?? DEFAULT_MARS_BASE_LAYER,
     [layers, activeLayerId],
   );
-
-  const selectedRoute = useMemo(
-    () => routePlan?.routes.find((r) => r.id === selectedRouteId) ?? routePlan?.routes[0] ?? null,
-    [routePlan, selectedRouteId],
-  );
-
-  const routeWeatherContext = useMemo<EvaRouteWeatherContext | undefined>(() => {
-    if (!selectedRoute) return undefined;
-    let minElevationM = Number.POSITIVE_INFINITY;
-    let maxElevationM = Number.NEGATIVE_INFINITY;
-    for (const pt of selectedRoute.points) {
-      if (pt.elevationM < minElevationM) minElevationM = pt.elevationM;
-      if (pt.elevationM > maxElevationM) maxElevationM = pt.elevationM;
-    }
-    return {
-      totalDistanceM: selectedRoute.totalDistanceM,
-      elevationGainM: selectedRoute.elevationGainM,
-      elevationLossM: selectedRoute.elevationLossM,
-      minElevationM: Number.isFinite(minElevationM) ? minElevationM : undefined,
-      maxElevationM: Number.isFinite(maxElevationM) ? maxElevationM : undefined,
-      points: sampleRoutePoints(selectedRoute.points, 80),
-    };
-  }, [selectedRoute]);
 
   const loadWeatherSnapshot = useCallback(
     async (refresh = false) => {
@@ -431,7 +774,8 @@ export function App() {
         });
         weatherSnapshotRef.current = res.weather;
         setWeatherSnapshot(res.weather);
-        setWeatherEval(res.evaluation);
+        patchUnit1((prev) => (prev.weatherEval ? prev : { ...prev, weatherEval: res.evaluation }));
+        patchUnit2((prev) => (prev.weatherEval ? prev : { ...prev, weatherEval: res.evaluation }));
         setWeatherSnapshotRev((rev) => rev + 1);
       } catch (err: unknown) {
         setWeatherError(err instanceof Error ? err.message : "Failed to load weather");
@@ -439,55 +783,18 @@ export function App() {
         setWeatherBusy(false);
       }
     },
-    [site?.id, weatherScenario],
+    [site?.id, weatherScenario, patchUnit1, patchUnit2],
   );
 
   useEffect(() => {
     void loadWeatherSnapshot(false);
   }, [loadWeatherSnapshot]);
 
-  // Re-evaluate EVA weather feasibility dynamically as sliders, routes, or sim time change
-  useEffect(() => {
-    const snapshot = weatherSnapshotRef.current;
-    if (!snapshot || weatherSnapshotRev === 0) return;
-    let cancelled = false;
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      evaluateWeatherConstraints(
-        {
-          limits: weatherLimits,
-          site: site?.id,
-          scenario: weatherScenario,
-          lmstHour: simLmstHour,
-          route: routeWeatherContext,
-          weather: snapshot,
-        },
-        controller.signal,
-      )
-        .then((res) => {
-          if (cancelled) return;
-          setWeatherEval(res.evaluation);
-          setWeatherError(null);
-        })
-        .catch((err: unknown) => {
-          if (cancelled || isAbortError(err)) return;
-          setWeatherError(err instanceof Error ? err.message : "Weather evaluation failed");
-        });
-    }, 80);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [
-    weatherLimits,
-    routeWeatherContext,
-    site?.id,
-    weatherScenario,
-    simLmstHour,
-    weatherSnapshotRev,
-  ]);
+  const isSimViewActive = panelOpen && activeToolId === "sim";
+  const displayLmstHour =
+    isSimViewActive && dualSimBundle.totalDurationHours > 0
+      ? Math.min(47.99, simDepartureLmstHour + effectiveDualElapsed)
+      : simLmstHour;
 
   // Fetch environment summary when pressure or temperature overlay is active
   useEffect(() => {
@@ -503,7 +810,7 @@ export function App() {
         {
           scenario: weatherScenario,
           sol: weatherSnapshot?.sol,
-          lmstHour: simLmstHour,
+          lmstHour: displayLmstHour,
         },
         controller.signal,
       )
@@ -527,7 +834,7 @@ export function App() {
     showPressureLayer,
     showTemperatureLayer,
     weatherScenario,
-    simLmstHour,
+    displayLmstHour,
     weatherSnapshot?.sol,
   ]);
 
@@ -536,28 +843,138 @@ export function App() {
     return filterVisiblePoints(points, hiddenClassIds);
   }, [points, hiddenClassIds, showPointsOverlay]);
 
-  const handleSelectPreset = useCallback((nextId: TraversePresetId) => {
-    const preset = TRAVERSE_PRESETS[nextId];
-    setPresetId(nextId);
-    setMaxSlopeDeg(preset.maxSlopeDeg);
-    setWeatherLimits({ ...preset.limits });
+  const handleSelectPreset = useCallback(
+    (nextId: TraversePresetId) => {
+      const preset = TRAVERSE_PRESETS[nextId];
+      patchActiveUnit({
+        presetId: nextId,
+        maxSlopeDeg: preset.maxSlopeDeg,
+        weatherLimits: cloneWeatherLimits(preset.limits),
+      });
+    },
+    [patchActiveUnit],
+  );
+
+  const handleChangeActiveUnit = useCallback((nextId: MissionUnitId) => {
+    setActiveUnitId(nextId);
+    setHoveredProfilePoint(null);
   }, []);
+
+  const handleAppendWaypoint = useCallback(
+    (coord: MarsCoord, openRouteTab = true) => {
+      patchActiveUnit((prev) => ({ ...prev, waypoints: [...prev.waypoints, coord] }));
+      setHoveredProfilePoint(null);
+      if (openRouteTab) {
+        setActiveToolId("route");
+        setPanelOpen(true);
+      }
+    },
+    [patchActiveUnit],
+  );
+
+  const handleInsertIntermediateWaypoint = useCallback(
+    (coord: MarsCoord, openRouteTab = true) => {
+      patchActiveUnit((prev) => {
+        if (prev.waypoints.length < 2) {
+          return { ...prev, waypoints: [...prev.waypoints, coord] };
+        }
+        const idx = findBestWaypointInsertIndex(prev.waypoints, coord);
+        const next = [...prev.waypoints];
+        next.splice(idx, 0, coord);
+        return { ...prev, waypoints: next };
+      });
+      setHoveredProfilePoint(null);
+      if (openRouteTab) {
+        setActiveToolId("route");
+        setPanelOpen(true);
+      }
+    },
+    [patchActiveUnit],
+  );
+
+  const handleMoveWaypoint = useCallback(
+    (index: number, delta: -1 | 1) => {
+      patchActiveUnit((prev) => {
+        const target = index + delta;
+        if (
+          index < 0 ||
+          index >= prev.waypoints.length ||
+          target < 0 ||
+          target >= prev.waypoints.length
+        ) {
+          return prev;
+        }
+        const next = [...prev.waypoints];
+        const a = next[index];
+        const b = next[target];
+        if (!a || !b) return prev;
+        next[index] = b;
+        next[target] = a;
+        return { ...prev, waypoints: next };
+      });
+      setHoveredProfilePoint(null);
+    },
+    [patchActiveUnit],
+  );
+
+  const handleUpdateWaypointCoord = useCallback(
+    (unitId: MissionUnitId, index: number, coord: MarsCoord) => {
+      patchUnitById(unitId, (prev) => {
+        if (index < 0 || index >= prev.waypoints.length) return prev;
+        const next = [...prev.waypoints];
+        next[index] = coord;
+        return { ...prev, waypoints: next };
+      });
+      setHoveredProfilePoint(null);
+    },
+    [patchUnitById],
+  );
+
+  const handleRemoveWaypoint = useCallback(
+    (index: number) => {
+      patchActiveUnit((prev) => ({
+        ...prev,
+        waypoints: prev.waypoints.filter((_, i) => i !== index),
+      }));
+      setHoveredProfilePoint(null);
+    },
+    [patchActiveUnit],
+  );
+
+  const handleReverseWaypoints = useCallback(() => {
+    patchActiveUnit((prev) =>
+      prev.waypoints.length >= 2 ? { ...prev, waypoints: [...prev.waypoints].reverse() } : prev,
+    );
+    setHoveredProfilePoint(null);
+  }, [patchActiveUnit]);
+
+  const handleClearWaypoints = useCallback(() => {
+    patchActiveUnit({ waypoints: [] });
+    setHoveredProfilePoint(null);
+  }, [patchActiveUnit]);
 
   const handleChangeUiMode = useCallback(
     (nextMode: UiMode) => {
       if (nextMode === uiMode) return;
       setUiMode(nextMode);
       if (nextMode === "basic") {
-        const preset = TRAVERSE_PRESETS[presetId];
-        setMaxSlopeDeg(preset.maxSlopeDeg);
-        setWeatherLimits({ ...preset.limits });
+        const resetForUnit = (prev: UnitMissionState): UnitMissionState => {
+          const preset = TRAVERSE_PRESETS[prev.presetId];
+          return {
+            ...prev,
+            maxSlopeDeg: preset.maxSlopeDeg,
+            weatherLimits: cloneWeatherLimits(preset.limits),
+          };
+        };
+        setUnit1(resetForUnit);
+        setUnit2(resetForUnit);
         setEditingPoint(null);
         setPendingPointCoord(null);
         setPendingPointElevM(null);
         setPickPointMode(false);
       }
     },
-    [uiMode, presetId],
+    [uiMode],
   );
 
   const openPointComposerAtCoord = useCallback(
@@ -672,13 +1089,13 @@ export function App() {
     [uiMode],
   );
 
-  const simSolDisplay = resolveSolDisplay(weatherSnapshot?.sol, simLmstHour);
-  const simClockLabel = formatLmstClock(simLmstHour);
+  const simSolDisplay = resolveSolDisplay(weatherSnapshot?.sol, displayLmstHour);
+  const simClockLabel = formatLmstClock(displayLmstHour);
 
   const localCursorWeather = useMemo(() => {
     if (cursorElevM === null || !weatherSnapshot) return null;
-    return estimateLocalWeatherAtElevation(cursorElevM, simLmstHour, weatherSnapshot);
-  }, [cursorElevM, simLmstHour, weatherSnapshot]);
+    return estimateLocalWeatherAtElevation(cursorElevM, displayLmstHour, weatherSnapshot);
+  }, [cursorElevM, displayLmstHour, weatherSnapshot]);
 
   const registry = useMemo(() => {
     const reg = new ToolRegistry();
@@ -690,37 +1107,37 @@ export function App() {
       order: 1,
       render: () => (
         <RoutePlannerPanel
+          activeUnitId={activeUnitId}
           uiMode={uiMode}
-          presetId={presetId}
+          presetId={activeUnit.presetId}
           onSelectPreset={handleSelectPreset}
           siteCompactLabel={siteLabels.sizeCompact}
-          maxSlopeDeg={maxSlopeDeg}
-          onChangeMaxSlopeDeg={setMaxSlopeDeg}
-          weatherRoutingEnabled={weatherRoutingEnabled}
-          onToggleWeatherRouting={() => setWeatherRoutingEnabled((v) => !v)}
-          weatherLimits={weatherLimits}
+          maxSlopeDeg={activeUnit.maxSlopeDeg}
+          onChangeMaxSlopeDeg={(deg) => patchActiveUnit({ maxSlopeDeg: deg })}
+          weatherRoutingEnabled={activeUnit.weatherRoutingEnabled}
+          onToggleWeatherRouting={() =>
+            patchActiveUnit((prev) => ({
+              ...prev,
+              weatherRoutingEnabled: !prev.weatherRoutingEnabled,
+            }))
+          }
+          weatherLimits={activeUnit.weatherLimits}
           simClockLabel={simClockLabel}
-          waypointA={waypointA}
-          waypointB={waypointB}
-          onSwapWaypoints={() => {
-            if (!waypointA || !waypointB) return;
-            setWaypointA(waypointB);
-            setWaypointB(waypointA);
-            setHoveredProfilePoint(null);
-          }}
-          onClearWaypoints={() => {
-            setWaypointA(null);
-            setWaypointB(null);
-            setHoveredProfilePoint(null);
-          }}
+          waypoints={activeUnit.waypoints}
+          moveWaypoints={moveWaypointsMode}
+          onToggleMoveWaypoints={() => setMoveWaypointsMode((v) => !v)}
+          onMoveWaypoint={handleMoveWaypoint}
+          onRemoveWaypoint={handleRemoveWaypoint}
+          onReverseWaypoints={handleReverseWaypoints}
+          onClearWaypoints={handleClearWaypoints}
           lonFormat={lonFormat}
-          routePlan={routePlan}
-          selectedRoute={selectedRoute}
-          onSelectRoute={setSelectedRouteId}
-          routingBusy={routingBusy}
+          routePlan={activeUnit.routePlan}
+          selectedRoute={activeSelectedRoute}
+          onSelectRoute={(id) => patchActiveUnit({ selectedRouteId: id })}
+          routingBusy={activeUnit.routingBusy}
           siteError={siteError}
           onHoverProfilePoint={setHoveredProfilePoint}
-          weatherEval={weatherEval}
+          weatherEval={activeUnit.weatherEval}
           onOpenWeatherPanel={() => {
             setActiveToolId("weather");
             setPanelOpen(true);
@@ -737,6 +1154,7 @@ export function App() {
       render: () => (
         <PointsPanel
           readOnly={uiMode === "basic"}
+          activeUnitId={activeUnitId}
           classes={pointClasses}
           points={points}
           hiddenClassIds={hiddenClassIds}
@@ -757,16 +1175,9 @@ export function App() {
           onStartEditPoint={handleStartEditPoint}
           onDeletePoint={handleDeletePoint}
           onFocusPoint={handleFocusPoint}
-          onUseAsWaypointA={(c) => {
-            setWaypointA(c);
-            setActiveToolId("route");
-            setPanelOpen(true);
-          }}
-          onUseAsWaypointB={(c) => {
-            setWaypointB(c);
-            setActiveToolId("route");
-            setPanelOpen(true);
-          }}
+          nextWaypointNumber={activeUnit.waypoints.length + 1}
+          onAppendWaypoint={(c) => handleAppendWaypoint(c, false)}
+          onInsertIntermediate={(c) => handleInsertIntermediateWaypoint(c, false)}
           onToggleClass={(classId) =>
             setHiddenClassIds((prev) => toggleClassVisibility(prev, classId))
           }
@@ -786,20 +1197,27 @@ export function App() {
       order: 3,
       render: () => (
         <WeatherPanel
+          activeUnitId={activeUnitId}
           uiMode={uiMode}
-          presetId={presetId}
+          presetId={activeUnit.presetId}
           onSelectPreset={handleSelectPreset}
           weather={weatherSnapshot}
-          evaluation={weatherEval}
-          limits={weatherLimits}
+          evaluation={activeUnit.weatherEval}
+          limits={activeUnit.weatherLimits}
           scenario={weatherScenario}
           simLmstHour={simLmstHour}
           isPlayingTime={isPlayingTime}
           loading={weatherBusy}
-          error={weatherError}
-          hasSelectedRoute={selectedRoute !== null}
-          onChangeLimits={setWeatherLimits}
-          onResetLimits={() => setWeatherLimits(DEFAULT_EVA_WEATHER_LIMITS)}
+          error={activeUnit.weatherError ?? weatherError}
+          hasSelectedRoute={activeSelectedRoute !== null}
+          waypointCount={activeUnit.waypoints.length}
+          onChangeLimits={(nextLimits) => patchActiveUnit({ weatherLimits: nextLimits })}
+          onResetLimits={() =>
+            patchActiveUnit((prev) => ({
+              ...prev,
+              weatherLimits: cloneWeatherLimits(TRAVERSE_PRESETS[prev.presetId].limits),
+            }))
+          }
           onChangeScenario={setWeatherScenario}
           onChangeSimHour={handleChangeSimHour}
           onJumpSimHour={handleJumpSimHour}
@@ -867,6 +1285,15 @@ export function App() {
             </span>
             <span className={`toggle-state ${showSlopeHazard ? "is-on" : ""}`}>
               {showSlopeHazard ? "ON" : "OFF"}
+            </span>
+          </button>
+
+          <button type="button" className="toggle-row" onClick={() => setShowSoilLayer((v) => !v)}>
+            <span className="value-label" style={{ color: "var(--color-text)" }}>
+              SOIL SUBSTRATE MATRIX
+            </span>
+            <span className={`toggle-state ${showSoilLayer ? "is-on" : ""}`}>
+              {showSoilLayer ? "ON" : "OFF"}
             </span>
           </button>
 
@@ -948,7 +1375,7 @@ export function App() {
             isPlaying={isPlayingTime}
             baseSol={weatherSnapshot?.sol}
             weather={weatherSnapshot}
-            evaluation={weatherEval}
+            evaluation={activeUnit.weatherEval}
             onChangeHour={handleChangeSimHour}
             onJumpHour={handleJumpSimHour}
             onTogglePlay={handleTogglePlayTime}
@@ -965,7 +1392,18 @@ export function App() {
       render: () => (
         <>
           <div className="panel-header">
-            <h1 className="panel-title">Settings</h1>
+            <div className="panel-title-row">
+              <h1 className="panel-title">Settings</h1>
+              <span
+                className="unit-tag-pill"
+                style={{
+                  borderColor: UNIT_ACCENT_COLORS[activeUnitId],
+                  color: UNIT_ACCENT_COLORS[activeUnitId],
+                }}
+              >
+                UNIT {activeUnitId}
+              </span>
+            </div>
             <p className="panel-desc">
               {uiMode === "basic"
                 ? `Mission preset filters passable edges in the ${siteLabels.sizeCompact} km terrain graph.`
@@ -975,18 +1413,26 @@ export function App() {
           </div>
 
           {uiMode === "basic" ? (
-            <TraversePresetControl presetId={presetId} onSelectPreset={handleSelectPreset} />
+            <TraversePresetControl
+              presetId={activeUnit.presetId}
+              onSelectPreset={handleSelectPreset}
+            />
           ) : (
-            <MaxSlopeControl valueDeg={maxSlopeDeg} onChange={setMaxSlopeDeg} />
+            <MaxSlopeControl
+              valueDeg={activeUnit.maxSlopeDeg}
+              onChange={(deg) => patchActiveUnit({ maxSlopeDeg: deg })}
+            />
           )}
 
-          {routePlan && (
+          {activeUnit.routePlan && (
             <div className="readout-card">
-              <span className="value-label">GRAPH PASSABILITY</span>
+              <span className="value-label">GRAPH PASSABILITY · U{activeUnitId}</span>
               <span className="readout-number">
-                {(routePlan.passableEdgeRatio * 100).toFixed(1)}%
+                {(activeUnit.routePlan.passableEdgeRatio * 100).toFixed(1)}%
               </span>
-              <span className="readout-sub">Edges at or below {maxSlopeDeg.toFixed(1)}°</span>
+              <span className="readout-sub">
+                Edges at or below {activeUnit.maxSlopeDeg.toFixed(1)}°
+              </span>
             </div>
           )}
 
@@ -1038,29 +1484,92 @@ export function App() {
       ),
     });
 
+    reg.register({
+      id: "sim",
+      shortLabel: "SIM",
+      title: "Dual Simulation",
+      order: 6,
+      render: () => (
+        <DualSimulationPanel
+          unit1={{
+            unitId: 1,
+            presetId: unit1.presetId,
+            route: selectedRoute1,
+            limits: unit1.weatherLimits,
+            maxSlopeDeg: unit1.maxSlopeDeg,
+            waypointCount: unit1.waypoints.length,
+          }}
+          unit2={{
+            unitId: 2,
+            presetId: unit2.presetId,
+            route: selectedRoute2,
+            limits: unit2.weatherLimits,
+            maxSlopeDeg: unit2.maxSlopeDeg,
+            waypointCount: unit2.waypoints.length,
+          }}
+          bundle={dualSimBundle}
+          frame={dualSimFrame}
+          elapsedHours={effectiveDualElapsed}
+          departureLmstHour={simDepartureLmstHour}
+          playing={dualSimPlaying}
+          speedMultiplier={dualSimSpeedMultiplier}
+          weather={weatherSnapshot}
+          onChangeElapsed={(next) => {
+            setDualSimPlaying(false);
+            setDualSimElapsedHours(next);
+          }}
+          onTogglePlay={handleToggleDualPlay}
+          onReset={() => {
+            setDualSimPlaying(false);
+            setDualSimElapsedHours(0);
+          }}
+          onChangeSpeed={setDualSimSpeedMultiplier}
+          onChangeDepartureLmst={(nextHour) => {
+            const wrapped = ((nextHour % 48) + 48) % 48;
+            setSimDepartureLmstHour(Math.round(wrapped * 2) / 2);
+          }}
+          onSyncDepartureFromWxr={() => setSimDepartureLmstHour(simLmstHour)}
+          onEditUnitRoute={(unitId) => {
+            handleChangeActiveUnit(unitId);
+            setActiveToolId("route");
+            setPanelOpen(true);
+          }}
+        />
+      ),
+    });
+
     return reg;
   }, [
-    maxSlopeDeg,
-    weatherRoutingEnabled,
+    activeUnitId,
+    activeUnit,
+    unit1,
+    unit2,
+    selectedRoute1,
+    selectedRoute2,
+    activeSelectedRoute,
+    patchActiveUnit,
+    handleChangeActiveUnit,
+    handleAppendWaypoint,
+    handleInsertIntermediateWaypoint,
+    handleMoveWaypoint,
+    moveWaypointsMode,
+    handleRemoveWaypoint,
+    handleReverseWaypoints,
+    handleClearWaypoints,
     simLmstHour,
     simClockLabel,
     isPlayingTime,
     handleChangeSimHour,
     handleJumpSimHour,
     handleTogglePlayTime,
-    waypointA,
-    waypointB,
     lonFormat,
-    routePlan,
-    selectedRoute,
-    routingBusy,
     siteError,
     layers,
     uiMode,
-    presetId,
     handleSelectPreset,
     activeLayerId,
     showHillshade,
+    showSoilLayer,
     showSlopeHazard,
     showPressureLayer,
     showTemperatureLayer,
@@ -1083,12 +1592,17 @@ export function App() {
     handleCreateCustomClass,
     handleDeleteCustomClass,
     weatherSnapshot,
-    weatherEval,
-    weatherLimits,
     weatherScenario,
     weatherBusy,
     weatherError,
     loadWeatherSnapshot,
+    dualSimBundle,
+    dualSimFrame,
+    effectiveDualElapsed,
+    simDepartureLmstHour,
+    dualSimPlaying,
+    dualSimSpeedMultiplier,
+    handleToggleDualPlay,
   ]);
 
   const tools = registry.list();
@@ -1136,18 +1650,20 @@ export function App() {
               {simSolDisplay.label} · {simClockLabel} LMST
             </span>
           </button>
-          {weatherEval && (
+          {activeUnit.weatherEval && (
             <button
               type="button"
-              className={`topbar-wxr-btn ${evaStatusClass(weatherEval.status)}`}
+              className={`topbar-wxr-btn ${evaStatusClass(activeUnit.weatherEval.status)}`}
               onClick={() => {
                 setActiveToolId("weather");
                 setPanelOpen(true);
               }}
-              title={weatherEval.weatherSource.sourceLabel}
+              title={activeUnit.weatherEval.weatherSource.sourceLabel}
             >
-              <span>EVA {weatherEval.status}</span>
-              {weatherEval.weatherSource.isSimulated && <span>SIM</span>}
+              <span>
+                U{activeUnitId} EVA {activeUnit.weatherEval.status}
+              </span>
+              {activeUnit.weatherEval.weatherSource.isSimulated && <span>SIM</span>}
             </button>
           )}
         </div>
@@ -1158,20 +1674,22 @@ export function App() {
           site={site}
           activeBaseLayer={activeBaseLayer}
           showHillshade={showHillshade}
+          showSoilLayer={showSoilLayer}
           showSlopeHazard={showSlopeHazard}
           showPressureLayer={showPressureLayer}
           showTemperatureLayer={showTemperatureLayer}
           showSiteBounds={showSiteBounds}
-          maxSlopeDeg={maxSlopeDeg}
+          maxSlopeDeg={activeUnit.maxSlopeDeg}
           weatherScenario={weatherScenario}
-          simLmstHour={simLmstHour}
+          simLmstHour={displayLmstHour}
           weatherSol={weatherSnapshot?.sol}
-          minPressurePa={weatherLimits.minPressurePa}
-          minAirTempC={weatherLimits.minAirTempC}
-          waypointA={waypointA}
-          waypointB={waypointB}
-          routes={routePlan?.routes ?? []}
-          selectedRouteId={selectedRoute?.id ?? null}
+          minPressurePa={activeUnit.weatherLimits.minPressurePa}
+          minAirTempC={activeUnit.weatherLimits.minAirTempC}
+          activeUnitId={activeUnitId}
+          unit1={mapUnit1}
+          unit2={mapUnit2}
+          isSimMode={isSimViewActive}
+          moveWaypoints={moveWaypointsMode}
           hoveredProfilePoint={hoveredProfilePoint}
           points={visiblePoints}
           pointClasses={pointClasses}
@@ -1186,19 +1704,14 @@ export function App() {
           onScaleUpdate={(label, widthPx, zoom) => setScaleHud({ label, widthPx, zoom })}
           onOpenContextMenu={(x, y, coord) => setContextMenu({ x, y, coord })}
           onCloseContextMenu={() => setContextMenu(null)}
-          onSelectRoute={setSelectedRouteId}
+          onSelectRoute={(unitId, routeId) => {
+            patchUnitById(unitId, { selectedRouteId: routeId });
+          }}
+          onDragWaypoint={handleUpdateWaypointCoord}
           onPickPointCoord={openPointComposerAtCoord}
           onSelectPoint={(id) => setSelectedPointId(id)}
-          onPointSetA={(c) => {
-            setWaypointA(c);
-            setActiveToolId("route");
-            setPanelOpen(true);
-          }}
-          onPointSetB={(c) => {
-            setWaypointB(c);
-            setActiveToolId("route");
-            setPanelOpen(true);
-          }}
+          onPointAppendWaypoint={(c) => handleAppendWaypoint(c, true)}
+          onPointInsertWaypoint={(c) => handleInsertIntermediateWaypoint(c, true)}
           onEditPoint={handleStartEditPoint}
           onDeletePoint={handleDeletePoint}
         />
@@ -1220,6 +1733,27 @@ export function App() {
             </div>
 
             <div className="tool-rail-group">
+              <fieldset className="rail-unit-switch" aria-label="Active character">
+                <button
+                  type="button"
+                  title={`Character 1 · ${TRAVERSE_PRESETS[unit1.presetId].label}`}
+                  aria-pressed={activeUnitId === 1}
+                  className={`rail-unit-btn is-u1 ${activeUnitId === 1 ? "is-active" : ""}`}
+                  onClick={() => handleChangeActiveUnit(1)}
+                >
+                  1
+                </button>
+                <button
+                  type="button"
+                  title={`Character 2 · ${TRAVERSE_PRESETS[unit2.presetId].label}`}
+                  aria-pressed={activeUnitId === 2}
+                  className={`rail-unit-btn is-u2 ${activeUnitId === 2 ? "is-active" : ""}`}
+                  onClick={() => handleChangeActiveUnit(2)}
+                >
+                  2
+                </button>
+              </fieldset>
+
               <fieldset className="rail-mode-switch" aria-label="Interface mode">
                 <button
                   type="button"
@@ -1278,10 +1812,27 @@ export function App() {
               <span className="hud-number">
                 {cursorElevM !== null ? `${cursorElevM.toFixed(1)} m` : "---"}
               </span>
-              {localCursorWeather && (
+              {(localCursorWeather || cursorSoilType) && (
                 <span className="hud-sub">
-                  {localCursorWeather.pressurePa.toFixed(0)} Pa ·{" "}
-                  {localCursorWeather.tempC.toFixed(1)} °C
+                  {cursorSoilType && (
+                    <span className="hud-soil-inline">
+                      <span
+                        className="wx-soil-swatch"
+                        style={{ backgroundColor: SOIL_TYPE_CATALOG[cursorSoilType].colorHex }}
+                      />
+                      {SOIL_TYPE_CATALOG[cursorSoilType].shortLabel}{" "}
+                      {resolveSoilSpeedFactors(activeUnit.weatherLimits.soilSpeedFactors)[
+                        cursorSoilType
+                      ].toFixed(2)}
+                      x{localCursorWeather ? " · " : ""}
+                    </span>
+                  )}
+                  {localCursorWeather && (
+                    <>
+                      {localCursorWeather.pressurePa.toFixed(0)} Pa ·{" "}
+                      {localCursorWeather.tempC.toFixed(1)} °C
+                    </>
+                  )}
                 </span>
               )}
             </div>
@@ -1318,8 +1869,34 @@ export function App() {
             </div>
 
             <div className="hud-bottom-right">
-              {(showPressureLayer || showTemperatureLayer) && (
+              {(showPressureLayer || showTemperatureLayer || showSoilLayer) && (
                 <div className="hud-legend-stack">
+                  {showSoilLayer && (
+                    <div className="hud-readout hud-legend-chip">
+                      <div className="hud-legend-head">
+                        <span className="value-label">SOIL SUBSTRATE</span>
+                        <span className="hud-legend-time">U{activeUnitId} · THEMIS+CTX</span>
+                      </div>
+                      <div className="hud-soil-grid">
+                        {SOIL_TYPE_ORDER.map((id) => {
+                          const spec = SOIL_TYPE_CATALOG[id];
+                          const factor = resolveSoilSpeedFactors(
+                            activeUnit.weatherLimits.soilSpeedFactors,
+                          )[id];
+                          return (
+                            <span key={id} className="hud-soil-item">
+                              <span
+                                className="wx-soil-swatch"
+                                style={{ backgroundColor: spec.colorHex }}
+                              />
+                              <span>{spec.shortLabel}</span>
+                              <span className="hud-soil-factor">{factor.toFixed(2)}x</span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   {showPressureLayer && (
                     <div className="hud-readout hud-legend-chip">
                       <div className="hud-legend-head">
@@ -1333,7 +1910,9 @@ export function App() {
                             ? `${envSummary.minPressurePa.toFixed(0)}..${envSummary.maxPressurePa.toFixed(0)} Pa`
                             : "SITE PA"}
                         </span>
-                        <span>LIMIT &gt;= {weatherLimits.minPressurePa.toFixed(0)} Pa</span>
+                        <span>
+                          LIMIT &gt;= {activeUnit.weatherLimits.minPressurePa.toFixed(0)} Pa
+                        </span>
                       </div>
                     </div>
                   )}
@@ -1350,7 +1929,9 @@ export function App() {
                             ? `${envSummary.minTempC.toFixed(0)}..${envSummary.maxTempC.toFixed(0)} °C`
                             : "SITE °C"}
                         </span>
-                        <span>LIMIT &gt;= {weatherLimits.minAirTempC.toFixed(0)} °C</span>
+                        <span>
+                          LIMIT &gt;= {activeUnit.weatherLimits.minAirTempC.toFixed(0)} °C
+                        </span>
                       </div>
                     </div>
                   )}
@@ -1358,8 +1939,8 @@ export function App() {
               )}
 
               <div className="hud-readout is-right is-interactive">
-                <span className="value-label">MAX SLOPE LIMIT</span>
-                <span className="hud-number">{maxSlopeDeg.toFixed(1)}°</span>
+                <span className="value-label">MAX SLOPE · U{activeUnitId}</span>
+                <span className="hud-number">{activeUnit.maxSlopeDeg.toFixed(1)}°</span>
               </div>
             </div>
           </div>
@@ -1370,24 +1951,22 @@ export function App() {
             x={contextMenu.x}
             y={contextMenu.y}
             coord={contextMenu.coord}
-            hasWaypoints={waypointA !== null || waypointB !== null}
+            activeUnitId={activeUnitId}
+            waypointCount={activeUnit.waypoints.length}
+            suggestedInsertIndex={
+              activeUnit.waypoints.length >= 2
+                ? findBestWaypointInsertIndex(activeUnit.waypoints, contextMenu.coord)
+                : null
+            }
             canAddPoint={uiMode === "advance"}
-            onSetA={(c) => {
-              setWaypointA(c);
-              setActiveToolId("route");
-              setPanelOpen(true);
-            }}
-            onSetB={(c) => {
-              setWaypointB(c);
-              setActiveToolId("route");
-              setPanelOpen(true);
+            onAppendWaypoint={(c) => handleAppendWaypoint(c, true)}
+            onInsertIntermediate={(c) => handleInsertIntermediateWaypoint(c, true)}
+            onRemoveLastWaypoint={() => {
+              if (activeUnit.waypoints.length === 0) return;
+              handleRemoveWaypoint(activeUnit.waypoints.length - 1);
             }}
             onAddPoint={openPointComposerAtCoord}
-            onClear={() => {
-              setWaypointA(null);
-              setWaypointB(null);
-              setHoveredProfilePoint(null);
-            }}
+            onClear={handleClearWaypoints}
             onClose={() => setContextMenu(null)}
           />
         )}

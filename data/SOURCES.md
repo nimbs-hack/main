@@ -35,6 +35,18 @@ All datasets used by this app are listed here. Raw files and caches stay in `dat
 - **License:** CC0-1.0 / Public domain
 - **Fetch script:** `scripts/data/fetch-site.ts` (reads COG byte ranges via HTTP Range requests)
 
+## USGS Astrogeology: Mars Odyssey THEMIS Nighttime IR Controlled Mosaics (`mo_themis_controlled_mosaics`)
+
+- **Name:** `mo_themis_controlled_mosaics` (Jezero Crater `mc13_syrtis_major_nir` / Gale Crater `mc23_aeolis_nir`)
+- **Mission / Instrument:** 2001 Mars Odyssey Thermal Emission Imaging System (THEMIS)
+- **Asset URL (Jezero NIR COG):** `https://astrogeo-ard.s3-us-west-2.amazonaws.com/mars/mo/themis/controlled_mosaics/mc13_syrtis_major_nir/mc13_syrtis_major_nir.tif`
+- **Asset URL (Gale NIR COG):** `https://astrogeo-ard.s3-us-west-2.amazonaws.com/mars/mo/themis/controlled_mosaics/mc23_aeolis_nir/mc23_aeolis_nir.tif`
+- **Quantitative reference portal:** `https://astrogeology.usgs.gov/search/map/themis_thermal_inertia_mosaic_quantitative_30n000e_100mpp`
+- **Resolution:** 100 m/px native COG (1-byte unsigned NIR DN, `NoData = 0`), bilinearly resampled onto the 20 m CTX planning grid (`1001x1001`)
+- **Projection:** Mars (2015) Sphere / Ocentric / Equirectangular (`R = 3396190 m`, `clon = 0`)
+- **License:** CC0-1.0 / Public domain
+- **Fetch script & methodology:** `scripts/data/fetch-site.ts` and `classifyMarsSoilMatrix` in `packages/shared/src/soil.ts`, documented with literature sources (USGS SIM 3464, Vaughan et al. 2023, NASA EVA traverse and rover slip studies) in [docs/martian-soil-sources.md](../docs/martian-soil-sources.md)
+
 ## Planetary geologic map symbols (`geologic-symbols-qgis` / FGDC)
 
 - **Name:** QGIS Geologic Symbols Library (`src/xml/fgdc/*.xml`, `src/gsymblib-svg/symbols/fgdc/*.svg`)

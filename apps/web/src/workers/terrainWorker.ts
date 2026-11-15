@@ -5,11 +5,13 @@ import {
   type MarsWeatherSnapshot,
   type RoutePlanRequest,
   type RoutePlanResponse,
+  SOIL_TYPE_CATALOG,
   type SiteEnvironmentSummary,
   type SiteMetadata,
   TerrainGraph,
   type TerrainWeatherFilter,
   computeSiteWeatherField,
+  decodeSoilBinary,
   decodeTerrainBinary,
   renderPressureMaskRgba,
   renderTemperatureMaskRgba,
@@ -22,6 +24,7 @@ export type WorkerRequest =
       type: "init";
       meta: SiteMetadata;
       terrainBuffer: ArrayBuffer;
+      soilBuffer?: ArrayBuffer;
     }
   | {
       id: number;
@@ -44,6 +47,10 @@ export type WorkerRequest =
       id: number;
       type: "renderSlopeMask";
       maxSlopeDeg: number;
+    }
+  | {
+      id: number;
+      type: "renderSoilMask";
     }
   | {
       id: number;
@@ -98,7 +105,10 @@ workerScope.onmessage = (event: MessageEvent<WorkerRequest>) => {
       case "init": {
         const expectedCells = req.meta.rows * req.meta.cols;
         const elevationsM = decodeTerrainBinary(req.terrainBuffer, expectedCells);
-        graph = new TerrainGraph({ meta: req.meta, elevationsM });
+        const soilTypes = req.soilBuffer
+          ? decodeSoilBinary(req.soilBuffer, expectedCells)
+          : undefined;
+        graph = new TerrainGraph({ meta: req.meta, elevationsM, soilTypes });
         workerScope.postMessage({ id: req.id, ok: true, type: "init", meta: graph.meta });
         return;
       }
@@ -107,6 +117,7 @@ workerScope.onmessage = (event: MessageEvent<WorkerRequest>) => {
         const activeGraph = requireGraph();
         const insideSite = activeGraph.isInsideBounds(req.coord);
         const elevationM = activeGraph.elevationAt(req.coord);
+        const soilType = insideSite ? activeGraph.soilAt(req.coord) : null;
         workerScope.postMessage({
           id: req.id,
           ok: true,
@@ -116,6 +127,9 @@ workerScope.onmessage = (event: MessageEvent<WorkerRequest>) => {
             lon: req.coord.lon,
             insideSite,
             elevationM,
+            soilType,
+            soilLabel: soilType ? SOIL_TYPE_CATALOG[soilType].label : null,
+            soilSpeedFactor: soilType ? SOIL_TYPE_CATALOG[soilType].humanSpeedFactor : null,
           },
         });
         return;
@@ -141,11 +155,17 @@ workerScope.onmessage = (event: MessageEvent<WorkerRequest>) => {
           };
         }
 
-        const result = activeGraph.planRoutes(
-          payload.waypointA,
-          payload.waypointB,
+        const waypoints =
+          payload.waypoints && payload.waypoints.length > 0
+            ? payload.waypoints
+            : payload.waypointA && payload.waypointB
+              ? [payload.waypointA, payload.waypointB]
+              : [];
+        const result = activeGraph.planWaypointsRoutes(
+          waypoints,
           payload.maxSlopeDeg,
           weatherFilter,
+          payload.soilSpeedFactors,
         );
         workerScope.postMessage({ id: req.id, ok: true, type: "planRoutes", data: result });
         return;
@@ -166,6 +186,23 @@ workerScope.onmessage = (event: MessageEvent<WorkerRequest>) => {
       case "renderSlopeMask": {
         const activeGraph = requireGraph();
         const rgba = activeGraph.renderSlopeMaskRgba(req.maxSlopeDeg);
+        workerScope.postMessage(
+          {
+            id: req.id,
+            ok: true,
+            type: "renderMask",
+            cols: activeGraph.cols,
+            rows: activeGraph.rows,
+            rgbaBuffer: rgba.buffer,
+          },
+          [rgba.buffer],
+        );
+        return;
+      }
+
+      case "renderSoilMask": {
+        const activeGraph = requireGraph();
+        const rgba = activeGraph.renderSoilMaskRgba();
         workerScope.postMessage(
           {
             id: req.id,

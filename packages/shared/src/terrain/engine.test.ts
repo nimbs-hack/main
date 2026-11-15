@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { classifyMarsSoilMatrix } from "../soil";
 import type { MarsWeatherSnapshot, SiteDataset } from "../types";
 import { generateMartianWeather } from "../weather/generator";
-import { decodeTerrainBinary, encodeTerrainBinary } from "./binary";
+import {
+  decodeSoilBinary,
+  decodeTerrainBinary,
+  encodeSoilBinary,
+  encodeTerrainBinary,
+} from "./binary";
 import { TerrainGraph } from "./engine";
 import {
   computeSiteWeatherField,
@@ -383,5 +389,142 @@ describe("Spatial weather fields and weather-constrained routing", () => {
     expect(warmRes.appliedLmstHour).toBe(14);
     expect(warmRes.routes[0]?.points[0]?.tempC).toBeDefined();
     expect(warmRes.routes[0]?.points[0]?.pressurePa).toBeDefined();
+  });
+});
+
+function makeSoilCorridorDataset(): SiteDataset {
+  // 11x11 flat grid (100m spacing): direct center band (cols 4..6, rows 2..8) is loose sand (3),
+  // surrounded by fast bedrock (0) along row 1 and row 9.
+  const rows = 11;
+  const cols = 11;
+  const elevationsM = new Array<number>(rows * cols).fill(0);
+  const soilTypes: number[] = [];
+  for (let r = 0; r < rows; r += 1) {
+    for (let c = 0; c < cols; c += 1) {
+      if (r >= 2 && r <= 8 && c >= 4 && c <= 6) {
+        soilTypes.push(3);
+      } else {
+        soilTypes.push(0);
+      }
+    }
+  }
+  return {
+    meta: {
+      id: "synthetic-soil-corridor",
+      name: "Synthetic Soil Corridor",
+      sourceItemId: "test-soil",
+      sourceTitle: "test-soil",
+      dtmUrl: "https://example.invalid/dtm.tif",
+      hillshadeUrl: "https://example.invalid/hs.tif",
+      bbox: [77.5, 18.4, 77.5178, 18.4169],
+      center: { lat: 18.40845, lon: 77.5089 },
+      widthMeters: 1000,
+      heightMeters: 1000,
+      rows,
+      cols,
+      cellSizeMeters: 100,
+      minElevationM: 0,
+      maxElevationM: 0,
+      nodataValue: -99999,
+    },
+    elevationsM,
+    soilTypes,
+  };
+}
+
+describe("Martian soil matrix classification, overlay, and traverse speed routing", () => {
+  test("classifyMarsSoilMatrix separates all 4 classes from DEM relief and THEMIS NIR", () => {
+    const rows = 9;
+    const cols = 9;
+    const elevationsM = new Array<number>(rows * cols).fill(0);
+    const themisDn = new Array<number>(rows * cols).fill(145);
+    for (let c = 0; c < cols; c += 1) {
+      elevationsM[1 * cols + c] = 40;
+      themisDn[2 * cols + c] = 225;
+      themisDn[4 * cols + c] = 165;
+      themisDn[6 * cols + c] = 105;
+      themisDn[7 * cols + c] = 25;
+    }
+    const matrix = classifyMarsSoilMatrix({
+      elevationsM,
+      rows,
+      cols,
+      dxM: 20,
+      dyM: 20,
+      nodataValue: -99999,
+      themisDn,
+    });
+    const presentCodes = new Set(Array.from(matrix));
+    expect(presentCodes.has(0)).toBe(true);
+    expect(presentCodes.has(1)).toBe(true);
+    expect(presentCodes.has(2)).toBe(true);
+    expect(presentCodes.has(3)).toBe(true);
+  });
+
+  test("detours around slow loose-sand basin and renders soil RGBA + binary roundtrip", () => {
+    const soilGraph = new TerrainGraph(makeSoilCorridorDataset());
+    const start = soilGraph.coordForCell(5, 1);
+    const goal = soilGraph.coordForCell(5, 9);
+
+    const uniformRes = soilGraph.planRoutes(start, goal, 15, undefined, {
+      bedrock: 1.0,
+      "coarse-regolith": 1.0,
+      "fine-regolith": 1.0,
+      "loose-sand": 1.0,
+    });
+    expect(uniformRes.status).toBe("ok");
+    const uniformRoute = uniformRes.routes[0];
+    expect(uniformRoute?.soilBreakdown?.["loose-sand"]).toBeGreaterThan(200);
+
+    const penalizedRes = soilGraph.planRoutes(start, goal, 15, undefined, {
+      bedrock: 1.0,
+      "coarse-regolith": 0.85,
+      "fine-regolith": 0.7,
+      "loose-sand": 0.2,
+    });
+    expect(penalizedRes.status).toBe("ok");
+    const penalizedRoute = penalizedRes.routes[0];
+    expect(penalizedRoute).toBeDefined();
+    expect(penalizedRoute?.soilBreakdown?.["loose-sand"] ?? 0).toBeLessThan(
+      uniformRoute?.soilBreakdown?.["loose-sand"] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(penalizedRoute?.points[0]?.soilType).toBe("bedrock");
+
+    const soilRgba = soilGraph.renderSoilMaskRgba();
+    expect(soilRgba.byteLength).toBe(soilGraph.totalCells * 4);
+    expect(soilRgba[3]).toBeGreaterThan(0);
+
+    expect(soilGraph.soilAt(soilGraph.coordForCell(5, 5))).toBe("loose-sand");
+
+    const encodedSoil = encodeSoilBinary(soilGraph.soilMatrix);
+    const decodedSoil = decodeSoilBinary(encodedSoil.buffer as ArrayBuffer, soilGraph.totalCells);
+    expect(decodedSoil[5 * 11 + 5]).toBe(3);
+  });
+
+  test("routes sequentially across ordered intermediate waypoints and reports blocked leg", () => {
+    const ridgeGraph = new TerrainGraph(makeRidgeDataset());
+    const p1 = ridgeGraph.coordForCell(8, 2);
+    const p2 = ridgeGraph.coordForCell(1, 2);
+    const p3 = ridgeGraph.coordForCell(8, 8);
+
+    const directRes = ridgeGraph.planWaypointsRoutes([p1, p3], 15);
+    const multiRes = ridgeGraph.planWaypointsRoutes([p1, p2, p3], 15);
+    expect(directRes.status).toBe("ok");
+    expect(multiRes.status).toBe("ok");
+    expect(multiRes.snappedWaypoints).toHaveLength(3);
+
+    const directFirst = directRes.routes[0];
+    const multiFirst = multiRes.routes[0];
+    if (!directFirst || !multiFirst) throw new Error("Expected multi-waypoint route");
+    expect(multiFirst.totalDistanceM).toBeGreaterThan(directFirst.totalDistanceM + 500);
+    const visitsP2 = multiFirst.points.some(
+      (pt) => Math.abs(pt.lat - p2.lat) < 0.002 && Math.abs(pt.lon - p2.lon) < 0.002,
+    );
+    expect(visitsP2).toBe(true);
+
+    const blockedTarget = ridgeGraph.coordForCell(2, 5);
+    const blockedRes = ridgeGraph.planWaypointsRoutes([p1, p3, blockedTarget], 10);
+    expect(blockedRes.status).toBe("unreachable");
+    expect(blockedRes.blockedLegIndex).toBe(1);
   });
 });

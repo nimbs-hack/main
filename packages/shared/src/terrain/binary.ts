@@ -6,6 +6,8 @@ export interface StaticSiteManifest {
   meta: SiteMetadata;
   terrainBinFile: string;
   terrainByteLength: number;
+  soilBinFile?: string;
+  soilByteLength?: number;
   hillshadeFile: string;
   weatherFallbackFile: string;
 }
@@ -41,4 +43,26 @@ export function decodeTerrainBinary(buffer: ArrayBuffer, expectedCells: number):
     out[i] = view.getFloat32(i * 4, true);
   }
   return out;
+}
+
+/** Encode row-major 4-class soil type codes (0..3) as single-byte Uint8Array. */
+export function encodeSoilBinary(soilTypes: Uint8Array | readonly number[]): Uint8Array {
+  if (soilTypes instanceof Uint8Array) {
+    return new Uint8Array(soilTypes);
+  }
+  const bytes = new Uint8Array(soilTypes.length);
+  for (let i = 0; i < soilTypes.length; i += 1) {
+    bytes[i] = soilTypes[i] ?? 1;
+  }
+  return bytes;
+}
+
+/** Decode single-byte soil substrate buffer back into Uint8Array. */
+export function decodeSoilBinary(buffer: ArrayBuffer, expectedCells: number): Uint8Array {
+  if (buffer.byteLength !== expectedCells) {
+    throw new Error(
+      `Invalid soil binary length: expected ${expectedCells} bytes, got ${buffer.byteLength}`,
+    );
+  }
+  return new Uint8Array(buffer);
 }

@@ -5,15 +5,18 @@ import {
   type MarsWeatherSnapshot,
   type RoutePlanRequest,
   type RoutePlanResponse,
+  SOIL_TYPE_CATALOG,
   type SiteEnvironmentSummary,
   type SiteMetadata,
   type StaticSiteManifest,
   TerrainGraph,
   type WeatherScenario,
   computeSiteWeatherField,
+  decodeSoilBinary,
   decodeTerrainBinary,
   renderPressureMaskRgba,
   renderTemperatureMaskRgba,
+  resolveSoilSpeedFactors,
   toSiteEnvironmentSummary,
 } from "@nimbs/shared";
 import type { WorkerRequest, WorkerResponse } from "../workers/terrainWorker";
@@ -35,11 +38,17 @@ function abortError(): DOMException {
 }
 
 type WorkerPayload =
-  | { type: "init"; meta: SiteMetadata; terrainBuffer: ArrayBuffer }
+  | {
+      type: "init";
+      meta: SiteMetadata;
+      terrainBuffer: ArrayBuffer;
+      soilBuffer?: ArrayBuffer;
+    }
   | { type: "elevation"; coord: MarsCoord }
   | { type: "planRoutes"; payload: RoutePlanRequest; snapshot?: MarsWeatherSnapshot }
   | { type: "environmentSummary"; snapshot: MarsWeatherSnapshot; lmstHour: number }
   | { type: "renderSlopeMask"; maxSlopeDeg: number }
+  | { type: "renderSoilMask" }
   | {
       type: "renderPressureMask";
       snapshot: MarsWeatherSnapshot;
@@ -140,11 +149,12 @@ class ClientTerrainEngine {
 
   private async runInThreadFallback(payload: WorkerPayload): Promise<WorkerSuccessResponse> {
     if (payload.type === "init") {
-      const elevationsM = decodeTerrainBinary(
-        payload.terrainBuffer,
-        payload.meta.rows * payload.meta.cols,
-      );
-      this.fallbackGraph = new TerrainGraph({ meta: payload.meta, elevationsM });
+      const expectedCells = payload.meta.rows * payload.meta.cols;
+      const elevationsM = decodeTerrainBinary(payload.terrainBuffer, expectedCells);
+      const soilTypes = payload.soilBuffer
+        ? decodeSoilBinary(payload.soilBuffer, expectedCells)
+        : undefined;
+      this.fallbackGraph = new TerrainGraph({ meta: payload.meta, elevationsM, soilTypes });
       return { id: 0, ok: true, type: "init", meta: this.fallbackGraph.meta };
     }
     const graph = this.fallbackGraph;
@@ -152,7 +162,9 @@ class ClientTerrainEngine {
       throw new Error("Terrain graph is not initialized");
     }
     switch (payload.type) {
-      case "elevation":
+      case "elevation": {
+        const insideSite = graph.isInsideBounds(payload.coord);
+        const soilType = insideSite ? graph.soilAt(payload.coord) : null;
         return {
           id: 0,
           ok: true,
@@ -160,10 +172,14 @@ class ClientTerrainEngine {
           data: {
             lat: payload.coord.lat,
             lon: payload.coord.lon,
-            insideSite: graph.isInsideBounds(payload.coord),
+            insideSite,
             elevationM: graph.elevationAt(payload.coord),
+            soilType,
+            soilLabel: soilType ? SOIL_TYPE_CATALOG[soilType].label : null,
+            soilSpeedFactor: soilType ? SOIL_TYPE_CATALOG[soilType].humanSpeedFactor : null,
           },
         };
+      }
       case "planRoutes": {
         const wc = payload.payload.weatherConstraints;
         const filter =
@@ -181,15 +197,21 @@ class ClientTerrainEngine {
                 };
               })()
             : undefined;
+        const waypoints =
+          payload.payload.waypoints && payload.payload.waypoints.length > 0
+            ? payload.payload.waypoints
+            : payload.payload.waypointA && payload.payload.waypointB
+              ? [payload.payload.waypointA, payload.payload.waypointB]
+              : [];
         return {
           id: 0,
           ok: true,
           type: "planRoutes",
-          data: graph.planRoutes(
-            payload.payload.waypointA,
-            payload.payload.waypointB,
+          data: graph.planWaypointsRoutes(
+            waypoints,
             payload.payload.maxSlopeDeg,
             filter,
+            payload.payload.soilSpeedFactors,
           ),
         };
       }
@@ -204,6 +226,17 @@ class ClientTerrainEngine {
       }
       case "renderSlopeMask": {
         const rgba = graph.renderSlopeMaskRgba(payload.maxSlopeDeg);
+        return {
+          id: 0,
+          ok: true,
+          type: "renderMask",
+          cols: graph.cols,
+          rows: graph.rows,
+          rgbaBuffer: rgba.buffer,
+        };
+      }
+      case "renderSoilMask": {
+        const rgba = graph.renderSoilMaskRgba();
         return {
           id: 0,
           ok: true,
@@ -267,25 +300,38 @@ class ClientTerrainEngine {
       }
 
       let terrainBuffer: ArrayBuffer | null = null;
+      let soilBuffer: ArrayBuffer | undefined;
       const cacheMatchesManifest =
         cached &&
         cached.manifest.generatedAt === manifest.generatedAt &&
-        cached.terrainBuffer.byteLength === manifest.terrainByteLength;
+        cached.terrainBuffer.byteLength === manifest.terrainByteLength &&
+        (!manifest.soilBinFile ||
+          (cached.soilBuffer !== undefined &&
+            cached.soilBuffer.byteLength === manifest.soilByteLength));
 
       if (cacheMatchesManifest && cached) {
         terrainBuffer = cached.terrainBuffer;
+        soilBuffer = cached.soilBuffer;
       } else {
         const binUrl = `/data/${manifest.terrainBinFile}`;
+        const soilUrl = manifest.soilBinFile ? `/data/${manifest.soilBinFile}` : null;
         try {
-          const binRes = await fetch(binUrl);
+          const [binRes, soilRes] = await Promise.all([
+            fetch(binUrl),
+            soilUrl ? fetch(soilUrl).catch(() => null) : Promise.resolve(null),
+          ]);
           if (!binRes.ok) {
             throw new Error(`Failed to fetch terrain dataset (${binRes.status})`);
           }
           terrainBuffer = await binRes.arrayBuffer();
+          if (soilRes?.ok) {
+            soilBuffer = await soilRes.arrayBuffer();
+          }
           await writeCachedDataset({
             key: "active",
             manifest,
             terrainBuffer,
+            soilBuffer,
             cachedAtMs: Date.now(),
           });
         } catch (err) {
@@ -293,21 +339,27 @@ class ClientTerrainEngine {
           if (cached) {
             manifest = cached.manifest;
             terrainBuffer = cached.terrainBuffer;
+            soilBuffer = cached.soilBuffer;
           } else {
             throw err;
           }
         }
       }
 
-      // Send a transferable clone so IndexedDB record / retry stays valid
+      // Send transferable clones so IndexedDB record / retry stays valid
       const workerBuffer = terrainBuffer.slice(0);
+      const workerSoilBuffer = soilBuffer ? soilBuffer.slice(0) : undefined;
+      const transfer: Transferable[] = workerSoilBuffer
+        ? [workerBuffer, workerSoilBuffer]
+        : [workerBuffer];
       const res = await this.callWorker(
         {
           type: "init",
           meta: manifest.meta,
           terrainBuffer: workerBuffer,
+          soilBuffer: workerSoilBuffer,
         },
-        [workerBuffer],
+        transfer,
       );
       if (res.type !== "init") {
         throw new Error("Unexpected response during terrain worker initialization");
@@ -332,11 +384,20 @@ class ClientTerrainEngine {
 
   async planRoutes(payload: RoutePlanRequest, signal?: AbortSignal): Promise<RoutePlanResponse> {
     const meta = await this.ensureInitialized();
+    const waypoints =
+      payload.waypoints && payload.waypoints.length > 0
+        ? payload.waypoints
+        : payload.waypointA && payload.waypointB
+          ? [payload.waypointA, payload.waypointB]
+          : [];
+    const wpKey = waypoints.map((w) => `${w.lat.toFixed(6)},${w.lon.toFixed(6)}`).join("->");
+    const soilFactors = resolveSoilSpeedFactors(payload.soilSpeedFactors);
+    const soilKey = `${soilFactors.bedrock.toFixed(2)},${soilFactors["coarse-regolith"].toFixed(2)},${soilFactors["fine-regolith"].toFixed(2)},${soilFactors["loose-sand"].toFixed(2)}`;
     const wc = payload.weatherConstraints;
     const wcKey = wc?.enabled
       ? `${wc.scenario ?? "auto"}:${wc.sol ?? "latest"}:${(wc.lmstHour ?? 12).toFixed(1)}:${Math.round(wc.minAirTempC ?? DEFAULT_EVA_WEATHER_LIMITS.minAirTempC)}:${Math.round(wc.minPressurePa ?? DEFAULT_EVA_WEATHER_LIMITS.minPressurePa)}:${(wc.thermalWeight ?? 0.35).toFixed(2)}`
       : "off";
-    const cacheKey = `${meta.id}|${payload.waypointA.lat.toFixed(6)},${payload.waypointA.lon.toFixed(6)}->${payload.waypointB.lat.toFixed(6)},${payload.waypointB.lon.toFixed(6)}|s=${payload.maxSlopeDeg.toFixed(2)}|w=${wcKey}`;
+    const cacheKey = `${meta.id}|${wpKey}|s=${payload.maxSlopeDeg.toFixed(2)}|soil=${soilKey}|w=${wcKey}`;
 
     const cachedRoute = await readCachedRoute(cacheKey);
     if (cachedRoute) {
@@ -439,6 +500,12 @@ class ClientTerrainEngine {
       async () => ({ type: "renderSlopeMask", maxSlopeDeg: clamped }),
       signal,
     );
+  }
+
+  async renderSoilMaskUrl(signal?: AbortSignal): Promise<string> {
+    const meta = await this.ensureInitialized();
+    const key = `${meta.id}|soil`;
+    return this.renderMaskUrl(key, async () => ({ type: "renderSoilMask" }), signal);
   }
 
   async renderPressureMaskUrl(

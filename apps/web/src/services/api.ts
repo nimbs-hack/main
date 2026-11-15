@@ -21,6 +21,8 @@ import { defaultClientWeatherService } from "./clientWeather";
 export {
   type ComputedRoute,
   DEFAULT_EVA_WEATHER_LIMITS,
+  DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
+  DEFAULT_ROVER_SOIL_SPEED_FACTORS,
   type ElevationResponse,
   type EvaRouteContext,
   type EvaRouteWeatherContext,
@@ -32,15 +34,22 @@ export {
   type MapLayerMeta,
   type MarsWeatherSnapshot,
   type MarsWeatherSolForecast,
+  type MissionUnitId,
   type RouteBlockedReason,
   type RoutePlanRequest,
   type RoutePlanResponse,
   type RoutePoint,
   type RouteStrategy,
   type RouteWeatherConstraints,
+  SOIL_SPEED_FACTOR_MAX,
+  SOIL_SPEED_FACTOR_MIN,
+  SOIL_TYPE_CATALOG,
+  SOIL_TYPE_ORDER,
   type SelectedHourWeatherSummary,
   type SiteEnvironmentSummary,
   type SiteMetadata,
+  type SoilSpeedFactors,
+  type SoilTypeId,
   TRAVERSE_PRESETS,
   type TraverseDepartureSlot,
   type TraversePointSample,
@@ -48,11 +57,17 @@ export {
   type TraversePresetId,
   type TraverseWindowRecommendation,
   type UiMode,
+  type UnitSimulationSample,
+  type UnitTraverseTimeline,
   type WeatherApiResponse,
   type WeatherCheckId,
   type WeatherHourlyPoint,
   type WeatherScenario,
   type WeatherSourceType,
+  buildUnitTraverseTimeline,
+  findBestWaypointInsertIndex,
+  resolveSoilSpeedFactors,
+  sampleUnitTimelineAt,
 } from "@nimbs/shared";
 
 export const STATIC_HILLSHADE_URL = "/data/site-hillshade.png";
@@ -157,6 +172,10 @@ export async function renderSlopeMaskUrl(
   signal?: AbortSignal,
 ): Promise<string> {
   return clientEngine.renderSlopeMaskUrl(maxSlopeDeg, signal);
+}
+
+export async function renderSoilMaskUrl(signal?: AbortSignal): Promise<string> {
+  return clientEngine.renderSoilMaskUrl(signal);
 }
 
 export async function renderPressureMaskUrl(

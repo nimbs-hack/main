@@ -33,24 +33,49 @@ function createMemoryStorage(): Storage {
 }
 
 describe("browserCache mission state persistence", () => {
-  test("saves and restores full mission UI state cleanly", () => {
+  test("saves and restores dual-unit mission UI state cleanly", () => {
     const storage = createMemoryStorage();
+    const defaults = createDefaultMissionState();
     const state = {
-      ...createDefaultMissionState(),
+      ...defaults,
       activeLayerId: "usgs-themis",
+      showSoilLayer: true,
       showPressureLayer: true,
       uiMode: "advance" as const,
-      presetId: "rover" as const,
-      maxSlopeDeg: TRAVERSE_PRESETS.rover.maxSlopeDeg,
-      waypointA: { lat: 18.42, lon: 77.41 },
-      waypointB: { lat: 18.48, lon: 77.49 },
-      selectedRouteId: "route-shortest",
+      activeUnitId: 2 as const,
+      moveWaypointsMode: true,
+      dualSimSpeedMultiplier: 8,
+      simDepartureLmstHour: 10.5,
       simLmstHour: 15.5,
       weatherScenario: "dust-storm" as const,
-      weatherLimits: {
-        ...DEFAULT_EVA_WEATHER_LIMITS,
-        minAirTempC: -95,
-        flatSpeedMPerH: 5000,
+      unit1: {
+        ...defaults.unit1,
+        presetId: "rover" as const,
+        maxSlopeDeg: TRAVERSE_PRESETS.rover.maxSlopeDeg,
+        waypoints: [
+          { lat: 18.42, lon: 77.41 },
+          { lat: 18.45, lon: 77.45 },
+          { lat: 18.48, lon: 77.49 },
+        ],
+        selectedRouteId: "route-shortest",
+        weatherLimits: {
+          ...DEFAULT_EVA_WEATHER_LIMITS,
+          minAirTempC: -95,
+          flatSpeedMPerH: 5000,
+          soilSpeedFactors: {
+            bedrock: 1.1,
+            "coarse-regolith": 0.9,
+            "fine-regolith": 0.65,
+            "loose-sand": 0.3,
+          },
+        },
+      },
+      unit2: {
+        ...defaults.unit2,
+        waypoints: [
+          { lat: 18.43, lon: 77.42 },
+          { lat: 18.47, lon: 77.48 },
+        ],
       },
     };
 
@@ -58,19 +83,25 @@ describe("browserCache mission state persistence", () => {
     const loaded = loadMissionState(storage);
 
     expect(loaded.activeLayerId).toBe("usgs-themis");
+    expect(loaded.showSoilLayer).toBe(true);
     expect(loaded.showPressureLayer).toBe(true);
     expect(loaded.uiMode).toBe("advance");
-    expect(loaded.presetId).toBe("rover");
-    expect(loaded.waypointA).toEqual({ lat: 18.42, lon: 77.41 });
-    expect(loaded.waypointB).toEqual({ lat: 18.48, lon: 77.49 });
-    expect(loaded.selectedRouteId).toBe("route-shortest");
+    expect(loaded.activeUnitId).toBe(2);
+    expect(loaded.moveWaypointsMode).toBe(true);
+    expect(loaded.dualSimSpeedMultiplier).toBe(8);
+    expect(loaded.simDepartureLmstHour).toBe(10.5);
+    expect(loaded.unit1.presetId).toBe("rover");
+    expect(loaded.unit1.waypoints).toHaveLength(3);
+    expect(loaded.unit1.selectedRouteId).toBe("route-shortest");
+    expect(loaded.unit1.weatherLimits.soilSpeedFactors?.["loose-sand"]).toBe(0.3);
+    expect(loaded.unit2.waypoints).toHaveLength(2);
     expect(loaded.simLmstHour).toBe(15.5);
     expect(loaded.weatherScenario).toBe("dust-storm");
-    expect(loaded.weatherLimits.minAirTempC).toBe(-95);
-    expect(loaded.weatherLimits.flatSpeedMPerH).toBe(5000);
+    expect(loaded.unit1.weatherLimits.minAirTempC).toBe(-95);
+    expect(loaded.unit1.weatherLimits.flatSpeedMPerH).toBe(5000);
   });
 
-  test("repairs corrupted or out-of-bounds persisted state safely", () => {
+  test("repairs corrupted values and migrates legacy v1 persisted state into unit1", () => {
     const storage = createMemoryStorage();
     storage.setItem(MISSION_STATE_STORAGE_KEY, "{bad-json");
     expect(loadMissionState(storage)).toEqual(createDefaultMissionState());
@@ -82,16 +113,17 @@ describe("browserCache mission state persistence", () => {
         maxSlopeDeg: 999,
         simLmstHour: -5,
         waypointA: { lat: 400, lon: 10 },
+        waypointB: { lat: 18.45, lon: 77.45 },
         weatherLimits: { flatSpeedMPerH: 1 },
       }),
     );
     const repaired = loadMissionState(storage);
     const defaults = createDefaultMissionState();
     expect(repaired.activeLayerId).toBe(defaults.activeLayerId);
-    expect(repaired.maxSlopeDeg).toBe(defaults.maxSlopeDeg);
+    expect(repaired.unit1.maxSlopeDeg).toBe(defaults.unit1.maxSlopeDeg);
     expect(repaired.simLmstHour).toBe(defaults.simLmstHour);
-    expect(repaired.waypointA).toBeNull();
-    expect(repaired.weatherLimits).toEqual(defaults.weatherLimits);
+    expect(repaired.unit1.waypoints).toEqual([{ lat: 18.45, lon: 77.45 }]);
+    expect(repaired.unit1.weatherLimits).toEqual(defaults.unit1.weatherLimits);
   });
 });
 

@@ -2,6 +2,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   MARS_RADIUS_M,
+  SOIL_TYPE_CATALOG,
+  SOIL_TYPE_ORDER,
+  classifyMarsSoilMatrix,
   coordToEquirectangular,
   equirectangularToCoord,
   normalizeLon180,
@@ -21,6 +24,8 @@ interface SitePreset {
   sourceTitle: string;
   dtmUrl: string;
   hillshadeUrl: string;
+  soilSourceTitle: string;
+  themisNirUrl: string;
   centerHint: MarsCoord;
 }
 
@@ -34,6 +39,9 @@ const PRESETS: Record<string, SitePreset> = {
       "https://astrogeo-ard.s3-us-west-2.amazonaws.com/mars/mro/ctx/controlled/usgs/K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W/K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W_dtm.tif",
     hillshadeUrl:
       "https://astrogeo-ard.s3-us-west-2.amazonaws.com/mars/mro/ctx/controlled/usgs/K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W/K23_062385_1988_XN_18N282W__K23_062451_1988_XN_18N282W_hillshade.tif",
+    soilSourceTitle: "Mars Odyssey THEMIS Nighttime IR Controlled Mosaic (MC-13 Syrtis Major) + CTX Slope/TPI",
+    themisNirUrl:
+      "https://astrogeo-ard.s3-us-west-2.amazonaws.com/mars/mo/themis/controlled_mosaics/mc13_syrtis_major_nir/mc13_syrtis_major_nir.tif",
     centerHint: { lat: 18.664, lon: 77.502 },
   },
   "mount-sharp": {
@@ -45,6 +53,9 @@ const PRESETS: Record<string, SitePreset> = {
       "https://astrogeo-ard.s3-us-west-2.amazonaws.com/mars/mro/ctx/controlled/usgs/T01_000881_1752_XI_04S223W__P02_001752_1753_XI_04S222W/T01_000881_1752_XI_04S223W__P02_001752_1753_XI_04S222W-DEM-geoid-adj.tif",
     hillshadeUrl:
       "https://astrogeo-ard.s3-us-west-2.amazonaws.com/mars/mro/ctx/controlled/usgs/T01_000881_1752_XI_04S223W__P02_001752_1753_XI_04S222W/T01_000881_1752_XI_04S223W__P02_001752_1753_XI_04S222W-DEM-geoid-hs.tif",
+    soilSourceTitle: "Mars Odyssey THEMIS Nighttime IR Controlled Mosaic (MC-23 Aeolis) + CTX Slope/TPI",
+    themisNirUrl:
+      "https://astrogeo-ard.s3-us-west-2.amazonaws.com/mars/mo/themis/controlled_mosaics/mc23_aeolis_nir/mc23_aeolis_nir.tif",
     centerHint: { lat: -4.81, lon: 137.16 },
   },
 };
@@ -130,13 +141,14 @@ function resampleElevGrid(
   outCols: number,
   outRows: number,
   nodataValue: number,
+  minValid = nodataValue + 10,
 ): { grid: Float32Array; validCount: number } {
   const [pxLeft, pxTop] = pxWin;
   const [wx0, wy0, wx1, wy1] = projWin;
   const [minX, minY, maxX, maxY] = imgBbox;
   const spanX = Math.max(1e-6, maxX - minX);
   const spanY = Math.max(1e-6, maxY - minY);
-  const nodataCutoff = nodataValue + 10;
+  const nodataCutoff = minValid;
 
   const grid = new Float32Array(outRows * outCols);
   let validCount = 0;
@@ -162,10 +174,10 @@ function resampleElevGrid(
       const s10 = src[y1 * srcW + x0] ?? nodataValue;
       const s11 = src[y1 * srcW + x1] ?? nodataValue;
 
-      const w00 = Number.isFinite(s00) && s00 > nodataCutoff ? (1 - dx) * (1 - dy) : 0;
-      const w01 = Number.isFinite(s01) && s01 > nodataCutoff ? dx * (1 - dy) : 0;
-      const w10 = Number.isFinite(s10) && s10 > nodataCutoff ? (1 - dx) * dy : 0;
-      const w11 = Number.isFinite(s11) && s11 > nodataCutoff ? dx * dy : 0;
+      const w00 = Number.isFinite(s00) && s00 >= nodataCutoff ? (1 - dx) * (1 - dy) : 0;
+      const w01 = Number.isFinite(s01) && s01 >= nodataCutoff ? dx * (1 - dy) : 0;
+      const w10 = Number.isFinite(s10) && s10 >= nodataCutoff ? (1 - dx) * dy : 0;
+      const w11 = Number.isFinite(s11) && s11 >= nodataCutoff ? dx * dy : 0;
       const wSum = w00 + w01 + w10 + w11;
 
       const outIdx = r * outCols + c;
@@ -579,6 +591,60 @@ async function main() {
   );
   const hillshadePng = encodeRgbaPng(hillshadeSize, hillshadeSize, hsRgba, 6);
 
+  // Sample Mars Odyssey THEMIS Nighttime IR thermal-inertia mosaic and classify 4 Martian soil types
+  console.log(`Sampling THEMIS Nighttime IR mosaic from ${preset.themisNirUrl}...`);
+  const nirTiff = await fromUrl(preset.themisNirUrl);
+  const nirImg = await nirTiff.getImage(0);
+  const nirBbox = nirImg.getBoundingBox() as [number, number, number, number];
+  const nirFullW = nirImg.getWidth();
+  const nirFullH = nirImg.getHeight();
+  const nirPxWin = projBoxToPixelWindow(finalProjWin, nirBbox, nirFullW, nirFullH);
+  const nirSrcW = nirPxWin[2] - nirPxWin[0];
+  const nirSrcH = nirPxWin[3] - nirPxWin[1];
+  const nirRaster = await nirImg.readRasters({ window: nirPxWin, interleave: true });
+  const { grid: themisGrid, validCount: nirValid } = resampleElevGrid(
+    nirRaster as unknown as ArrayLike<number>,
+    nirSrcW,
+    nirSrcH,
+    nirPxWin,
+    finalProjWin,
+    nirBbox,
+    nirFullW,
+    nirFullH,
+    gridSize,
+    gridSize,
+    0,
+    1,
+  );
+  console.log(
+    `THEMIS NIR window ${nirSrcW}x${nirSrcH} px -> resampled ${gridSize}x${gridSize} (${nirValid}/${themisGrid.length} valid).`,
+  );
+
+  const dxM = widthMeters / Math.max(1, gridSize - 1);
+  const dyM = heightMeters / Math.max(1, gridSize - 1);
+  const soilMatrix = classifyMarsSoilMatrix({
+    elevationsM: grid,
+    rows: gridSize,
+    cols: gridSize,
+    dxM,
+    dyM,
+    nodataValue,
+    themisDn: themisGrid,
+  });
+
+  const soilCounts = [0, 0, 0, 0];
+  for (let i = 0; i < soilMatrix.length; i += 1) {
+    const code = soilMatrix[i] ?? 1;
+    if (code >= 0 && code < soilCounts.length) {
+      soilCounts[code] = (soilCounts[code] ?? 0) + 1;
+    }
+  }
+  const soilSummary = SOIL_TYPE_ORDER.map((id, idx) => {
+    const pct = (((soilCounts[idx] ?? 0) / soilMatrix.length) * 100).toFixed(1);
+    return `${SOIL_TYPE_CATALOG[id].shortLabel}:${pct}%`;
+  }).join(", ");
+  console.log(`Classified 4-class Martian soil matrix: ${soilSummary}`);
+
   const meta: SiteMetadata = {
     id: preset.id,
     name: preset.name,
@@ -596,11 +662,14 @@ async function main() {
     minElevationM,
     maxElevationM,
     nodataValue,
+    soilSourceTitle: preset.soilSourceTitle,
+    soilUrl: preset.themisNirUrl,
   };
 
   const dataset: SiteDataset = {
     meta,
     elevationsM: Array.from(grid),
+    soilTypes: Array.from(soilMatrix),
   };
 
   const dataDir = resolve(process.cwd(), "data");
