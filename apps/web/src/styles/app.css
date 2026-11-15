@@ -148,6 +148,11 @@ body,
   transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
 }
 
+.rail-button svg {
+  display: block;
+  flex-shrink: 0;
+}
+
 .rail-button:hover {
   border-color: var(--color-line-strong);
   color: var(--color-text);

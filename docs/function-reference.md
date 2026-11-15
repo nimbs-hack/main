@@ -641,7 +641,7 @@ Exported React root component coordinating client engines, overlays, simulation,
 2. Initializes `SiteMetadata`, `MARS_BASE_LAYERS`, and weather snapshots via client services (`clientEngine` + `clientWeather`).
 3. Runs 48-hour weather preview playback (`simLmstHour += 0.5` every `600` ms) and synchronized dual-unit simulation playback (`dualSimPlaying`) stopping when both active units reach their final waypoint.
 4. Debounces cursor elevation and soil lookups via `fetchElevation` (`45` ms) inside `site.bbox`, and computes environment summaries (`160` ms) when temperature or pressure overlays are active.
-5. Registers 5 `ToolDefinition` panels in `ToolRegistry` ordered `"route"` (`RTE`), `"weather"` (`WXR`), `"sim"` (`SIM`), `"points"` (`PTS`), and `"layers"` (`LYR`), manages `uiMode` (`"basic"` vs `"advance"`) and active unit (`1 / 2`), and renders the rail, drawer, `MapView`, telemetry HUD, soil mask legend, and `ContextMenu`.
+5. Registers 5 `ToolDefinition` panels in `ToolRegistry` ordered `"route"`, `"weather"`, `"sim"`, `"points"`, and `"layers"`, manages `uiMode` (`"basic"` vs `"advance"`) and active unit (`1 / 2`), and renders the rail (`ToolRailIcon`), drawer, `MapView`, telemetry HUD, soil mask legend, and `ContextMenu`.
 
 ### apps/web/src/registry/toolRegistry.ts
 
@@ -1111,6 +1111,14 @@ Renders the right-click map context menu for active-unit sequential waypoints an
 #### `ContextMenu(props: ContextMenuProps)`
 
 Exported React component clamping screen placement inside `window.innerWidth - 240` and `window.innerHeight - 235`, displaying clicked coordinates to 5 decimal places alongside the active unit badge, and wiring `Add Waypoint`, optional `Insert Stop (MID)` when two or more waypoints exist, optional `Add Classified Point` (hidden when `canAddPoint` is false in `"basic"` mode), optional `Remove Last`, and `Clear Waypoints`.
+
+### apps/web/src/components/ToolRailIcon.tsx
+
+Renders monochrome `currentColor` inline SVG pictograms for left tool-rail buttons (`"route"`, `"weather"`, `"sim"`, `"points"`, `"layers"`) in [apps/web/src/components/ToolRailIcon.tsx](../apps/web/src/components/ToolRailIcon.tsx).
+
+#### `ToolRailIcon({ toolId, fallbackLabel }: ToolRailIconProps)`
+
+Exported React component mapping each registered `ToolId` to its `22x22` SVG pictogram (or falling back to `fallbackLabel` text when unmapped).
 
 
 ---

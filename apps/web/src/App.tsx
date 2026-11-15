@@ -21,6 +21,7 @@ import {
   formatLmstClock,
   resolveSolDisplay,
 } from "./components/TimeSimulationControl";
+import { ToolRailIcon } from "./components/ToolRailIcon";
 import { WeatherPanel, evaStatusClass } from "./components/WeatherPanel";
 import { ToolRegistry } from "./registry/toolRegistry";
 import {
@@ -1600,10 +1601,11 @@ export function App() {
                   key={tool.id}
                   type="button"
                   title={tool.title}
+                  aria-label={tool.title}
                   className={`rail-button ${panelOpen && activeToolId === tool.id ? "is-active" : ""}`}
                   onClick={() => handleSelectTool(tool.id)}
                 >
-                  <span>{tool.shortLabel}</span>
+                  <ToolRailIcon toolId={tool.id} fallbackLabel={tool.shortLabel} />
                 </button>
               ))}
             </div>
