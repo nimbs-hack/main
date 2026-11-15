@@ -18,6 +18,9 @@ import { siteLegs, totalLegs } from '../steps/legs'
 import { type Child, h } from './dom'
 import { createGlobe } from './globe'
 import { icon } from './icons'
+import { crewPortrait } from '../components/map-label-dom'
+import { portraitUrl } from '../components/portrait-assets'
+import { loadPhotos, photoKey } from '../data/photos'
 import { type MapStatus, createMap } from './map'
 import { SUIT } from '../data/suit'
 import { WALK_SPEED, advanceSimulation, simulatedPositions, type CrewPosition } from './live'
@@ -676,6 +679,7 @@ function personSummary(r: SuitReading): Child[] {
 }
 
 function liveTab({ planned: { mission } }: Doc): Child {
+  const photos = loadPhotos()
   if (!mission.crew.length) return h('p', { class: 'note' }, 'This mission has no crew.')
   return [
     h('p', { class: 'note' }, 'Crew positions and suit readings are simulated.'),
@@ -752,7 +756,7 @@ function liveTab({ planned: { mission } }: Doc): Child {
           h(
             'summary',
             null,
-            h('span', { class: you ? 'team__symbol team__symbol--self' : 'team__symbol', 'aria-hidden': 'true' }),
+            h('span', { class: `team__portrait${you ? ' is-selected' : ''}` }, crewPortrait(person.name, portraitUrl(person.name, photos[photoKey(person.name)]))),
             h(
               'span',
               { class: 'team__who' },

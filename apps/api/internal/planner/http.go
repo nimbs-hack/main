@@ -92,7 +92,7 @@ func buildCatalog() (catalog, error) {
 		}
 		c.SampleRoster = append(c.SampleRoster, person)
 	}
-	example, err := Examples.ReadFile("examples/ares-3.json")
+	example, err := Examples.ReadFile("examples/gale-expedition.json")
 	if err != nil {
 		return c, err
 	}

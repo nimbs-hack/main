@@ -43,7 +43,7 @@ func encode(t *testing.T, mission Mission) []byte {
 
 // bare is the example mission with no sites or tasks, for tests that count bytes.
 func bare(t *testing.T) Mission {
-	mission := example(t, "ares-3.json")
+	mission := example(t, "gale-expedition.json")
 	mission.Sites, mission.Tasks = []Site{}, []Task{}
 	return mission
 }
@@ -55,7 +55,7 @@ func TestCRC16MatchesTheCCITTFalseCheckValue(t *testing.T) {
 }
 
 func TestMissionsSurviveARoundTripUnchanged(t *testing.T) {
-	for _, name := range []string{"ares-3.json", "gale-traverse.json"} {
+	for _, name := range []string{"gale-expedition.json", "gale-traverse.json"} {
 		mission := example(t, name)
 		decoded, err := DecodeMission(encode(t, mission))
 		if err != nil || !reflect.DeepEqual(decoded, mission) {
@@ -68,17 +68,17 @@ func TestMissionsSurviveARoundTripUnchanged(t *testing.T) {
 }
 
 func TestTheEncoderStillWritesTheCommittedExampleFile(t *testing.T) {
-	committed, err := Examples.ReadFile("examples/ares-3.mhr")
+	committed, err := Examples.ReadFile("examples/gale-expedition.mhr")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(encode(t, example(t, "ares-3.json"))) != string(committed) {
-		t.Error("examples/ares-3.mhr no longer matches what the encoder writes for ares-3.json")
+	if string(encode(t, example(t, "gale-expedition.json"))) != string(committed) {
+		t.Error("examples/gale-expedition.mhr no longer matches what the encoder writes for gale-expedition.json")
 	}
 }
 
 func TestTheFileIsACCSDSSpacePacket(t *testing.T) {
-	data, err := EncodeMission(example(t, "ares-3.json"), PacketOptions{SequenceCount: 5})
+	data, err := EncodeMission(example(t, "gale-expedition.json"), PacketOptions{SequenceCount: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,16 +105,16 @@ func TestTheFileStaysSmall(t *testing.T) {
 	mission := bare(t)
 	data := encode(t, mission)
 	// 6 header, 6 mission, 7 name, 6 crew at 7 bytes plus names, 3 phases at 4, 2 checksum.
-	if len(data) != 151 {
-		t.Errorf("bare mission is %d bytes, want 151", len(data))
+	if len(data) != 160 {
+		t.Errorf("bare mission is %d bytes, want 160", len(data))
 	}
 	asJSON, _ := json.Marshal(mission)
 	if len(asJSON)/len(data) < 8 {
 		t.Errorf("JSON is only %d bytes against %d", len(asJSON), len(data))
 	}
 	// Three sites and six tasks, two of them with notes, add 113 bytes.
-	if got := len(encode(t, example(t, "ares-3.json"))); got != 264 {
-		t.Errorf("example mission is %d bytes, want 264", got)
+	if got := len(encode(t, example(t, "gale-expedition.json"))); got != 273 {
+		t.Errorf("example mission is %d bytes, want 273", got)
 	}
 }
 
@@ -147,7 +147,7 @@ func TestEachCrewMemberAfterTheFirstCostsATaskOneByte(t *testing.T) {
 }
 
 func TestAVersionTwoFileIsStillRead(t *testing.T) {
-	mission := example(t, "ares-3.json")
+	mission := example(t, "gale-expedition.json")
 	old := encode(t, mission)
 	old[6] = 2<<4 | old[6]&0x0f
 	decoded, err := DecodeMission(resealed(old))
@@ -223,7 +223,7 @@ func refused(t *testing.T, data []byte, want string) {
 }
 
 func TestEverySingleFlippedBitIsCaught(t *testing.T) {
-	good := encode(t, example(t, "ares-3.json"))
+	good := encode(t, example(t, "gale-expedition.json"))
 	for bit := range len(good) * 8 {
 		damaged := append([]byte(nil), good...)
 		damaged[bit>>3] ^= 1 << (bit & 7)
@@ -261,9 +261,10 @@ func TestDamagedOrForeignFilesAreRefused(t *testing.T) {
 	moreCrew[8] = 200
 	refused(t, resealed(moreCrew), "not a valid mission file")
 
-	// First crew record starts after the 7-byte name; its second byte is age.
+	// The name length is at byte 12, followed by its text and the crew.
+	// The second byte of the first crew record is age.
 	young := fresh()
-	young[6+6+7+1] = 5
+	young[14+int(young[12])] = 5
 	refused(t, resealed(young), "crew member 1 age must be a number from 18 to 99; got 5")
 
 	longer := append(fresh()[:len(good)-2], 0, 0, 0)
@@ -328,14 +329,14 @@ func TestCatalogRoute(t *testing.T) {
 	if types[5].ID != "mars-long-stay" || len(types[5].Phases) != 3 || kinds[2].BasePowerW != StationBasePowerW {
 		t.Errorf("types[5] = %+v, kinds[2] = %+v", types[5], kinds[2])
 	}
-	if exampleMission.Name != "ARES-3" || len(exampleMission.Tasks) != 6 {
+	if exampleMission.Name != "Gale expedition" || len(exampleMission.Tasks) != 6 {
 		t.Errorf("example = %s with %d tasks", exampleMission.Name, len(exampleMission.Tasks))
 	}
 }
 
 func TestPlanRoute(t *testing.T) {
 	url := server(t).URL + "/api/planner/plan"
-	source, _ := Examples.ReadFile("examples/ares-3.json")
+	source, _ := Examples.ReadFile("examples/gale-expedition.json")
 	rosterFile, _ := Examples.ReadFile("examples/roster.json")
 	var roster struct{ Astronauts json.RawMessage }
 	_ = json.Unmarshal(rosterFile, &roster)
@@ -350,7 +351,7 @@ func TestPlanRoute(t *testing.T) {
 	if err := json.Unmarshal(raw, &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Plan.Days != 960 || response.FileBytes != 264 || len(response.Links) != 3 || len(response.Cautions) != 1 || !strings.Contains(response.Cautions[0], "1,064 mSv") {
+	if response.Plan.Days != 960 || response.FileBytes != 273 || len(response.Links) != 3 || len(response.Cautions) != 1 || !strings.Contains(response.Cautions[0], "1,064 mSv") {
 		t.Errorf("days %d, file %d bytes, %d links, cautions %v", response.Plan.Days, response.FileBytes, len(response.Links), response.Cautions)
 	}
 	file, err := base64.StdEncoding.DecodeString(response.File)
@@ -396,10 +397,10 @@ func TestPlanRoute(t *testing.T) {
 
 func TestDecodeRoute(t *testing.T) {
 	url := server(t).URL + "/api/planner/decode"
-	good := encode(t, example(t, "ares-3.json"))
+	good := encode(t, example(t, "gale-expedition.json"))
 	status, fields := call(t, http.MethodPost, url, string(good))
 	var mission Mission
-	if err := json.Unmarshal(fields["mission"], &mission); status != http.StatusOK || err != nil || mission.Name != "ARES-3" {
+	if err := json.Unmarshal(fields["mission"], &mission); status != http.StatusOK || err != nil || mission.Name != "Gale expedition" {
 		t.Errorf("status %d, mission %q, %v", status, mission.Name, err)
 	}
 	good[30] ^= 1

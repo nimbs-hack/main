@@ -18,16 +18,16 @@ func cli(args ...string) (code int, out, errOut string) {
 }
 
 func TestPackPlanUnpack(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "ares-3.mhr")
+	file := filepath.Join(t.TempDir(), "gale-expedition.mhr")
 
-	code, out, _ := cli("pack", examples+"ares-3.json", "--roster", examples+"roster.json", "-o", file)
+	code, out, _ := cli("pack", examples+"gale-expedition.json", "--roster", examples+"roster.json", "-o", file)
 	data, err := os.ReadFile(file)
-	if code != 0 || err != nil || len(data) != 264 || !strings.Contains(out, "PACKET  264 bytes") {
+	if code != 0 || err != nil || len(data) != 273 || !strings.Contains(out, "PACKET  273 bytes") {
 		t.Fatalf("pack: code %d, %d bytes, %v\n%s", code, len(data), err, out)
 	}
 
 	_, packed, _ := cli("plan", file, "--json")
-	_, source, _ := cli("plan", examples+"ares-3.json", "--roster", examples+"roster.json", "--json")
+	_, source, _ := cli("plan", examples+"gale-expedition.json", "--roster", examples+"roster.json", "--json")
 	var result struct{ Plan struct{ Days int } }
 	if err := json.Unmarshal([]byte(packed), &result); err != nil || packed != source || result.Plan.Days != 960 {
 		t.Errorf("plan from the file and from the JSON differ, or days = %d (%v)", result.Plan.Days, err)
@@ -35,7 +35,7 @@ func TestPackPlanUnpack(t *testing.T) {
 
 	code, out, _ = cli("plan", file, "--detail")
 	for _, want := range []string{
-		"ARES-3  mars-long-stay  960 days  6 crew  margin 40%",
+		"Gale expedition  mars-long-stay  960 days  6 crew  margin 40%",
 		"NUTRIENT TARGETS",
 		"BASE    4.5895°S 137.4417°E",
 		"drill: 2 m core",
@@ -47,7 +47,7 @@ func TestPackPlanUnpack(t *testing.T) {
 
 	code, out, _ = cli("unpack", file)
 	var mission struct{ Name, Type string }
-	if err := json.Unmarshal([]byte(out), &mission); code != 0 || err != nil || mission.Name != "ARES-3" || mission.Type != "mars-long-stay" {
+	if err := json.Unmarshal([]byte(out), &mission); code != 0 || err != nil || mission.Name != "Gale expedition" || mission.Type != "mars-long-stay" {
 		t.Errorf("unpack: code %d, %+v, %v", code, mission, err)
 	}
 
@@ -78,7 +78,7 @@ func TestTypesDemoAndHelp(t *testing.T) {
 func TestFailuresExitWithAReason(t *testing.T) {
 	dir := t.TempDir()
 	good := filepath.Join(dir, "good.mhr")
-	cli("pack", examples+"ares-3.json", "--roster", examples+"roster.json", "-o", good)
+	cli("pack", examples+"gale-expedition.json", "--roster", examples+"roster.json", "-o", good)
 
 	data, _ := os.ReadFile(good)
 	data[30] ^= 1

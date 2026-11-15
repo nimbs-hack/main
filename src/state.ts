@@ -1,6 +1,9 @@
 import { useCallback, useRef, useState } from 'react'
 import type { Astronaut, Catalog, Mission, Phase, Site, Task } from './api'
 import { planStops } from './data/stops'
+import type { LatLon } from './data/geo'
+import { PHOTOS_KEY } from './data/photos'
+export { loadPhotos, photoKey, type Photos } from './data/photos'
 
 // What the editor holds. Same shape as a Mission, but a field may be out of
 // range or empty while someone is typing in it.
@@ -42,7 +45,6 @@ const DRAFT_KEY = 'nimbs:planner:draft'
 const ROSTER_KEY = 'nimbs:planner:roster'
 const LIBRARY_KEY = 'nimbs:planner:library'
 const CURRENT_KEY = 'nimbs:planner:current'
-const PHOTOS_KEY = 'nimbs:planner:photos'
 
 function stored(key: string): unknown {
   try {
@@ -70,18 +72,6 @@ export function store(key: 'roster' | 'library' | 'current' | 'photos', value: u
     // Storage can be blocked or full. The editor still works for this session.
     return false
   }
-}
-
-// Photos added on the crew page, as image data, by call sign in lower case.
-// They stay in this browser: the mission file has no room for them.
-export type Photos = Record<string, string>
-
-export const photoKey = (name: string): string => name.trim().toLowerCase()
-
-export function loadPhotos(): Photos {
-  const saved = stored(PHOTOS_KEY)
-  if (typeof saved !== 'object' || saved === null) return {}
-  return Object.fromEntries(Object.entries(saved).filter(([, url]) => typeof url === 'string'))
 }
 
 const isProfile = (value: unknown): value is Astronaut =>
@@ -255,6 +245,29 @@ function followStop(task: Task, to: number[]): Task {
   return rest
 }
 
+// Map stops become mission sites and visits in one undoable edit. Existing
+// sites keep their names and tasks, even when the new route no longer visits them.
+export function setRoutePoints(draft: Draft, points: LatLon[]): Draft {
+  const sites = [...draft.sites]
+  const route: number[] = []
+  for (const [lat, lon] of points) {
+    let site = sites.findIndex((entry) => entry.lat === lat && entry.lon === lon)
+    if (site < 0) {
+      site = sites.length
+      sites.push({ name: freeName(sites.map((entry) => entry.name), 'SITE'), lat, lon })
+    }
+    if (route.at(-1) !== site) route.push(site)
+  }
+  // Match repeated visits in order, so each visit keeps its own tasks.
+  const lastVisit = new Map<number, number>()
+  const to = planStops(draft).map((site) => {
+    const stop = route.indexOf(site, (lastVisit.get(site) ?? -1) + 1)
+    if (stop >= 0) lastVisit.set(site, stop)
+    return stop
+  })
+  return { ...draft, sites, route, tasks: draft.tasks.map((task) => followStop(task, to)) }
+}
+
 // Edits. Each returns a new draft and leaves the old one alone. Presets and
 // templates come from the planner's catalog.
 export function createEdits(catalog: Catalog) {
@@ -279,6 +292,7 @@ export function createEdits(catalog: Catalog) {
 
   return {
     newPerson,
+    setRoutePoints,
 
     blank: (): Draft => ({
       name: '',

@@ -6,6 +6,7 @@ import StatusBar from '../components/StatusBar.jsx'
 import { portraitUrl } from '../components/Portrait'
 import { SITES } from '../data/sites.js'
 import type { Marker } from '../data/markers'
+import type { LatLon } from '../data/geo'
 import { loadPhotos, photoKey, type Draft, type Selection } from '../state'
 import { PlanStep } from './PlanStep'
 import { SitesStep } from './SitesStep'
@@ -50,6 +51,7 @@ const MarsGlobe = UntypedGlobe as unknown as ComponentType<{
     selected: number
     onSelect: (index: number) => void
     onAddSite: (point: [number, number]) => void
+    onRoutePoints: (points: LatLon[]) => void
     onAddEva: (eva: Eva) => void
     flag: 'caution' | null
   }
@@ -84,6 +86,7 @@ export function SitesPage({
   onSettle,
   onMarkers,
   onAddSite,
+  onRoutePoints,
   onAddEva,
   onUpdateSite,
   onRemoveSite,
@@ -105,6 +108,7 @@ export function SitesPage({
   onSettle: () => void
   onMarkers: (markers: Marker[]) => void
   onAddSite: (lat: number, lon: number) => void
+  onRoutePoints: (points: LatLon[]) => void
   onAddEva: (lat: number, lon: number, hours: number, note: string) => void
   onUpdateSite: (index: number, patch: Partial<Site>, field: string) => void
   onRemoveSite: (index: number) => void
@@ -145,6 +149,7 @@ export function SitesPage({
       selected: selection?.list === 'site' ? selection.index : -1,
       onSelect: (index: number) => onSelect({ list: 'site', index }),
       onAddSite: ([lat, lon]: [number, number]) => onAddSite(lat, lon),
+      onRoutePoints,
       onAddEva: (eva: Eva) => onAddEva(eva.target[0], eva.target[1], taskHours(eva.seconds), evaNote(eva)),
       // Tasks nobody is assigned to, or more EVA task hours than a phase gives.
       flag: plan && (plan.unassignedTaskHours > 0 || plan.evaOverruns.length > 0) ? ('caution' as const) : null,

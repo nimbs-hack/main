@@ -19,6 +19,12 @@ import type { Site } from '../api'
 import type { Marker } from '../data/markers'
 import { DATUM_OFFSET } from '../data/terrain-source.js'
 import { formatElevation, formatLatLon } from '../format.js'
+import { loadPhotos, photoKey } from '../data/photos'
+import { portraitUrl } from '../components/portrait-assets'
+import { crewPin, crewPortrait, drawLeader, leader, linkHover } from '../components/map-label-dom'
+import { placeMapLabels, type LabelAnchor, type Offset, type Rect } from '../components/map-label-layout'
+import '../components/map-labels.css'
+import '../components/map-controls.css'
 import { h } from './dom'
 import { type IconName, icon } from './icons'
 import type { CrewPosition } from './live'
@@ -117,117 +123,52 @@ export function createMap(root: HTMLElement, events: MapEvents) {
   let selected = -1
   let pins: Array<{ x: number; y: number; site: number }> = []
   const icons = new Map<string, HTMLImageElement>()
-  const crewLayer = h('div', { class: 'crew-pins', 'aria-label': 'Simulated crew positions' })
+  const crewLayer = h('div', { class: 'map-labels', 'aria-label': 'Simulated crew positions' })
+  const crewSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  crewSvg.setAttribute('aria-hidden', 'true')
+  crewLayer.append(crewSvg)
+  let photos = loadPhotos()
   let crew: CrewPosition[] = []
   let crewSignature = ''
   let crewQueued = 0
-  let crewButtons: HTMLButtonElement[] = []
-
-  // Crew markers closer than this on screen merge into one group marker, as
-  // a map merges nearby pins. Zooming in, or clicking the group, parts them.
-  const GROUP_PX = 26
-  let crewPaused = false
-  let groupButtons: HTMLButtonElement[] = []
-  function groupButton(n: number): HTMLButtonElement {
-    let button = groupButtons[n]
-    if (!button) {
-      const made = h(
-        'button',
-        {
-          type: 'button',
-          class: 'crew-pin crew-pin--group',
-          onclick: () => lookAt(Number(made.dataset.lat), Number(made.dataset.lon), MIN_DIST),
-        },
-        h('span', { class: 'crew-pin__dot', 'aria-hidden': 'true' }),
-        h('span', { class: 'crew-pin__name' }),
-      )
-      button = groupButtons[n] = made
-      crewLayer.append(made)
-    }
-    return button
-  }
+  let crewRows: Array<{ button: HTMLButtonElement; line: ReturnType<typeof leader>; pin: SVGPathElement }> = []
+  let crewOffsets = new Map<string, Offset>()
 
   function drawCrew(b: Basis, tz: number) {
-    const labels: Array<[number, number, number, number]> = []
-    // Labels give way to the map controls and the site-order key.
+    const obstacles: Rect[] = []
     const mapBox = root.getBoundingClientRect()
     for (const control of [rail, key]) {
       if (!control.getClientRects().length) continue
       const box = control.getBoundingClientRect()
-      labels.push([box.left - mapBox.left, box.top - mapBox.top, box.width, box.height])
+      obstacles.push({ x: box.left - mapBox.left, y: box.top - mapBox.top, width: box.width, height: box.height })
     }
-    for (const pin of pins) labels.push([pin.x - 12, pin.y - 12, 32 + pen.measureText(sites[pin.site]!.name).width, 24])
-
-    // Puts a marker at a point, and its name on the side that covers least.
-    const place = (button: HTMLButtonElement, point: [number, number]) => {
-      button.hidden = false
-      button.style.left = `${point[0]}px`
-      button.style.top = `${point[1]}px`
-      const label = button.querySelector<HTMLElement>('.crew-pin__name')!
-      const width = label.offsetWidth,
-        height = label.offsetHeight
-      const choices = [
-        [20, -height / 2],
-        [-width - 20, -height / 2],
-        [-width / 2, 22],
-        [-width / 2, -height - 22],
-      ]
-      let side = choices[0]!
-      let best = Infinity
-      for (const candidate of choices) {
-        const left = point[0] + candidate[0]!,
-          top = point[1] + candidate[1]!
-        const outside = left < 0 || top < 0 || left + width > view.width || top + height > view.height
-        const overlaps = labels.filter(([x, y, w, h]) => left < x + w + 4 && x < left + width + 4 && top < y + h + 4 && y < top + height + 4).length
-        const score = overlaps + (outside ? 100 : 0)
-        if (score < best) {
-          side = candidate
-          best = score
-        }
-      }
-      label.style.left = `${22 + side[0]!}px`
-      label.style.top = `${22 + side[1]!}px`
-      labels.push([point[0] + side[0]!, point[1] + side[1]!, width, height])
-    }
-
-    // Each person joins the first group whose first member is near on screen.
-    const groups: Array<{ members: number[]; points: Array<[number, number]>; scene: Array<[number, number]> }> = []
+    for (const pin of pins) obstacles.push({ x: pin.x - 12, y: pin.y - 12, width: 32 + pen.measureText(sites[pin.site]!.name).width, height: 24 })
+    const anchors: LabelAnchor[] = []
     crew.forEach((person, i) => {
-      crewButtons[i]!.hidden = true
+      const row = crewRows[i]!
+      row.button.hidden = true
+      row.line.group.setAttribute('display', 'none')
+      row.pin.setAttribute('display', 'none')
       const [x, y] = toScene(person.lat, person.lon)
       const point = project(b, view, [x - target.x, y - target.y, zOf(x, y) - tz])
-      if (!point || point[0] < 16 || point[1] < 16 || point[0] > view.width - 16 || point[1] > view.height - 16) return
-      const near = groups.find(({ points: [first] }) => Math.hypot(first![0] - point[0], first![1] - point[1]) < GROUP_PX)
-      if (near) {
-        near.members.push(i)
-        near.points.push(point)
-        near.scene.push([x, y])
-      } else groups.push({ members: [i], points: [point], scene: [[x, y]] })
+      if (!point || point[0] < 0 || point[1] < 0 || point[0] > view.width || point[1] > view.height) return
+      row.button.hidden = false
+      row.button.style.width = ''
+      anchors.push({ id: String(i), x: point[0], y: point[1], width: Math.min(320, row.button.scrollWidth + 8), selected: person.self })
+      row.pin.setAttribute('transform', `translate(${point[0]} ${point[1]})`)
+      row.pin.removeAttribute('display')
     })
-
-    const mean = (values: Array<[number, number]>): [number, number] => [
-      values.reduce((sum, v) => sum + v[0], 0) / values.length,
-      values.reduce((sum, v) => sum + v[1], 0) / values.length,
-    ]
-    let used = 0
-    for (const { members, points, scene } of groups) {
-      if (members.length === 1) {
-        place(crewButtons[members[0]!]!, points[0]!)
-        continue
-      }
-      const people = members.map((i) => crew[i]!)
-      const you = people.some((person) => person.self)
-      const button = groupButton(used++)
-      const [lat, lon] = toGeo(...mean(scene))
-      button.dataset.lat = String(lat)
-      button.dataset.lon = String(lon)
-      button.classList.toggle('crew-pin--self', you)
-      const paused = crewPaused ? ' · Paused' : ''
-      button.querySelector('.crew-pin__name')!.textContent = `${you ? `You and ${people.length - 1} ${people.length === 2 ? 'other' : 'others'}` : `${people.length} crew`}${paused}`
-      button.setAttribute('aria-label', `Group: ${people.map((person) => (person.self ? `you, ${person.name}` : person.name)).join(', ')}. Zoom in to tell them apart.`)
-      place(button, mean(points))
+    // As in the planner, crew keep their portraits even when they gather.
+    const placed = placeMapLabels(anchors, view.width, view.height, obstacles, crewOffsets)
+    crewOffsets = new Map(placed.map((label) => [label.id, label.offset]))
+    for (const row of crewRows) row.button.hidden = true
+    for (const label of placed) {
+      const row = crewRows[Number(label.id)]!
+      row.button.hidden = false
+      row.button.style.transform = `translate(${label.box.x}px, ${label.box.y}px)`
+      row.button.style.width = `${label.box.width}px`
+      drawLeader(row.line, label)
     }
-    for (let n = used; n < groupButtons.length; n++) groupButtons[n]!.hidden = true
   }
 
   const east = () => METERS_PER_DEGREE * origin.cos
@@ -374,7 +315,14 @@ export function createMap(root: HTMLElement, events: MapEvents) {
       if (zOf(target.x, target.y) + eye[2] > zOf(target.x + eye[0], target.y + eye[1]) + view.dist * 0.03) break
       view.pitch = Math.min(TOP_DOWN, view.pitch + 0.08)
     }
-    tilt.setAttribute('aria-pressed', String(view.pitch < TOP_DOWN - 0.1))
+    const tilted = view.pitch < TOP_DOWN - 0.1
+    tilt.textContent = tilted ? '2D' : '3D'
+    tilt.setAttribute('aria-label', tilted ? 'Look straight down' : 'Tilt the view')
+    tilt.dataset.tip = tilted ? 'Look straight down' : 'Tilt the view'
+    needle.style.rotate = `${-view.heading * 180 / Math.PI}deg`
+    const north = Math.abs(view.heading) < 0.01
+    compass.setAttribute('aria-label', north ? 'Facing north' : 'Turn to face north')
+    compass.dataset.tip = north ? 'Facing north' : 'Turn to face north'
     events.scale(pixelsPerMeter(view))
     if (slow && !coarse) {
       coarse = true
@@ -676,10 +624,20 @@ export function createMap(root: HTMLElement, events: MapEvents) {
   const button = (face: IconName, tip: string, act: () => void) =>
     h('button', { type: 'button', class: 'rail__button', 'aria-label': tip, 'data-tip': tip, onclick: act }, icon(face))
   const zoom = (factor: number) => zoomAbout(view.width / 2, view.height / 2, factor)
-  const tilt = button('tilt', 'Tilt the view. Right-drag or Shift+drag also turns it.', () => {
+  const compass = button('north', 'Facing north', () => { view.heading = 0; moved() })
+  compass.classList.add('nav__compass')
+  const needle = compass.querySelector('svg')!
+  needle.replaceChildren()
+  for (const [d, name] of [['M12 3 16 12H8Z', 'nav__needle-n'], ['M12 21 8 12H16Z', 'nav__needle-s']]) {
+    const path = document.createElementNS(needle.namespaceURI, 'path')
+    path.setAttribute('d', d!)
+    path.setAttribute('class', name!)
+    needle.append(path)
+  }
+  const tilt = h('button', { type: 'button', class: 'nav__text', onclick: () => {
     view.pitch = view.pitch < TOP_DOWN - 0.1 ? TOP_DOWN : TILTED
     moved()
-  })
+  } }, '2D')
   const routeKeyText = h('span', null, 'Site order. Finding the route')
   const orderKey = h(
     'span',
@@ -704,20 +662,13 @@ export function createMap(root: HTMLElement, events: MapEvents) {
   )
   const simulationKey = h('span', { class: 'key__item', hidden: true }, 'Crew positions simulated')
   const key = h('p', { class: 'key', hidden: true }, reliefKey, orderKey, blockedKey, simulationKey)
-  // The page shows these controls only while its sidebar is open.
-  const rail = h(
-    'div',
-    { class: 'rail', role: 'group', 'aria-label': 'Map view', hidden: true },
-    button('plus', 'Zoom in', () => zoom(0.6)),
-    button('minus', 'Zoom out', () => zoom(1 / 0.6)),
-    button('fit', 'Show the whole mission', () => fit()),
-    !renderer.flat && [
-      button('north', 'North up', () => {
-        view.heading = 0
-        moved()
-      }),
-      tilt,
-    ],
+  const fitButton = button('fit', 'Fit mission', () => fit())
+  fitButton.classList.add('nav__section')
+  const rail = h('div', { class: 'nav rail', role: 'group', 'aria-label': 'Map view', hidden: true },
+    !renderer.flat && [compass, tilt],
+    h('button', { type: 'button', 'aria-label': 'Zoom in', 'data-tip': 'Zoom in', onclick: () => zoom(0.5) }, '+'),
+    h('button', { type: 'button', 'aria-label': 'Zoom out', 'data-tip': 'Zoom out', onclick: () => zoom(2) }, '−'),
+    fitButton,
   )
   // Corner brackets mark the edges of the map, as in the editor.
   const corners = ['tl', 'tr', 'bl', 'br'].map((corner) => h('span', { class: `map__corner map__corner--${corner}`, 'aria-hidden': 'true' }))
@@ -758,6 +709,8 @@ export function createMap(root: HTMLElement, events: MapEvents) {
     // plan's site positions in visiting order. Frames them. False when the
     // mission has no place to show, so the map has nothing to load.
     show(nextSites: Site[], nextMarkers: Marker[], nextStops: number[]): boolean {
+      photos = loadPhotos()
+      crewSignature = ''
       sites = nextSites
       stops = nextStops.filter((i) => sites[i] !== undefined)
       markers = nextMarkers
@@ -826,25 +779,26 @@ export function createMap(root: HTMLElement, events: MapEvents) {
     setCrew(next: CrewPosition[], paused: boolean) {
       simulationKey.hidden = next.length === 0
       crew = next
-      crewPaused = paused
       const signature = JSON.stringify(next.map((p) => [p.member, p.name, p.self, paused]))
       if (signature !== crewSignature) {
         crewSignature = signature
-        crewButtons = crew.map((person) =>
-          h(
-            'button',
-            {
-              type: 'button',
-              class: person.self ? 'crew-pin crew-pin--self' : 'crew-pin',
-              'aria-label': `${person.self ? 'You, ' : ''}${person.name}${paused ? ', paused position' : ''}`,
-              onclick: () => events.selectCrew(person.member),
-            },
-            h('span', { class: 'crew-pin__dot', 'aria-hidden': 'true' }),
-            h('span', { class: 'crew-pin__name' }, `${person.self ? 'You' : person.name}${paused ? ' · Paused' : ''}`),
-          ),
-        )
-        groupButtons = []
-        crewLayer.replaceChildren(...crewButtons)
+        crewOffsets.clear()
+        crewSvg.replaceChildren()
+        crewLayer.replaceChildren(crewSvg)
+        crewRows = crew.map((person) => {
+          const button = h('button', {
+            type: 'button',
+            class: `map-label${person.self ? ' is-selected' : ''}`,
+            'aria-label': `${person.self ? 'You, ' : ''}${person.name}${paused ? ', paused position' : ''}`,
+            onclick: () => events.selectCrew(person.member),
+          }, crewPortrait(person.name, portraitUrl(person.name, photos[photoKey(person.name)])),
+          h('span', null, `${person.name}${person.self ? ' · You' : ''}${paused ? ' · Paused' : ''}`))
+          crewLayer.append(button)
+          const line = leader(crewSvg)
+          const pin = crewPin(crewSvg)
+          linkHover(button, line, crewSvg)
+          return { button, line, pin }
+        })
       }
       if (!crewQueued)
         crewQueued = requestAnimationFrame(() => {

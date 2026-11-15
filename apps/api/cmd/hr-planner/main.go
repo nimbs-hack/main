@@ -180,7 +180,7 @@ func unpack(args arguments, out io.Writer) error {
 // demo walks the whole path a mission takes: JSON on the ground, bytes on
 // the link, a plan on the other side. The example is built into the program.
 func demo(out io.Writer) error {
-	source, err := planner.Examples.ReadFile("examples/ares-3.json")
+	source, err := planner.Examples.ReadFile("examples/gale-expedition.json")
 	if err != nil {
 		return err
 	}
@@ -202,7 +202,7 @@ func demo(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	file := filepath.Join(os.TempDir(), "ares-3.mhr")
+	file := filepath.Join(os.TempDir(), "gale-expedition.mhr")
 	if err := os.WriteFile(file, data, 0o644); err != nil {
 		return err
 	}

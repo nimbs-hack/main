@@ -22,7 +22,7 @@ export const MAX_FAN = 3
 const OFFSETS: Offset[] = (() => {
   const out: Offset[] = []
   for (const dx of [20, 44, 84]) {
-    for (const dy of [0, -32, 32, -64, 64]) {
+    for (const dy of [0, -32, 32, -64, 64, -96, 96, -128, 128]) {
       for (const side of ['right', 'left'] as const) out.push({ side, dx, dy })
     }
   }
@@ -155,6 +155,7 @@ export function placeMapLabels(
     const kept = previous.get(anchor.id)
     const candidates = kept ? [kept, ...OFFSETS] : OFFSETS
     let fallback: PlacedLabel | undefined
+    let crowded: PlacedLabel | undefined
     let found: PlacedLabel | undefined
     for (const offset of candidates) {
       const { box, leader } = labelGeometry(anchor, offset)
@@ -162,9 +163,13 @@ export function placeMapLabels(
       if (boxes.some((rect) => overlaps(box, rect))) continue
       if (pins.some((pin) => pin.id !== anchor.id && overlaps(box, pin.rect, 0))) continue
       const own: Segment[] = [[leader[0], leader[1]], [leader[1], leader[2]]]
-      if (own.some((segment) => boxes.some((rect) => segmentHitsRect(segment, rect)))) continue
-      if (leaders.some((segment) => segmentHitsRect(segment, box))) continue
       const label = { ...anchor, box, side: offset.side, offset }
+      if (own.some((segment) => boxes.some((rect) => segmentHitsRect(segment, rect))) || leaders.some((segment) => segmentHitsRect(segment, box))) {
+        // Crew can share a ground point with a site. Keep their names apart
+        // even when a leader must pass behind another label to leave it.
+        crowded ??= label
+        continue
+      }
       if (own.some((segment) => leaders.some((other) => segmentsCross(segment, other)))) {
         fallback ??= label
         continue
@@ -172,7 +177,7 @@ export function placeMapLabels(
       found = label
       break
     }
-    found ??= fallback
+    found ??= fallback ?? crowded
     // A narrow view may have no room beside the selected anchor. Pull its
     // label inside the view rather than lose it.
     if (!found && anchor.selected) {

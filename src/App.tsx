@@ -729,6 +729,7 @@ function Editor({ catalog, planned: opening, library: kept, fileId: openingId }:
               onSelect={setSelection}
               onSettle={settle}
               onMarkers={(markers) => commit((d) => ({ ...d, markers }))}
+              onRoutePoints={(points) => commit((d) => edits.setRoutePoints(d, points.map(([lat, lon]) => [degrees(lat), degrees(lon)])))}
               onAddSite={(lat, lon) =>
                 structural((d) => edits.addSite(d, degrees(lat), degrees(lon)), {
                   list: 'site',
