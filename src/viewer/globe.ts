@@ -5,16 +5,18 @@
 // The tiles are equirectangular: planetocentric latitude, east longitude from
 // -180 at the left edge. The sphere leans by Mars' axial tilt and turns once
 // every two minutes, or stays still when the reader asks for less motion.
+//
+// Texture detail follows the globe's size on screen. Level 1, 1024 by 512,
+// draws first because it loads fastest. Then the level whose visible half is
+// at least as wide as the globe replaces it: level 2 at 2048 by 1024, or
+// level 3 at 4096 by 2048, the finest that ships in public/tiles.
 
 import { localTilePath } from '../data/basemap.js'
 import { h } from './dom'
 
-const LEVEL = 1
-const COLUMNS = 4
-const ROWS = 2
 const TILE = 256
-const WIDTH = COLUMNS * TILE
-const HEIGHT = ROWS * TILE
+const FIRST_LEVEL = 1
+const FINEST_LEVEL = 3
 const TILT = (25.2 * Math.PI) / 180
 const SECONDS_PER_TURN = 120
 // Light from the upper left, in front of the sphere.
@@ -24,27 +26,35 @@ const LIGHT = (() => {
   return [x / length, y / length, z / length]
 })()
 
-function loadTile(y: number, x: number): Promise<HTMLImageElement> {
+function loadTile(level: number, y: number, x: number): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image()
     image.onload = () => resolve(image)
     image.onerror = () => reject(new Error('globe tile failed'))
-    image.src = import.meta.env.BASE_URL + localTilePath(LEVEL, y, x)
+    image.src = import.meta.env.BASE_URL + localTilePath(level, y, x)
   })
 }
 
-async function loadTexture(): Promise<Uint32Array> {
+type Texture = { level: number; width: number; height: number; data: Uint32Array }
+
+// A level is 2^(level+1) tiles across and 2^level down.
+async function loadTexture(level: number): Promise<Texture> {
+  const columns = 2 ** (level + 1)
+  const rows = 2 ** level
   const sheet = document.createElement('canvas')
-  sheet.width = WIDTH
-  sheet.height = HEIGHT
+  sheet.width = columns * TILE
+  sheet.height = rows * TILE
   const pen = sheet.getContext('2d', { willReadFrequently: true })!
   const jobs: Promise<void>[] = []
-  for (let y = 0; y < ROWS; y++) {
-    for (let x = 0; x < COLUMNS; x++) jobs.push(loadTile(y, x).then((image) => pen.drawImage(image, x * TILE, y * TILE)))
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < columns; x++) jobs.push(loadTile(level, y, x).then((image) => pen.drawImage(image, x * TILE, y * TILE)))
   }
   await Promise.all(jobs)
-  return new Uint32Array(pen.getImageData(0, 0, WIDTH, HEIGHT).data.buffer)
+  return { level, width: sheet.width, height: sheet.height, data: new Uint32Array(pen.getImageData(0, 0, sheet.width, sheet.height).data.buffer) }
 }
+
+// The coarsest level whose visible half, half its width, covers `size` pixels.
+const levelFor = (size: number) => Math.min(FINEST_LEVEL, Math.max(FIRST_LEVEL, Math.ceil(Math.log2(size / TILE))))
 
 export function createGlobe(root: HTMLElement) {
   const canvas = h('canvas', { class: 'globe__sphere', 'aria-hidden': 'true' })
@@ -52,15 +62,18 @@ export function createGlobe(root: HTMLElement) {
   root.prepend(canvas)
   const still = matchMedia('(prefers-reduced-motion: reduce)')
 
-  let texture: Uint32Array | null = null
+  let texture: Texture | null = null
+  // The level being fetched, so a resize does not fetch it twice.
+  let loading = 0
   let failed = false
   let size = 0
   let frame: ImageData | null = null
-  // For each lit pixel of the disc: where it is in the frame, its texture
-  // row start, its texture column before turning, its brightness, and its
-  // opacity, which smooths the edge of the disc.
+  // For each lit pixel of the disc: where it is in the frame, how far down
+  // and across the texture it reads before turning (0 to 1, so any level
+  // fits), its brightness, and its opacity, which smooths the edge of the
+  // disc.
   let pixels = new Int32Array(0)
-  let rows = new Int32Array(0)
+  let rows = new Float32Array(0)
   let columns = new Float32Array(0)
   let shades = new Float32Array(0)
   let alphas = new Uint32Array(0)
@@ -92,31 +105,50 @@ export function createGlobe(root: HTMLElement) {
         // The edge of the disc fades out over the last pixel.
         const edge = Math.min(1, (1 - Math.sqrt(r2)) * size * 0.5)
         lit.push(py * size + px)
-        row.push(Math.min(HEIGHT - 1, Math.floor(((Math.PI / 2 - lat) / Math.PI) * HEIGHT)) * WIDTH)
-        column.push(((lon + Math.PI) / (2 * Math.PI)) * WIDTH)
+        row.push((Math.PI / 2 - lat) / Math.PI)
+        column.push((lon + Math.PI) / (2 * Math.PI))
         shade.push(0.12 + 0.88 * light)
         alpha.push(Math.round(255 * edge) << 24)
       }
     }
     pixels = Int32Array.from(lit)
-    rows = Int32Array.from(row)
+    rows = Float32Array.from(row)
     columns = Float32Array.from(column)
     shades = Float32Array.from(shade)
     alphas = Uint32Array.from(alpha)
     paint(performance.now())
+    sharpen()
+  }
+
+  // Loads the level the globe's size needs, if a coarser one is showing.
+  function sharpen() {
+    const wanted = levelFor(size)
+    if (failed || !texture || wanted <= texture.level || wanted === loading) return
+    loading = wanted
+    loadTexture(wanted).then(
+      (finer) => {
+        if (loading === wanted) loading = 0
+        if (!texture || finer.level > texture.level) texture = finer
+        paint(performance.now())
+      },
+      // The coarser texture stays. It is only less sharp.
+      () => void (loading = 0),
+    )
   }
 
   function paint(now: number) {
     queued = 0
     if (!frame || !texture) return
     lastPaint = now
-    const turn = still.matches ? 0 : ((now / 1000 / SECONDS_PER_TURN) % 1) * WIDTH
+    const { width, height, data } = texture
+    const turn = still.matches ? 0 : ((now / 1000 / SECONDS_PER_TURN) % 1) * width
     const out = new Uint32Array(frame.data.buffer)
     out.fill(0)
     for (let i = 0; i < pixels.length; i++) {
-      let x = Math.floor(columns[i]! + turn)
-      if (x >= WIDTH) x -= WIDTH
-      const color = texture[rows[i]! + x]!
+      let x = Math.floor(columns[i]! * width + turn)
+      if (x >= width) x -= width
+      const y = Math.min(height - 1, Math.floor(rows[i]! * height))
+      const color = data[y * width + x]!
       const s = shades[i]!
       // Little endian RGBA: red in the low byte, alpha in the high one.
       out[pixels[i]!] = alphas[i]! | (((((color >>> 16) & 255) * s) << 16) | ((((color >>> 8) & 255) * s) << 8) | ((color & 255) * s))
@@ -132,10 +164,11 @@ export function createGlobe(root: HTMLElement) {
   }
 
   new ResizeObserver(layout).observe(canvas)
-  loadTexture().then(
-    (pixels) => {
-      texture = pixels
+  loadTexture(FIRST_LEVEL).then(
+    (first) => {
+      texture = first
       paint(performance.now())
+      sharpen()
     },
     () => {
       failed = true
