@@ -24,7 +24,8 @@ export type HudSample = {
 export type HudRoute = {
   // Where the start came from, like "Curiosity · sol 5073", when known.
   startName: string | null
-  // Planned start, UTC milliseconds. Null when the Schedule start is empty.
+  // EVA start, UTC milliseconds: the one picked on the Sites page, or the one
+  // worked out there. Null in snapshots saved before the start was worked out.
   when: number | null
   limits: Limits
   samples: HudSample[]

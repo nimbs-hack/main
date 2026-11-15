@@ -39,7 +39,7 @@ Status: **meets** means the code does what the requirement asks. **Estimate** me
 | V1 4030 | Career effective dose under 600 mSv | Meets as an estimate | Per crew member mission dose in Review, with a caution over the limit. `DoseRate` in `apps/api/internal/planner/plan.go` |
 | V1 4031 | Under 250 mSv per solar particle event | Partly | Dose figures assume a quiet sun and say so. No event dose model |
 | V1 4029 | ALARA | Partly | EVA dose shown per route, so shorter routes can be picked. Routes are not ranked by dose |
-| V2 6099, 6100 | Watch space weather, alert when radiation may exceed limits | Meets for forecasts | CME forecast checked against the EVA window, caution past its horizon. Review's Best EVA start ranks each sol's start by it, so a sol with a CME hit is not picked. With no start typed in, the Sites page uses that best start |
+| V2 6099, 6100 | Watch space weather, alert when radiation may exceed limits | Meets for forecasts | CME forecast checked against the EVA window, caution past its horizon. The start search ranks each sol's start by it, so a sol with a CME hit is not picked, and the Time tab's calendar marks each date by it. With no start picked, the Sites page uses the best start |
 
 Dose rates by phase: cruise 1.84 mSv/day (Curiosity RAD), Mars surface 0.67 (RAD at Gale), Moon surface 1.369 (Chang'e 4), station 0.5 (top of the ISS range), Earth 0.0066. Habitat time uses the unshielded surface rate, so it is an upper bound. A 960-day Mars long stay comes to about 1,064 mSv, over the career limit, and the planner says so.
 

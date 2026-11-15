@@ -3,10 +3,9 @@ import { kcal, kwh, meters, num, range, words } from '../numbers'
 import { siteLegs, totalLegs } from './legs'
 import { Readout } from '../components/controls'
 import { FactRow } from './parts'
-import { lazy, Suspense } from 'react'
 
 // Its own chunk, so the HUD page, which shares hud-snapshot, never loads the editor.
-const EvaTime = lazy(() => import('./EvaTime').then((m) => ({ default: m.EvaTime })))
+import { EvaTime } from './EvaTime'
 
 const SECONDS_PER_DAY = 86400
 
@@ -140,9 +139,7 @@ export function ReviewStep({
           </ul>
         )}
 
-        <Suspense fallback={null}>
-          <EvaTime missionId={missionId} sites={mission.sites} tasks={mission.tasks} selectedSite={selectedSite} />
-        </Suspense>
+        <EvaTime missionId={missionId} />
 
         <section>
           <h2 className="planner__title">To supply, {plan.marginPercent}% margin included</h2>

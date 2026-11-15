@@ -7,6 +7,7 @@ import { ageDays, celsius, formatAge } from '../data/weather'
 import { CME_MARGIN, formatFrom, formatWhen, strength } from '../data/space-weather'
 import { COARSE_DETAIL, detailLabel } from '../data/terrain-detail'
 import { formatSolarTime } from '../data/mars-time'
+import { dateKey, monthGrid } from '../data/eva-calendar'
 import './plan-panel.css'
 
 /*
@@ -32,9 +33,12 @@ import './plan-panel.css'
  *   space       { status, data, check, start, end, now }: CME forecasts at
  *               Mars checked against the EVA window, times in ms
  *   when        EVA start typed in, UTC ISO string, or null for automatic
- *   autoStart   with no start typed in: { window, searched }, the best
- *               window found from now on (src/data/eva-window), null when
- *               no sol has one; searched is false before there is a start
+ *   calendar    Map of UTC date to the best EVA window of that date's sol,
+ *               over the next six weeks, or null before there is a start
+ *   startCheck  { window, picked, searched }: the EVA start's window
+ *               (src/data/eva-window), picked on the calendar or worked out
+ *               from the next seven sols. Null when none was found, and
+ *               searched false before there is a start point
  *   terrainDetail { finest, coarsest, coarse } in meters under the route
  *   onWhen(iso | null)
  *   onPlacing(mode), onRemoveWaypoint(index), onLimits(limits),
@@ -67,6 +71,109 @@ const ICONS = {
 function Icon({ name }) {
   return (
     <svg className="plan__icon" viewBox="0 0 24 24" aria-hidden="true">{ICONS[name]}</svg>
+  )
+}
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
+const MARK = { go: { sign: '●', text: 'clear window' }, caution: { sign: '△', text: 'window with cautions' }, 'no-go': { sign: '▲', text: 'no safe window' } }
+const utcTime = (t) => new Date(t).toISOString().slice(11, 16)
+
+// The EVA start, picked on a month calendar of UTC dates. Each date in the
+// search shows the best start of the sol that falls on it, marked by how good
+// it is. A date picks that start, and the time field moves it within the
+// date. Best goes back to the start worked out from the next seven sols.
+function StartCalendar({ days, start, when, now, onWhen }) {
+  const monthOf = (t) => ({ year: new Date(t).getUTCFullYear(), month: new Date(t).getUTCMonth() })
+  const [shown, setShown] = useState(() => monthOf(start ?? now))
+  // A new start in another month brings that month up.
+  const startMonth = start ? dateKey(start).slice(0, 7) : null
+  useEffect(() => {
+    if (start) setShown(monthOf(start))
+  }, [startMonth])
+  const keys = days ? [...days.keys()].sort() : []
+  const first = monthOf(now)
+  const last = keys.length ? monthOf(Date.parse(keys.at(-1))) : first
+  const index = (m) => m.year * 12 + m.month
+  const step = (by) => setShown(({ year, month }) => monthOf(Date.UTC(year, month + by, 1)))
+  const picked = start ? dateKey(start) : null
+  const today = dateKey(now)
+  // 24-hour UTC, typed. A browser's time field follows its locale and can
+  // show 4:40 PM, so this is text that applies once it reads HH:MM.
+  const [typing, setTyping] = useState(null)
+  const time = typing ?? (start ? utcTime(start) : '')
+  const typeTime = (text) => {
+    setTyping(text)
+    if (picked && /^([01]\d|2[0-3]):[0-5]\d$/.test(text)) onWhen(`${picked}T${text}:00Z`)
+  }
+  return (
+    <div className="calendar">
+      <div className="calendar__head">
+        <button type="button" className="plan__tool" aria-label="Previous month" data-tip="Previous month" disabled={index(shown) <= index(first)} onClick={() => step(-1)}>‹</button>
+        <strong>{MONTHS[shown.month]} {shown.year}</strong>
+        <button type="button" className="plan__tool" aria-label="Next month" data-tip="Next month" disabled={index(shown) >= index(last)} onClick={() => step(1)}>›</button>
+      </div>
+      <table className="calendar__grid">
+        <thead>
+          <tr>{WEEKDAYS.map((d) => <th key={d} scope="col">{d}</th>)}</tr>
+        </thead>
+        <tbody>
+          {monthGrid(shown.year, shown.month).map((week, w) => (
+            <tr key={w}>
+              {week.map((day, d) => {
+                if (day === null) return <td key={d} />
+                const key = dateKey(day)
+                const best = days?.get(key)
+                const mark = best && MARK[best.verdict]
+                const label = `${new Date(day).getUTCDate()} ${MONTHS[shown.month]}`
+                return (
+                  <td key={d}>
+                    <button
+                      type="button"
+                      className={`calendar__day${key === today ? ' is-today' : ''}`}
+                      aria-pressed={key === picked}
+                      aria-label={best ? `${label}, ${mark.text}, best start ${utcTime(best.start)} UTC` : `${label}, not searched`}
+                      title={best ? `Best start ${utcTime(best.start)} UTC, ${formatSolarTime(best.startSolar)} local solar time${best.reasons.length ? `. ${best.reasons.map((r) => r.text).join('. ')}` : ''}` : undefined}
+                      disabled={!best}
+                      onClick={() => onWhen(new Date(best.start).toISOString().slice(0, 19) + 'Z')}
+                    >
+                      {new Date(day).getUTCDate()}
+                      {mark && <span className={`calendar__mark is-${best.verdict === 'no-go' ? 'hazard' : best.verdict}`} aria-hidden="true">{mark.sign}</span>}
+                    </button>
+                  </td>
+                )
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="calendar__time">
+        <label className={`plan__box plan__box--edit plan__box--when${when ? ' is-modified' : ''}`}>
+          <input
+            type="text"
+            inputMode="numeric"
+            maxLength={5}
+            placeholder="HH:MM"
+            aria-label="EVA start time, UTC, 24-hour"
+            disabled={!start}
+            value={time}
+            onChange={(event) => typeTime(event.target.value)}
+            onBlur={() => setTyping(null)}
+          />
+          <span className="plan__unit">UTC</span>
+        </label>
+        {when && (
+          <button type="button" className="plan__tool plan__tool--text" onClick={() => onWhen(null)} title="Go back to the best window of the next seven sols, worked out from the Sun, temperature and space weather">
+            Best
+          </button>
+        )}
+      </div>
+      <ul className="calendar__key">
+        {Object.entries(MARK).map(([verdict, { sign, text }]) => (
+          <li key={verdict}><span className={`calendar__mark is-${verdict === 'no-go' ? 'hazard' : verdict}`} aria-hidden="true">{sign}</span> {text[0].toUpperCase() + text.slice(1)}</li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
@@ -302,7 +409,7 @@ function stopIndex(plan, i) {
 }
 
 export default function PlanPanel({
-  plan, limits, assessment, status, placing, dose, weather, space, when, autoStart = null, terrainDetail,
+  plan, limits, assessment, status, placing, dose, weather, space, when, startCheck = null, calendar = null, terrainDetail,
   onWhen, onPlacing, onRemoveWaypoint, onLimits, onRetry, onWalk, onClear, onAddToMission,
   missionSites, missionPlan, missionFlag = null, missionFocus = -1,
 }) {
@@ -397,28 +504,16 @@ export default function PlanPanel({
       { label: 'No image', group: 'Ground in HiRISE', basic: true, hint: 'No HiRISE image was read here, so rocks are unknown, not absent. The mosaics cover the four rover sites.', node: <Value unit="m" level={sum('unchecked') > 0 ? 'caution' : null}>{a ? Math.round(sum('unchecked')) : pending}</Value> },
     ],
     time: [
-      { label: 'EVA start', group: 'Schedule', basic: true, wide: true, hint: 'UTC. Left to itself, the start is the best window from now on: the Sun up until an hour past the end, the warmest air, and no CME forecast during it. Type a time to set your own. Space weather is checked against this window.', node: (
-        <span className={`plan__box plan__box--edit plan__box--when${when ? ' is-modified' : ''}`}>
-          <input
-            type="datetime-local"
-            aria-label="EVA start, UTC"
-            value={(when ?? (space?.start ? new Date(space.start).toISOString() : '')).slice(0, 16)}
-            onChange={(event) => onWhen(event.target.value ? `${event.target.value}:00Z` : null)}
-          />
-          {when ? <button type="button" onClick={() => onWhen(null)} title="Go back to the best window, worked out from the Sun, temperature and space weather">Best</button> : <span className="plan__unit">UTC</span>}
-        </span>
+      { label: 'EVA start', group: 'Schedule', basic: true, full: true, node: (
+        <StartCalendar days={calendar} start={space?.start ?? null} when={when} now={space?.now ?? Date.now()} onWhen={onWhen} />
       ) },
-      { label: 'Start chosen', group: 'Schedule', basic: true, wide: true, hint: 'How the EVA start was set. The Review page shows the best start of each sol and why.', node: (
-        <Value level={when || !autoStart?.searched ? null : !autoStart.window ? 'caution' : { go: null, caution: 'caution', 'no-go': 'hazard' }[autoStart.window.verdict]}>
-          {when
-            ? 'Typed in'
-            : !autoStart?.searched
-              ? 'Now, until there is a start point'
-              : !autoStart.window
-                ? 'Now: no daylight in the next 7 sols'
-                : autoStart.window.verdict === 'go'
-                  ? `Best window, ${formatSolarTime(autoStart.window.startSolar)} local`
-                  : `Best available, ${formatSolarTime(autoStart.window.startSolar)} local. ${autoStart.window.reasons[0]?.text ?? ''}`}
+      { label: 'Start chosen', group: 'Schedule', basic: true, wide: true, hint: 'How the EVA start was set. Space weather and the verdict are checked against this start.', node: (
+        <Value level={!startCheck?.searched ? null : !startCheck.window ? 'caution' : { go: null, caution: 'caution', 'no-go': 'hazard' }[startCheck.window.verdict]}>
+          {!startCheck?.searched
+            ? 'Now, until there is a start point'
+            : !startCheck.window
+              ? 'Now: no daylight in the next 7 sols'
+              : `${startCheck.picked ? 'Your pick' : startCheck.window.verdict === 'go' ? 'Best window' : 'Best available'}, ${formatSolarTime(startCheck.window.startSolar)} local${startCheck.window.reasons.length ? `. ${startCheck.window.reasons[0].text}` : ''}`}
         </Value>
       ) },
       { label: 'EVA end', group: 'Schedule', basic: true, wide: true, hint: 'Start plus the route time, or the whole budget before there is a route.', node: <Value unit={space ? 'UTC' : undefined}>{space ? formatWhen(new Date(space.end).toISOString()).replace(' UTC', '') : '—'}</Value> },

@@ -91,6 +91,8 @@ describe('EVA windows', () => {
     const w = assessStart({ point: GALE, duration: 2 * 3600, now: NOW }, night)
     expect(w.verdict).toBe('no-go')
     expect(w.reasons[0]!.text).toBe('Sun is down during the EVA')
+    // The daylight reason on its own, for the route verdict.
+    expect(w.daylight).toEqual({ level: 'no-go', text: 'Sun is down during the EVA' })
   })
 
   test('starts an EVA that outlasts the day at sunrise, and calls it no-go', () => {

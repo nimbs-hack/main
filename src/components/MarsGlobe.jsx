@@ -44,7 +44,9 @@ import { formatDistance } from './RouteProfile'
 import { STATIONS, fetchWeather, formatPressure, formatTemp, nearestStation, pressureAt } from '../data/weather'
 import { COARSE_DETAIL, coverage, detailAt, detailLabel, detailMeters, levelAt, levelForSpacing, outline, slopeBaseline } from '../data/terrain-detail'
 import { checkSpaceWeather, fetchSpaceWeather } from '../data/space-weather'
-import { findWindows } from '../data/eva-window'
+import { assessStart, findWindows } from '../data/eva-window'
+import { windowsByDate } from '../data/eva-calendar'
+
 import { TERRAIN_API_PATH } from '../data/terrain-source'
 import { addToolOverlay } from './tool-overlay'
 import { addMarker as addMapMarker, loadMarkers, removeMarker, saveMarkers, updateMarker } from '../data/markers'
@@ -64,6 +66,9 @@ import { hudRoute, saveHud } from '../data/hud-snapshot'
 import MapLabels from './MapLabels'
 import { StageIcon } from './icons'
 import { createCrewSimulation } from '../data/crew-simulation'
+
+// Sols the EVA start calendar searches, about six weeks.
+const CALENDAR_SOLS = 42
 
 const MARS = MARS_SPHERE
 const ROVERS = SITES.filter((s) => s.traverse)
@@ -941,23 +946,36 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   // reading, and no CME forecast to arrive during it. Now, when no sol in
   // the search has one.
   const evaDuration = routeAssessment?.total ?? limits.eva
-  const autoWindow = useMemo(() => {
-    if (plan.when || !plan.start) return null
+  // The search runs from now, rounded to its ten-minute step so it reruns
+  // at most that often.
+  const searchFrom = Math.floor(clock / 600_000) * 600_000
+  const windowInput = useMemo(() => {
+    if (!plan.start) return null
     const near = nearestStation(plan.start, STATION_POSITIONS)
     const report = near && weather[near.id]
     const reading = report && report !== 'error' ? report.latest : null
-    return findWindows({ point: plan.start, duration: evaDuration, now: clock, reading, space: spaceWeather.data }).best
-  }, [plan.when, plan.start, evaDuration, clock, weather, spaceWeather.data])
+    return { point: plan.start, duration: evaDuration, now: searchFrom, reading, space: spaceWeather.data }
+  }, [plan.start, evaDuration, searchFrom, weather, spaceWeather.data])
+  // The best start of each sol over the next six weeks, for the calendar,
+  // and the best of the next seven sols, the start when none is picked.
+  const calendar = useMemo(() => (windowInput ? windowsByDate(findWindows({ ...windowInput, sols: CALENDAR_SOLS })) : null), [windowInput])
+  const autoWindow = useMemo(() => (plan.when || !windowInput ? null : findWindows({ ...windowInput, sols: 7 }).best), [plan.when, windowInput])
+  // A picked start gets the same checks as a worked-out one.
+  const pickedWindow = useMemo(() => (plan.when && windowInput ? assessStart(windowInput, Date.parse(plan.when)) : null), [plan.when, windowInput])
+  const startWindow = plan.when ? pickedWindow : autoWindow
   const evaStart = plan.when ? Date.parse(plan.when) : (autoWindow?.start ?? clock)
   const evaEnd = evaStart + evaDuration * 1000
   const spaceCheck = useMemo(
     () => (spaceWeather.status === 'loading' ? null : checkSpaceWeather(spaceWeather.data, evaStart, evaEnd, clock)),
     [spaceWeather, evaStart, evaEnd, clock],
   )
-  const assessment = useMemo(
-    () => (routeAssessment && spaceCheck ? withReasons(routeAssessment, spaceCheck.reasons) : routeAssessment),
-    [routeAssessment, spaceCheck],
-  )
+  // The verdict takes the space weather and the daylight at the start: an
+  // EVA that runs into the dark is no-go, whatever the ground.
+  const assessment = useMemo(() => {
+    if (!routeAssessment) return routeAssessment
+    const reasons = [...(startWindow?.daylight ? [startWindow.daylight] : []), ...(spaceCheck?.reasons ?? [])]
+    return reasons.length ? withReasons(routeAssessment, reasons) : routeAssessment
+  }, [routeAssessment, spaceCheck, startWindow])
   // Finest and coarsest terrain under the route, for the Terrain tab.
   const terrainDetail = useMemo(() => {
     const details = (profile.samples ?? []).map((sample) => sample.detail).filter((d) => d != null)
@@ -1359,7 +1377,8 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
           weather={planWeather && { ...planWeather, atHigh: highWeather?.estimate ?? null }}
           space={{ status: spaceWeather.status, data: spaceWeather.data, check: spaceCheck, start: evaStart, end: evaEnd, now: clock }}
           when={plan.when ?? null}
-          autoStart={plan.when ? null : { window: autoWindow, searched: Boolean(plan.start) }}
+          startCheck={{ window: startWindow, picked: Boolean(plan.when), searched: Boolean(plan.start) }}
+          calendar={calendar}
           onWhen={(when) => setPlan((current) => ({ ...current, when }))}
           terrainDetail={terrainDetail}
           onPlacing={setPlacing}

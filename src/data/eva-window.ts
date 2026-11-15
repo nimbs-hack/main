@@ -44,6 +44,9 @@ export type EvaWindow = {
   ground: Range | null
   verdict: Verdict
   reasons: Reason[]
+  // The Sun's part of the reasons: down during the EVA, or setting less than
+  // an hour after it. Null when the daylight is enough.
+  daylight: Reason | null
   // CMEs within the window and its margin.
   cmes: Arrival[]
   // 0 to 1: how warm the window is on the daily curve.
@@ -145,9 +148,13 @@ function windowAt(ctx: Context, start: number): EvaWindow {
   const set = sunset(start, lat, lon)
   const daylightLeft = set === null ? 0 : set - (start + duration)
   const check = checkSpaceWeather(ctx.space, start, start + duration, ctx.now)
-  const reasons: Reason[] = [...check.reasons]
-  if (Math.min(...sun) <= 0) reasons.unshift({ level: 'no-go', text: 'Sun is down during the EVA' })
-  else if (daylightLeft < DAYLIGHT_RESERVE) reasons.unshift({ level: 'caution', text: 'Less than an hour of daylight after the end' })
+  const daylight: Reason | null =
+    Math.min(...sun) <= 0
+      ? { level: 'no-go', text: 'Sun is down during the EVA' }
+      : daylightLeft < DAYLIGHT_RESERVE
+        ? { level: 'caution', text: 'Less than an hour of daylight after the end' }
+        : null
+  const reasons: Reason[] = daylight ? [daylight, ...check.reasons] : [...check.reasons]
   const verdict: Verdict = reasons.some((r) => r.level === 'no-go') ? 'no-go' : reasons.length ? 'caution' : 'go'
   return {
     start,
@@ -160,6 +167,7 @@ function windowAt(ctx: Context, start: number): EvaWindow {
     ground: temperatures(reading?.groundMinK ?? null, reading?.groundMaxK ?? null, ground),
     verdict,
     reasons,
+    daylight,
     cmes: check.during,
     warmth: air.reduce((a, b) => a + b, 0) / air.length,
   }
