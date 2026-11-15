@@ -7,6 +7,7 @@ import { portraitUrl } from '../components/Portrait'
 import { SITES } from '../data/sites.js'
 import type { Marker } from '../data/markers'
 import { loadPhotos, photoKey, type Draft, type Selection } from '../state'
+import { PlanStep } from './PlanStep'
 import { SitesStep } from './SitesStep'
 
 // What the map hands over when an assessed EVA is added to the mission.
@@ -41,6 +42,8 @@ const MarsGlobe = UntypedGlobe as unknown as ComponentType<{
     markers: Marker[]
     onMarkers: (markers: Marker[]) => void
     sites: Site[]
+    // The plan: site positions in visiting order.
+    route: number[]
     taskCounts: number[]
     selected: number
     onSelect: (index: number) => void
@@ -49,6 +52,7 @@ const MarsGlobe = UntypedGlobe as unknown as ComponentType<{
     flag: 'caution' | null
   }
   missionPanel: (hooks: MapHooks) => ReactNode
+  missionPlan: ReactNode
 }>
 
 // Tasks are stored in half hours, from 0.5 to 127.5.
@@ -61,10 +65,11 @@ function evaNote({ verdict, distance, maxSlope }: Eva): string {
   return `${verdict.toUpperCase()} ${(distance / 1000).toFixed(1)} km${slope}`.slice(0, 31)
 }
 
-// The sites stage: the map with the plan panel on its left. The mission's
-// sites and tasks are its Sites plan tab, next to the EVA route settings. The
-// EVA route runs through the sites in list order. An assessed EVA becomes a
-// task at its target site, so its hours count against the phase.
+// The sites stage: the map with the plan panel on its left. Its Sites tab
+// holds the mission's places and their tasks, and its Plan tab the order the
+// EVA visits them in, next to the EVA route settings. The route runs through
+// the plan's stops. An assessed EVA becomes a task at its target site, so its
+// hours count against the phase.
 export function SitesPage({
   missionId,
   catalog,
@@ -78,8 +83,10 @@ export function SitesPage({
   onAddSite,
   onAddEva,
   onUpdateSite,
-  onMoveSite,
   onRemoveSite,
+  onAddStop,
+  onMoveStop,
+  onRemoveStop,
   onAddTask,
   onUpdateTask,
   onRemoveTask,
@@ -96,8 +103,10 @@ export function SitesPage({
   onAddSite: (lat: number, lon: number) => void
   onAddEva: (lat: number, lon: number, hours: number, note: string) => void
   onUpdateSite: (index: number, patch: Partial<Site>, field: string) => void
-  onMoveSite: (index: number, to: number) => void
   onRemoveSite: (index: number) => void
+  onAddStop: (site: number) => void
+  onMoveStop: (index: number, to: number) => void
+  onRemoveStop: (index: number) => void
   onAddTask: (site: number) => void
   onUpdateTask: (index: number, patch: Partial<Task>, field: string) => void
   onRemoveTask: (index: number) => void
@@ -124,6 +133,7 @@ export function SitesPage({
       markers: draft.markers ?? [],
       onMarkers,
       sites: draft.sites,
+      route: draft.route ?? [],
       taskCounts,
       selected: selection?.list === 'site' ? selection.index : -1,
       onSelect: (index: number) => onSelect({ list: 'site', index }),
@@ -158,7 +168,6 @@ export function SitesPage({
               placing={placing === 'site'}
               onPlacing={(on) => onPlacing(on ? 'site' : null)}
               onUpdateSite={onUpdateSite}
-              onMoveSite={onMoveSite}
               onRemoveSite={onRemoveSite}
               onAddTask={onAddTask}
               onUpdateTask={onUpdateTask}
@@ -166,6 +175,11 @@ export function SitesPage({
             />
           </div>
         )}
+        missionPlan={
+          <div className="sites" onBlur={onSettle}>
+            <PlanStep draft={draft} onAdd={onAddStop} onMove={onMoveStop} onRemove={onRemoveStop} />
+          </div>
+        }
       />
       <StatusBar viewer={viewer} status={status} credits={credits} />
     </>

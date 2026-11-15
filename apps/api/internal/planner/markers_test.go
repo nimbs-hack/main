@@ -134,3 +134,46 @@ func TestSiteInfoOverTheLimitIsRefused(t *testing.T) {
 		t.Errorf("err = %v", c.err)
 	}
 }
+
+func TestThePlanSurvivesARoundTripAndMayComeBackToASite(t *testing.T) {
+	mission := bare(t)
+	mission.Sites = []Site{{Name: "A", Lat: 1, Lon: 2}, {Name: "B", Lat: 3, Lon: 4}, {Name: "C", Lat: 5, Lon: 6}}
+	mission.Route = []int{0, 1, 0, 2, 0}
+	file := encode(t, mission)
+	decoded, err := DecodeMission(file)
+	if err != nil || file[6]>>4 != 4 || !reflect.DeepEqual(decoded.Route, mission.Route) {
+		t.Fatalf("version %d, route %v, %v", file[6]>>4, decoded.Route, err)
+	}
+	mission.Route = nil
+	if file := encode(t, mission); file[6]>>4 != 3 {
+		t.Errorf("a mission without a plan wrote version %d, want 3", file[6]>>4)
+	}
+}
+
+func TestAPlanStopMustBeASiteAndDifferFromTheOneBefore(t *testing.T) {
+	sites := []any{map[string]any{"name": "A", "lat": 1.0, "lon": 2.0}, map[string]any{"name": "B", "lat": 3.0, "lon": 4.0}}
+	for _, test := range []struct {
+		route []any
+		want  string
+	}{
+		{[]any{0.0, 0.0}, "plan stop 2 is A again"},
+		{[]any{0.0, 2.0}, "plan stop 2 must point at one of 2 entries"},
+		{[]any{"B", "A"}, ""},
+	} {
+		source := map[string]any{"route": test.route, "sites": sites}
+		mission := example(t, "ares-3.json")
+		mission.Sites, mission.Tasks = nil, nil
+		data, _ := json.Marshal(mission)
+		var raw map[string]any
+		_ = json.Unmarshal(data, &raw)
+		raw["sites"], raw["route"] = source["sites"], source["route"]
+		data, _ = json.Marshal(raw)
+		got, err := ParseMission(data, nil)
+		switch {
+		case test.want == "" && (err != nil || !reflect.DeepEqual(got.Route, []int{1, 0})):
+			t.Errorf("%v: route %v, %v", test.route, got.Route, err)
+		case test.want != "" && (err == nil || !strings.Contains(err.Error(), test.want)):
+			t.Errorf("%v: err = %v, want %q", test.route, err, test.want)
+		}
+	}
+}

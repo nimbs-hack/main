@@ -40,6 +40,8 @@ import './plan-panel.css'
  *   missionSites    content of an extra rail tab, the mission's sites and
  *                   tasks. missionFlag puts a dot on its icon, and the tab
  *                   opens when missionFocus, the selected site, changes.
+ *   missionPlan     content of a second extra tab, the plan: the sites in
+ *                   the order the EVA visits them.
  */
 
 const ICONS = {
@@ -51,6 +53,7 @@ const ICONS = {
   dose: <><circle cx="12" cy="12" r="1.5" /><path d="M12 4a8 8 0 0 1 7 4l-5 3M5 8a8 8 0 0 1 7-4M5 8l5 3M12 20a8 8 0 0 1-7-4l5-3M19 16a8 8 0 0 1-7 4v-6" /></>,
   site: <path d="M12 21s-6-6-6-11a6 6 0 0 1 12 0c0 5-6 11-6 11ZM12 12a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />,
   mission: <path d="M6 21V4m0 1h11l-2.5 4L17 13H6" />,
+  stops: <path d="M10 6h10M10 12h10M10 18h10M4 5v3M3.5 12h2l-2 3h2M3.5 18h2" />,
   limits: <path d="M5 4v16M12 4v16M19 4v16M3 8h4M10 15h4M17 10h4" />,
   pick: <path d="M12 3v4M12 17v4M3 12h4M17 12h4M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z" />,
   search: <><circle cx="11" cy="11" r="6" /><path d="m20 20-4.5-4.5" /></>,
@@ -234,7 +237,8 @@ const CATS = [
   { id: 'dose', icon: 'dose', title: 'Radiation' },
   { id: 'weather', icon: 'weather', title: 'Weather' },
 ]
-const MISSION_CAT = { id: 'mission', icon: 'mission', title: 'Sites plan' }
+const MISSION_CAT = { id: 'mission', icon: 'mission', title: 'Sites' }
+const PLAN_CAT = { id: 'stops', icon: 'stops', title: 'Plan' }
 
 // A reading older than this is flagged on the rail. The rovers report about
 // once a sol, so a month without one means the feed stopped.
@@ -277,7 +281,7 @@ function stopIndex(plan, i) {
 export default function PlanPanel({
   plan, limits, assessment, status, placing, dose, weather, space, when, terrainDetail,
   onWhen, onPlacing, onRemoveWaypoint, onLimits, onRetry, onWalk, onClear, onAddToMission,
-  missionSites, missionFlag = null, missionFocus = -1,
+  missionSites, missionPlan, missionFlag = null, missionFocus = -1,
 }) {
   const searchId = useId()
   const [advanced, setAdvanced] = useState(false)
@@ -286,7 +290,8 @@ export default function PlanPanel({
   const [active, setActive] = useState('route')
   // The verdict shows its first reason. The rest open under it on request.
   const [allReasons, setAllReasons] = useState(false)
-  const cats = missionSites ? [MISSION_CAT, ...CATS] : CATS
+  const extras = { mission: missionSites, stops: missionPlan }
+  const cats = [...(missionSites ? [MISSION_CAT] : []), ...(missionPlan ? [PLAN_CAT] : []), ...CATS]
   // Picking a mission site, on the map or by adding one, opens its tab.
   useEffect(() => {
     if (missionSites && missionFocus >= 0) setActive('mission')
@@ -410,8 +415,9 @@ export default function PlanPanel({
       { label: 'Dose rate', group: 'Reference', basic: false, hint: dose ? `${dose.site} RAD mean, ${dose.when}` : undefined, node: <Value unit="mSv/day">{dose ? (dose.measurement.value * 1000).toFixed(2) : '—'}</Value> },
       { label: 'EVA dose', group: 'This route', basic: true, hint: dose ? `${dose.site} RAD mean, ${dose.when}. Assumes a quiet sun; a solar particle event can raise it many times over.` : undefined, node: <Value unit="mSv">{a?.dose != null ? (a.dose * 1000).toFixed(3) : pending}</Value> },
     ],
-    // The mission tab holds a list, not setting rows.
+    // The mission tabs hold lists, not setting rows.
     mission: [],
+    stops: [],
   }
 
   const visible = (row) => (query ? match(row.label) : advanced || row.basic)
@@ -427,11 +433,12 @@ export default function PlanPanel({
     dose: space?.check?.reasons.some((r) => r.level === 'no-go') ? 'hazard' : space?.check?.reasons.length ? 'caution' : null,
     weather: weatherAge !== null && weatherAge > STALE_DAYS ? 'caution' : null,
     mission: missionFlag,
+    stops: null,
   }
 
   // One tab, or every tab's matches while searching.
   const tabs = query ? CATS : CATS.filter((cat) => cat.id === active)
-  const showMission = active === 'mission' && !query
+  const showMission = Boolean(extras[active]) && !query
   const panel = tabs.map((cat) => {
     const shown = rows[cat.id].filter(visible)
     const groups = [...new Set(shown.map((row) => row.group))]
@@ -464,10 +471,10 @@ export default function PlanPanel({
 
       <div className="plan__main">
         {showMission && (
-          <section className="plan__card plan__card--limits" aria-label="Mission sites">
-            <div className="plan__scroll" id="plan-panel" role="tabpanel" aria-labelledby="plan-tab-mission">
-              <h3 className="plan__tab-title"><Icon name="mission" />{MISSION_CAT.title}</h3>
-              {missionSites}
+          <section className="plan__card plan__card--limits" aria-label={current.title}>
+            <div className="plan__scroll" id="plan-panel" role="tabpanel" aria-labelledby={`plan-tab-${active}`}>
+              <h3 className="plan__tab-title"><Icon name={current.icon} />{current.title}</h3>
+              {extras[active]}
             </div>
           </section>
         )}

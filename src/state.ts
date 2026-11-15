@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import type { Astronaut, Catalog, Mission, Phase, Site, Task } from './api'
+import { withoutRepeats } from './data/stops'
 
 // What the editor holds. Same shape as a Mission, but a field may be out of
 // range or empty while someone is typing in it.
@@ -352,19 +353,7 @@ export function createEdits(catalog: Catalog) {
       ...draft,
       sites: replaceAt(draft.sites, index, { ...draft.sites[index]!, ...patch }),
     }),
-    // Moves a site to position `to` in the list, which is the order the route
-    // visits them. Its tasks go with it.
-    moveSite: (draft: Draft, index: number, to: number): Draft => {
-      if (to < 0 || to >= draft.sites.length || to === index) return draft
-      const order = draft.sites.map((_, i) => i)
-      order.splice(to, 0, ...order.splice(index, 1))
-      return {
-        ...draft,
-        sites: order.map((i) => draft.sites[i]!),
-        tasks: retarget(draft, (task) => ({ ...task, site: order.indexOf(task.site) })),
-      }
-    },
-    // A site takes its tasks with it.
+    // A site takes its tasks and its plan stops with it.
     removeSite: (draft: Draft, index: number): Draft => ({
       ...draft,
       sites: draft.sites.filter((_, i) => i !== index),
@@ -372,6 +361,24 @@ export function createEdits(catalog: Catalog) {
         if (task.site === index) return null
         return task.site > index ? { ...task, site: task.site - 1 } : task
       }),
+      route: withoutRepeats((draft.route ?? []).filter((site) => site !== index).map((site) => (site > index ? site - 1 : site))),
+    }),
+
+    // The plan. A stop is a site; the same site cannot follow itself.
+    addStop: (draft: Draft, site: number): Draft => {
+      const route = draft.route ?? []
+      return route.at(-1) === site ? draft : { ...draft, route: [...route, site] }
+    },
+    // Unchanged when the move would put a site after itself.
+    moveStop: (draft: Draft, index: number, to: number): Draft => {
+      const route = [...(draft.route ?? [])]
+      if (to < 0 || to >= route.length || to === index) return draft
+      route.splice(to, 0, ...route.splice(index, 1))
+      return withoutRepeats(route).length === route.length ? { ...draft, route } : draft
+    },
+    removeStop: (draft: Draft, index: number): Draft => ({
+      ...draft,
+      route: withoutRepeats((draft.route ?? []).filter((_, i) => i !== index)),
     }),
 
     // An EVA planned on the map: a site at its target, unless one is already

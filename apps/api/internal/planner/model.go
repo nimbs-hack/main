@@ -228,6 +228,9 @@ type Mission struct {
 	Tasks         []Task      `json:"tasks"`
 	Markers       []Marker    `json:"markers,omitempty"`
 	Briefing      string      `json:"briefing,omitempty"`
+	// The plan: site positions in the order the EVA visits them, from zero.
+	// A site may come back, but not twice in a row. Empty means no plan.
+	Route []int `json:"route,omitempty"`
 }
 
 const (
@@ -530,6 +533,19 @@ func parseMission(raw, rawRoster any) (Mission, error) {
 		tasks = append(tasks, c.task(entry, fmt.Sprintf("task %d", i+1), names, siteNames, len(phases)))
 	}
 
+	route := []int{}
+	for i, entry := range c.list(or(source["route"], []any{}), "route", 0) {
+		where := fmt.Sprintf("plan stop %d", i+1)
+		site := c.reference(entry, siteNames, true, where)
+		if c.err == nil && i > 0 && site == route[i-1] {
+			c.failf("%s is %s again; a stop must differ from the one before it", where, siteNames[site])
+		}
+		route = append(route, site)
+	}
+	if len(route) == 0 {
+		route = nil
+	}
+
 	markers, briefing := c.missionExtras(source)
 	mission := Mission{
 		Name:          c.text(or(source["name"], ""), "mission name", 0),
@@ -541,6 +557,7 @@ func parseMission(raw, rawRoster any) (Mission, error) {
 		Tasks:         tasks,
 		Markers:       markers,
 		Briefing:      briefing,
+		Route:         route,
 	}
 	if c.err != nil {
 		return Mission{}, c.err

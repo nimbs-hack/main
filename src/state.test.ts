@@ -38,16 +38,25 @@ test('an existing astronaut profile wins over the former sample entry', () => {
   expect(loadRoster(catalog)).toEqual([edited])
 })
 
-test('moving a site reorders the route and its tasks go with it', async () => {
+test('the plan visits sites in its own order, may come back, and never repeats a stop', async () => {
   const { createEdits } = await import('./state')
   const edits = createEdits({ taskKinds: ['sample'] } as unknown as Parameters<typeof createEdits>[0])
+  type D = Parameters<typeof edits.addStop>[0]
   const site = (name: string) => ({ name, lat: 0, lon: 0 })
-  const task = (at: number, note: string) => ({ site: at, phase: 0, crew: [], kind: 'sample', eva: true, hours: 1, note })
-  const draft = { sites: [site('A'), site('B'), site('C')], tasks: [task(0, 'a'), task(2, 'c'), task(1, 'b')] } as unknown as Parameters<typeof edits.moveSite>[0]
-  const moved = edits.moveSite(draft, 2, 0)
-  expect(moved.sites.map((s) => s.name)).toEqual(['C', 'A', 'B'])
-  // Each task still points at the site it was made for.
-  expect(moved.tasks.map((t) => [moved.sites[t.site]!.name, t.note])).toEqual([['A', 'a'], ['C', 'c'], ['B', 'b']])
-  expect(edits.moveSite(draft, 0, -1)).toBe(draft)
-  expect(edits.moveSite(draft, 2, 3)).toBe(draft)
+  const task = (at: number) => ({ site: at, phase: 0, crew: [], kind: 'sample', eva: true, hours: 1, note: '' })
+  let draft = { sites: [site('A'), site('B'), site('C')], tasks: [task(1), task(2)] } as unknown as D
+  // A, B, A, C, A
+  for (const stop of [0, 1, 0, 2, 0]) draft = edits.addStop(draft, stop)
+  expect(draft.route).toEqual([0, 1, 0, 2, 0])
+  // A site cannot follow itself, by adding or by moving.
+  expect(edits.addStop(draft, 0)).toBe(draft)
+  expect(edits.moveStop(draft, 1, 2)).toBe(draft)
+  const three = { ...draft, route: [0, 1, 2] }
+  expect(edits.moveStop(three, 2, 0).route).toEqual([2, 0, 1])
+  // Removing B leaves A, A, C, A, which becomes A, C, A.
+  expect(edits.removeStop(draft, 1).route).toEqual([0, 2, 0])
+  // Removing site B drops its stops and its task, and C becomes site 1.
+  const gone = edits.removeSite(draft, 1)
+  expect(gone.route).toEqual([0, 1, 0])
+  expect(gone.tasks.map((t) => t.site)).toEqual([1])
 })

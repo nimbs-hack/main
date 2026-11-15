@@ -49,15 +49,15 @@ import (
 //	  u8      hours, in half hours
 //	  text    note
 //	version 4 only
-//	  u16     byte length of UTF-8 JSON object with markers, briefing and site info
+//	  u16     byte length of UTF-8 JSON object with markers, briefing, site info and plan
 //	  bytes   JSON object, validated with the mission
 //	u16       CRC-16/CCITT-FALSE over every byte before it
 //
 // Version 2 added sites and tasks. Version 3 lets a task have more than one
 // crew member. A version 2 file reads as a version 3 file whose tasks have at
-// most one. Version 4 adds symbols, a briefing and site info after the
-// tasks. Missions without those fields still write version 3. Versions 2 to
-// 4 are read.
+// most one. Version 4 adds symbols, a briefing, site info and the plan after
+// the tasks. Missions without those fields still write version 3. Versions 2
+// to 4 are read.
 const (
 	FormatVersion = 4
 	// The oldest version DecodePacket reads.
@@ -132,7 +132,7 @@ func EncodeMission(input Mission, options PacketOptions) ([]byte, error) {
 	w.u16(0) // length, filled in below
 
 	version := 3
-	if len(mission.Markers) > 0 || mission.Briefing != "" || siteInfo(mission.Sites) != nil {
+	if len(mission.Markers) > 0 || mission.Briefing != "" || siteInfo(mission.Sites) != nil || len(mission.Route) > 0 {
 		version = FormatVersion
 	}
 	w.u8(version<<4 | slices.Index(MissionTypes, mission.Type))
@@ -205,7 +205,7 @@ func EncodeMission(input Mission, options PacketOptions) ([]byte, error) {
 	}
 
 	if version >= 4 {
-		extra, err := json.Marshal(missionExtras{Markers: mission.Markers, Briefing: mission.Briefing, SiteInfo: siteInfo(mission.Sites)})
+		extra, err := json.Marshal(missionExtras{Markers: mission.Markers, Briefing: mission.Briefing, SiteInfo: siteInfo(mission.Sites), Route: mission.Route})
 		if err != nil {
 			return nil, err
 		}
@@ -394,7 +394,7 @@ func DecodePacket(data []byte) (Packet, error) {
 			return refuse("symbols and briefing are not a JSON object")
 		}
 		r.at += length
-		mission["markers"], mission["briefing"] = extra["markers"], extra["briefing"]
+		mission["markers"], mission["briefing"], mission["route"] = extra["markers"], extra["briefing"], extra["route"]
 		// Entries past the last site are ignored.
 		if info, ok := extra["siteInfo"].([]any); ok {
 			for i, text := range info {

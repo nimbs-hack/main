@@ -511,6 +511,33 @@ button:disabled {
   white-space: pre-line;
 }
 
+/* The plan: one line per stop, with the leg into it. */
+.stops {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.stop {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+}
+
+.stop .site__name {
+  font-size: var(--text-body);
+}
+
+.stop__role {
+  color: var(--color-text-dim);
+  font-size: var(--text-label);
+}
+
+.stop .site__note {
+  grid-column: 1 / -1;
+  margin-top: 0;
+}
+
 .site__note {
   margin-top: var(--space-1);
   font-size: var(--text-data);

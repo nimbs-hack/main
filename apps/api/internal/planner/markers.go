@@ -23,6 +23,7 @@ type missionExtras struct {
 	Briefing string   `json:"briefing,omitempty"`
 	// One entry for each site, in site order, when any site has info.
 	SiteInfo []string `json:"siteInfo,omitempty"`
+	Route    []int    `json:"route,omitempty"`
 }
 
 // siteInfo is the sites' info in site order, or nil when no site has any.

@@ -62,7 +62,7 @@ The open mission is in the top bar on the right. Its name is typed in place, and
 | Home | Every mission file, newest first, each with its sites joined by straight lines over CTX imagery. A row opens to what the mission holds, with a line for each stage, **Edit** and **Delete**. The file being edited is outlined. A first run starts with the example mission. The list lives in this browser and holds 50 missions. |
 | Crew | People as tiles: a portrait, the call sign, then two buttons. **Select** puts someone on the crew, and those on it are outlined in red. The arrow opens a person's information under their row to read or edit. Search narrows the tiles by call sign or role. **+** beside the title adds a new person. A portrait shows when `src/assets/crew` has a file named after the call sign. **Add photo** in a person's information puts your own picture on their tile, cut to a square. Added photos stay in this browser and are not in the mission file. |
 | Phases | Set each phase's length, recycling, EVA hours and power. Drag a phase by its grip to reorder. A changed value turns blue and offers the preset back. |
-| Sites | **Sites plan**, the first tab of the left panel, holds the mission's sites in the order they are visited. **Add sites** and click the map once for each. Open a site to give it a name, info (what is there and why the crew goes) and coordinates, and to add its tasks. Under **Who**, press each person who works on a task; everyone pressed works its whole length. **Move up** and **Move down** change the order. The EVA route runs through the sites in that order, first to last, and follows the list when a site is added, moved or removed. The Route tab then gives a go or no-go verdict for the walk. **Add EVA to mission** gives the last site one EVA task as long as the travel and the work. |
+| Sites | The left panel opens with two tabs. **Sites** holds the mission's places: **Add sites** and click the map once for each, then open a site to give it a name, info (what is there and why the crew goes) and coordinates, and to add its tasks. Under **Who**, press each person who works on a task; everyone pressed works its whole length. **Plan** sets the order the EVA visits them: pick a site under **Next stop** and press **Add stop**, as many times as needed. A site can come back, as in A, B, A, C, A, but not twice in a row. **Earlier**, **Later** or dragging a stop reorders the plan. The EVA route runs through the stops in order, and follows the plan when it changes. With no plan yet, it visits the sites in list order. The Route tab then gives a go or no-go verdict for the walk. **Add EVA to mission** gives the last stop's site one EVA task as long as the travel and the work. |
 | Review | The only page with results: cautions, totals, loads on the vehicle, tables by phase, by site with distances, and by crew, with the mission's sites on the planet beside them. Save the mission file here. |
 
 A stage with a problem in it is marked **Fix** on its tab. The Review tab shows how many cautions are waiting.
@@ -101,7 +101,7 @@ Once a file opens, the page is the map. A mission with no sites or symbols has n
 | --- | --- |
 | Live view | Each crew member's suit sensors and position. **You are** picks who you are, and is not saved |
 | Mission | Cautions, supplies with the margin, vehicle loads on demand |
-| Sites | Each site with its coordinates, info, the distance along the route from the site before it, and its tasks. Then the mission's symbols |
+| Sites | The plan, stop by stop, with the distance along the route from the stop before. Then each site with its coordinates, info and tasks, then the mission's symbols |
 | Crew | Each person's radiation dose against the career limit, mission totals and daily needs |
 | Phases | Supplies by phase |
 | Briefing | The briefing text |
@@ -112,7 +112,7 @@ Edit passes the mission through the browser's storage under `nimbs:planner:incom
 
 Crew positions and suit readings are both simulated. Nothing here is telemetry, and none of it goes into the mission file. **Data sources**, at the bottom of the tab, says so.
 
-The crew walks as one group along the route, from the first site to the last in their order and back, at 1.2 m/s. Until the route is found they walk straight from site to site. They walk two abreast, 6 m apart, with 8 m between rows. With only one site, each person circles it instead. When markers would overlap on screen, the map draws one group marker instead, such as "You and 5 others". Zoom in, or click the group, to see each person. **You are** picks which crew member is you, the first by default.
+The crew walks as one group along the route, from the plan's first stop to its last and back, at 1.2 m/s. Until the route is found they walk straight from stop to stop. They walk two abreast, 6 m apart, with 8 m between rows. With only one site, each person circles it instead. When markers would overlap on screen, the map draws one group marker instead, such as "You and 5 others". Zoom in, or click the group, to see each person. **You are** picks which crew member is you, the first by default.
 
 Each crew member is a row showing heart rate and oxygen time left. Open the row, or click the person on the map, for their suit readings:
 
@@ -129,10 +129,10 @@ Everything updates once a second without redrawing terrain. Pause freezes positi
 ### The viewer's map
 
 - The ground is the same terrain and CTX imagery as the editor's globe, drawn by about 600 lines of WebGL 1 code. Close in at the four rover sites it shows the HiRISE mosaics. The cursor readout gives coordinates and elevation above the MOLA areoid.
-- Sites are numbered squares in file order. A dashed line routes through them in that order: site 1 to site 2, then site 2 to site 3, and on to the last.
-- The viewer finds the route itself (`src/viewer/route.ts`), because a mission file holds sites, not the route the planner's Sites stage picked. Each leg is the planner's search (`src/data/route-options.ts`) on the terrain the map loaded, the shortest path under the default Nominal limits (20°). It reads no night infrared, so it offers no Thermal or Detour route. The planner can find others.
-- Until the region's terrain is in, the line runs straight and the key says "Finding the route". A leg with no path under the limit stays straight and turns red and wider. The key lists it, and the Sites tab says which limit would work. A leg with no terrain at an end stays straight too, and the Sites tab calls the route unknown.
-- The Sites tab gives distances along the route.
+- Sites are numbered squares. A dashed line routes through the mission's plan, stop by stop: A to B, then B back to A, then A to C, for a plan A, B, A, C. A mission without a plan visits its sites in list order.
+- The viewer finds the route itself (`src/viewer/route.ts`), because a mission file holds the plan's stops, not the path the planner's route search picked between them. Each leg is the planner's search (`src/data/route-options.ts`) on the terrain the map loaded, the shortest path under the default Nominal limits (20°). It reads no night infrared, so it offers no Thermal or Detour route. The planner can find others.
+- Until the region's terrain is in, the line runs straight and the key says "Finding the route". A leg with no path under the limit stays straight and turns red and wider. The key lists it, and the plan in the Sites tab says which limit would work. A leg with no terrain at an end stays straight too, and the plan calls the route unknown.
+- The Sites tab gives each leg's distance along the route.
 - Drag to move, scroll to zoom, right-drag or Shift+drag to turn and tilt. On a touch screen, pinch to zoom and twist to turn. The arrow keys move the map, Shift with them turns and tilts it, and + and - zoom. With the sidebar open, buttons on the right zoom, show the whole mission, face north and tilt.
 - Heights are always three times taller than true, and the map key says "Heights ×3". There is no switch back to true scale. Slopes look steeper than they are, so judge them from the planner, not the picture. The flat map has no relief and drops the note.
 - Clicking a site's name in the panel brings it to the middle of the map. Clicking a pin opens the site in the panel.

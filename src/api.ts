@@ -60,6 +60,8 @@ export interface Mission {
   tasks: Task[]
   markers?: Marker[]
   briefing?: string
+  // The plan: site positions in visiting order. See src/data/stops.ts.
+  route?: number[]
 }
 
 export interface Range {

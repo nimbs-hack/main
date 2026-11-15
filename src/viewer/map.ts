@@ -1,5 +1,5 @@
-// The viewer's map: the mission's sites on 3D ground, with the route from
-// each site to the next (./route) once the region's terrain is in.
+// The viewer's map: the mission's sites on 3D ground, with the route through
+// the plan's stops (./route) once the region's terrain is in.
 //
 // The ground is flat-projected around the middle of the mission: meters east
 // and north of that point. That is exact enough for one site and the routes
@@ -110,6 +110,8 @@ export function createMap(root: HTMLElement, events: MapEvents) {
   let mission = 0
   let loads = 0
   let sites: Site[] = []
+  // The plan: site positions in visiting order.
+  let stops: number[] = []
   let route: SiteRoute | null = null
   let markers: Marker[] = []
   let selected = -1
@@ -325,10 +327,12 @@ export function createMap(root: HTMLElement, events: MapEvents) {
     })
   }
 
+  const stopPoints = (): Array<[number, number]> => stops.map((i) => [sites[i]!.lat, sites[i]!.lon])
+
   // Searches the legs on the terrain loaded so far. The region's own patch is
   // in by now and covers each leg's search corridor.
   function findRoute() {
-    route = sites.length > 1 ? routeSites(sites.map((site) => [site.lat, site.lon]), tiles.heightAt) : null
+    route = stops.length > 1 ? routeSites(stopPoints(), tiles.heightAt) : null
     routeKeyText.textContent = route ? `Route, shortest under ${route.limit}°` : 'Site order. Finding the route'
     blockedKey.hidden = !route?.legs.some((leg) => leg.status === 'blocked')
     blockedKeyText.textContent = route ? `No path under ${route.limit}°` : ''
@@ -473,9 +477,9 @@ export function createMap(root: HTMLElement, events: MapEvents) {
         }
       }
     }
-    // Until the route is found, the sites in order, straight.
-    const legs: Array<Pick<RouteLeg, 'status' | 'points'>> =
-      route?.legs ?? sites.slice(1).map((site, i) => ({ status: 'unknown', points: [[sites[i]!.lat, sites[i]!.lon], [site.lat, site.lon]] }))
+    // Until the route is found, the stops in order, straight.
+    const points = stopPoints()
+    const legs: Array<Pick<RouteLeg, 'status' | 'points'>> = route?.legs ?? points.slice(1).map((point, i) => ({ status: 'unknown', points: [points[i]!, point] }))
     for (const leg of legs) strokeLine(leg.points.map(([lat, lon]) => toScene(lat, lon)), leg.status === 'blocked' ? dashes.blocked : dashes.ok)
     pen.strokeStyle = colors.bg
     pen.lineWidth = 5.5
@@ -749,10 +753,12 @@ export function createMap(root: HTMLElement, events: MapEvents) {
   }
 
   return {
-    // Shows a mission's sites and symbols, and frames them. False when the
+    // Shows a mission's sites and symbols, and the route through `stops`, the
+    // plan's site positions in visiting order. Frames them. False when the
     // mission has no place to show, so the map has nothing to load.
-    show(nextSites: Site[], nextMarkers: Marker[]): boolean {
+    show(nextSites: Site[], nextMarkers: Marker[], nextStops: number[]): boolean {
       sites = nextSites
+      stops = nextStops.filter((i) => sites[i] !== undefined)
       markers = nextMarkers
       selected = -1
       mission++
@@ -766,7 +772,7 @@ export function createMap(root: HTMLElement, events: MapEvents) {
       view.heading = 0
       view.pitch = renderer.flat ? TOP_DOWN : TILTED
       key.hidden = rail.hidden = !region
-      orderKey.hidden = sites.length < 2
+      orderKey.hidden = stops.length < 2
       route = null
       routeKeyText.textContent = 'Site order. Finding the route'
       blockedKey.hidden = true

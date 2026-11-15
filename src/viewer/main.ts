@@ -22,6 +22,7 @@ import { type MapStatus, createMap } from './map'
 import { SUIT } from '../data/suit'
 import { WALK_SPEED, advanceSimulation, simulatedPositions, type CrewPosition } from './live'
 import { type SiteRoute, routeLine } from './route'
+import { planStops } from '../data/stops'
 import { type Level, type SuitReading, readSuitSensors, readingLevels, worstLevel } from './sensors'
 
 interface Doc {
@@ -201,11 +202,15 @@ const map = createMap(mapRoot, {
   },
 })
 
+// What the crew walks: the route once found, and the plan's stops before.
+const walkPath = (mission: Mission): Array<[number, number]> | undefined =>
+  route ? routeLine(route) : planStops(mission).map((site): [number, number] => [mission.sites[site]!.lat, mission.sites[site]!.lon])
+
 // The simulation only updates markers and readouts. It never replans the
 // mission. Readouts change in place, so open rows and focus stay put.
 let liveLevel: Level = 'ok'
 function updatePositions() {
-  positions = doc && liveEnabled ? simulatedPositions(doc.planned.mission, liveSeconds, self, route ? routeLine(route) : undefined) : []
+  positions = doc && liveEnabled ? simulatedPositions(doc.planned.mission, liveSeconds, self, walkPath(doc.planned.mission)) : []
   readings = doc ? readSuitSensors(doc.planned.mission.crew.length, liveSeconds) : []
   map.setCrew(positions, livePaused)
   const level = worstOf(readings)
@@ -270,7 +275,7 @@ function show(next: Doc) {
   selected = -1
   keep()
   const { sites, markers } = next.planned.mission
-  placed = map.show(sites, markers ?? [])
+  placed = map.show(sites, markers ?? [], planStops(next.planned.mission))
   scheduleLive()
   const anchor = sites[0]
   if (anchor && positions.length) map.lookAt(anchor.lat, anchor.lon, 700)
@@ -388,60 +393,76 @@ const ROUTE_NOTE = "The viewer's own route search on the terrain its map loaded,
 
 function sitesTab({ planned: { mission } }: Doc): Child {
   if (mission.sites.length === 0) return h('p', { class: 'note' }, 'This mission has no sites.')
-  const legs = siteLegs(mission.sites)
-  // The route's leg into site `i`, with what its distance means.
-  const walked = (i: number) => {
-    const leg = route?.legs[i - 1]
-    if (!leg) return null
-    const title = leg.status === 'ok' ? `Along the route. Steepest step ${num(leg.maxSlope ?? 0)}° on the search grid.` : 'Straight line: the route search has no path here.'
-    return { distance: leg.distance, title }
+  const stops = planStops(mission)
+  const straight = siteLegs(stops.map((site) => mission.sites[site]!))
+  const name = (site: number) => mission.sites[site]?.name ?? 'Unknown site'
+  const role = (i: number) => (stops.length < 2 ? '' : i === 0 ? 'Start' : i === stops.length - 1 ? 'End' : `Stop ${i}`)
+  // The leg into stop `i`: its distance, what that distance is, and why it is
+  // drawn straight when it is.
+  const leg = (i: number): Child => {
+    if (i === 0) return null
+    const walked = route?.legs[i - 1]
+    const from = name(stops[i - 1]!)
+    const distance = walked?.distance ?? straight[i]
+    const title = !walked
+      ? 'Straight line, until the route is found.'
+      : walked.status === 'ok'
+        ? `Along the route. Steepest step ${num(walked.maxSlope ?? 0)}° on the search grid.`
+        : 'Straight line: the route search has no path here.'
+    const note =
+      walked?.status === 'unknown'
+        ? h('p', { class: 'site__note is-caution' }, `No terrain from ${from}, so the route is unknown. Drawn straight.`)
+        : walked?.status === 'blocked'
+          ? h(
+              'p',
+              { class: 'site__note is-hazard' },
+              `No path from ${from} under ${route!.limit}°. Drawn straight.${walked.needs === null ? '' : ` A ${num(Math.ceil(walked.needs))}° limit would have one.`}`,
+            )
+          : null
+    return [typeof distance === 'number' && h('span', { class: 'site__leg', title }, `${meters(distance)} from ${from}`), note]
   }
-  // Under a site: why the leg into it is drawn straight.
-  const legNote = (i: number) => {
-    const leg = route?.legs[i - 1]
-    if (!leg || leg.status === 'ok') return null
-    const from = mission.sites[i - 1]!.name
-    if (leg.status === 'unknown') return h('p', { class: 'site__note is-caution' }, `No terrain from ${from}, so the route is unknown. Drawn straight.`)
-    const needs = leg.needs === null ? '' : ` A ${num(Math.ceil(leg.needs))}° limit would have one.`
-    return h('p', { class: 'site__note is-hazard' }, `No path from ${from} under ${route!.limit}°. Drawn straight.${needs}`)
+  const pick = (site: number) => {
+    selected = site
+    map.select(site)
+    renderPanel()
   }
   return [
-    mission.sites.map((site, i) => {
-      const leg = legs[i]
-      return h(
-        'section',
-        { class: 'site', id: `site-${i}` },
+    stops.length > 1 &&
+      section(
+        mission.route?.length ? 'Plan' : 'Plan, sites in list order',
         h(
-          'div',
-          { class: 'site__head' },
-          h(
-            'button',
-            {
-              type: 'button',
-              class: 'site__name',
-              'aria-pressed': i === selected ? 'true' : 'false',
-              onclick: () => {
-                selected = i
-                map.select(i)
-                renderPanel()
-              },
-            },
-            `${i + 1} ${site.name}`,
+          'ol',
+          { class: 'stops' },
+          stops.map((site, i) =>
+            h(
+              'li',
+              { class: 'stop' },
+              h('button', { type: 'button', class: 'site__name', onclick: () => pick(site) }, `${i + 1} ${name(site)}`),
+              h('span', { class: 'stop__role' }, role(i)),
+              leg(i),
+            ),
           ),
-          typeof leg === 'number' && h('span', { class: 'site__leg', title: walked(i)?.title }, `${meters(walked(i)?.distance ?? leg)} from ${mission.sites[i - 1]!.name}`),
         ),
-        h('p', { class: 'site__place' }, formatLatLon(site.lat, site.lon)),
-        site.info && h('p', { class: 'site__info' }, site.info),
-        legNote(i),
-        mission.tasks.map((task) => task.site === i && taskCard(mission, task)),
-      )
-    }),
-    h(
-      'section',
-      null,
-      route
-        ? row('Route through all sites', meters(route.distance), ROUTE_NOTE)
-        : row('Through all sites', meters(totalLegs(legs)), 'Straight lines between sites over the Mars sphere, until the route is found.'),
+        route
+          ? row('Route, all stops', meters(route.distance), ROUTE_NOTE)
+          : row('All stops, straight', meters(totalLegs(straight)), 'Straight lines between the stops over the Mars sphere, until the route is found.'),
+      ),
+    section(
+      'Sites',
+      mission.sites.map((site, i) =>
+        h(
+          'section',
+          { class: 'site', id: `site-${i}` },
+          h(
+            'div',
+            { class: 'site__head' },
+            h('button', { type: 'button', class: 'site__name', 'aria-pressed': i === selected ? 'true' : 'false', onclick: () => pick(i) }, site.name),
+          ),
+          h('p', { class: 'site__place' }, formatLatLon(site.lat, site.lon)),
+          site.info && h('p', { class: 'site__info' }, site.info),
+          mission.tasks.map((task) => task.site === i && taskCard(mission, task)),
+        ),
+      ),
       row(
         'Task hours',
         amount(
@@ -950,7 +971,7 @@ document.addEventListener('keydown', (event) => {
 
 registerMapCache()
 render()
-map.show([], [])
+map.show([], [], [])
 
 // The file from the last visit opens again.
 try {

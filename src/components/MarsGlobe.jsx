@@ -36,6 +36,7 @@ import { addScienceOverlay } from '../data/science-overlay'
 import { distance, resample } from '../data/geo'
 import { buildProfile, slopeLevel, summarize } from '../data/route-profile'
 import { DEFAULT_LIMITS, EMPTY_PLAN, SUIT, assess, withReasons, insertWaypoint, isGenerated, moveVertex, planPath, removeWaypoint, stopPath, stopsOnly } from '../data/plan'
+import { planStops } from '../data/stops'
 import { addPlanOverlay } from './plan-overlay'
 import { areaStats, buildGrid, joinLegs, routeOptions, sameReason } from '../data/route-options'
 import RouteOptions from './RouteOptions'
@@ -484,15 +485,17 @@ function followWalker(viewer, point, heading, playing, elevation) {
  *   { crew, sites, taskCounts, selected, onSelect(index), onAddSite([lat, lon]),
  *     onAddEva({ target, seconds, distance, maxSlope, verdict }) }
  * Sites are { name, lat, lon, info } in planetocentric latitude and east
- * longitude, -180 to 180. They are drawn as numbered markers, and the EVA
- * route runs through them in list order: the first is the start, the last the
- * target, the rest stops. Add EVA to mission records the walk as a task at
+ * longitude, -180 to 180. They are drawn as numbered markers. The EVA route
+ * runs through the plan, `mission.route`: site positions in visiting order,
+ * where the first is the start, the last the target and the rest stops. A
+ * mission without a plan visits its sites in list order. Add EVA to mission records the walk as a task at
  * the target site. `mission.flag` puts a caution dot on the Sites plan tab.
  * `missionPanel` renders the mission's sites and tasks as a tab of the plan
  * panel and gets { placing, onPlacing } to drive the map from it. While
  * placing is 'site' every click adds a site, until Esc or onPlacing(null).
+ * `missionPlan` is the Plan tab, where `mission.route` is edited.
  */
-export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onScienceSource, onViewer, mission = null, missionPanel = null }) {
+export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onScienceSource, onViewer, mission = null, missionPanel = null, missionPlan = null }) {
   const container = useRef(null)
   const [viewer, setViewer] = useState(null)
   const labels = useRef(null)
@@ -1063,11 +1066,15 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     })
   }
 
-  // The route follows the site list. When sites are added, moved or removed,
-  // the start, stops and target become the sites in order. The picked
-  // strategy and start time stay. Points moved on the map hold until the list
+  // The route follows the plan. When a stop or a stop's site changes, the
+  // start, stops and target become the plan's sites in order. The picked
+  // strategy and start time stay. Points moved on the map hold until the plan
   // changes again.
-  const routeSites = (mission?.sites ?? []).filter((entry) => Number.isFinite(entry.lat) && Number.isFinite(entry.lon))
+  const routeSites = mission
+    ? planStops(mission)
+        .map((index) => mission.sites[index])
+        .filter((entry) => entry && Number.isFinite(entry.lat) && Number.isFinite(entry.lon))
+    : []
   const routeSitesKey = JSON.stringify(routeSites.map((entry) => [entry.lat, entry.lon, entry.name]))
   useEffect(() => {
     if (routeSites.length < 2) return
@@ -1344,6 +1351,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
             verdict: assessment.verdict,
           }) : null}
           missionSites={missionPanel?.({ placing, onPlacing: setPlacing })}
+          missionPlan={missionPlan}
           missionFlag={mission?.flag ?? null}
           missionFocus={missionSelected}
         />
