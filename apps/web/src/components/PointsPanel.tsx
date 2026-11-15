@@ -34,8 +34,9 @@ interface PointsPanelProps {
   onStartEditPoint: (point: MapPoint) => void;
   onDeletePoint: (pointId: string) => void;
   onFocusPoint: (point: MapPoint) => void;
-  onUseAsWaypointA: (coord: MarsCoord) => void;
-  onUseAsWaypointB: (coord: MarsCoord) => void;
+  nextWaypointNumber?: number;
+  onAppendWaypoint: (coord: MarsCoord) => void;
+  onInsertIntermediate?: (coord: MarsCoord) => void;
   onToggleClass: (classId: string) => void;
   onSetAllClassesVisible: (visible: boolean) => void;
   onCreateClass: (payload: {
@@ -45,6 +46,7 @@ interface PointsPanelProps {
     icon: PointIconKey;
   }) => void;
   onDeleteCustomClass: (classId: string) => void;
+  activeUnitId?: 1 | 2;
 }
 
 function formatCoord(coord: MarsCoord, fmt: LonFormat): string {
@@ -54,6 +56,7 @@ function formatCoord(coord: MarsCoord, fmt: LonFormat): string {
 
 export function PointsPanel({
   readOnly = false,
+  activeUnitId = 1,
   classes,
   points,
   hiddenClassIds,
@@ -69,8 +72,9 @@ export function PointsPanel({
   onStartEditPoint,
   onDeletePoint,
   onFocusPoint,
-  onUseAsWaypointA,
-  onUseAsWaypointB,
+  nextWaypointNumber = 1,
+  onAppendWaypoint,
+  onInsertIntermediate,
   onToggleClass,
   onSetAllClassesVisible,
   onCreateClass,
@@ -183,7 +187,7 @@ export function PointsPanel({
         <h1 className="panel-title">Points</h1>
         <p className="panel-desc">
           {readOnly
-            ? "View MIL-STD-2525C markers, filter classes, and set A/B route waypoints."
+            ? "View MIL-STD-2525C markers, filter classes, and add numbered waypoints."
             : "Right-click the map to drop MIL-STD-2525C tactical markers with notes, or toggle point classes."}
         </p>
         <div className="panel-rule" />
@@ -493,17 +497,19 @@ export function PointsPanel({
                     <button
                       type="button"
                       className="compact-btn"
-                      onClick={() => onUseAsWaypointA(pt.coord)}
+                      onClick={() => onAppendWaypoint(pt.coord)}
                     >
-                      SET A
+                      + U{activeUnitId} #{nextWaypointNumber}
                     </button>
-                    <button
-                      type="button"
-                      className="compact-btn"
-                      onClick={() => onUseAsWaypointB(pt.coord)}
-                    >
-                      SET B
-                    </button>
+                    {nextWaypointNumber > 2 && onInsertIntermediate && (
+                      <button
+                        type="button"
+                        className="compact-btn"
+                        onClick={() => onInsertIntermediate(pt.coord)}
+                      >
+                        MID
+                      </button>
+                    )}
                     {!readOnly && (
                       <>
                         <button

@@ -2,11 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-  MarsWeatherSnapshot,
-  RoutePlanResponse,
-  SiteDataset,
-  SiteEnvironmentSummary,
+import {
+  type MarsWeatherSnapshot,
+  type RoutePlanResponse,
+  type SiteDataset,
+  type SiteEnvironmentSummary,
+  classifyMarsSoilMatrix,
 } from "@nimbs/shared";
 import { createApp } from "../index";
 import { generateMartianWeather } from "../weather/generator";
@@ -466,5 +467,181 @@ describe("Spatial weather fields and weather-constrained routing", () => {
       }),
     });
     expect(badWc.status).toBe(400);
+  });
+});
+
+function makeSoilCorridorDataset(): SiteDataset {
+  // 11x11 flat grid (100m spacing): direct center band (cols 4..6, rows 2..8) is loose sand (3),
+  // surrounded by fast bedrock (0) along row 1 and row 9.
+  const rows = 11;
+  const cols = 11;
+  const elevationsM = new Array<number>(rows * cols).fill(0);
+  const soilTypes: number[] = [];
+  for (let r = 0; r < rows; r += 1) {
+    for (let c = 0; c < cols; c += 1) {
+      if (r >= 2 && r <= 8 && c >= 4 && c <= 6) {
+        soilTypes.push(3); // loose-sand trap in middle
+      } else {
+        soilTypes.push(0); // bedrock around it
+      }
+    }
+  }
+  return {
+    meta: {
+      id: "synthetic-soil-corridor",
+      name: "Synthetic Soil Corridor",
+      sourceItemId: "test-soil",
+      sourceTitle: "test-soil",
+      dtmUrl: "https://example.invalid/dtm.tif",
+      hillshadeUrl: "https://example.invalid/hs.tif",
+      bbox: [77.5, 18.4, 77.5178, 18.4169],
+      center: { lat: 18.40845, lon: 77.5089 },
+      widthMeters: 1000,
+      heightMeters: 1000,
+      rows,
+      cols,
+      cellSizeMeters: 100,
+      minElevationM: 0,
+      maxElevationM: 0,
+      nodataValue: -99999,
+    },
+    elevationsM,
+    soilTypes,
+  };
+}
+
+describe("Martian soil matrix classification, overlay, and traverse speed routing", () => {
+  test("classifyMarsSoilMatrix separates all 4 classes from DEM relief and THEMIS NIR", () => {
+    const rows = 9;
+    const cols = 9;
+    const elevationsM = new Array<number>(rows * cols).fill(0);
+    const themisDn = new Array<number>(rows * cols).fill(145);
+    for (let c = 0; c < cols; c += 1) {
+      elevationsM[1 * cols + c] = 40; // steep bedrock ridge -> slope > 12 deg
+      themisDn[2 * cols + c] = 225; // high TI -> bedrock
+      themisDn[4 * cols + c] = 165; // medium-high TI -> coarse regolith
+      themisDn[6 * cols + c] = 105; // low-mod TI -> fine regolith
+      themisDn[7 * cols + c] = 25; // very low TI -> loose sand
+    }
+    const matrix = classifyMarsSoilMatrix({
+      elevationsM,
+      rows,
+      cols,
+      dxM: 20,
+      dyM: 20,
+      nodataValue: -99999,
+      themisDn,
+    });
+    const presentCodes = new Set(Array.from(matrix));
+    expect(presentCodes.has(0)).toBe(true);
+    expect(presentCodes.has(1)).toBe(true);
+    expect(presentCodes.has(2)).toBe(true);
+    expect(presentCodes.has(3)).toBe(true);
+  });
+
+  test("detours around slow loose-sand basin and returns soil breakdown + /api/site/soil.png", async () => {
+    const soilGraph = new TerrainGraph(makeSoilCorridorDataset());
+    const start = soilGraph.coordForCell(5, 1);
+    const goal = soilGraph.coordForCell(5, 9);
+
+    // Equal speeds -> goes straight across row 5 through the middle sand zone
+    const uniformRes = soilGraph.planRoutes(start, goal, 15, undefined, {
+      bedrock: 1.0,
+      "coarse-regolith": 1.0,
+      "fine-regolith": 1.0,
+      "loose-sand": 1.0,
+    });
+    expect(uniformRes.status).toBe("ok");
+    const uniformRoute = uniformRes.routes[0];
+    expect(uniformRoute?.soilBreakdown?.["loose-sand"]).toBeGreaterThan(200);
+
+    // Heavy loose-sand speed penalty -> detours around the sand basin on bedrock
+    const penalizedRes = soilGraph.planRoutes(start, goal, 15, undefined, {
+      bedrock: 1.0,
+      "coarse-regolith": 0.85,
+      "fine-regolith": 0.7,
+      "loose-sand": 0.2,
+    });
+    expect(penalizedRes.status).toBe("ok");
+    const penalizedRoute = penalizedRes.routes[0];
+    expect(penalizedRoute).toBeDefined();
+    expect(penalizedRoute?.soilBreakdown?.["loose-sand"] ?? 0).toBeLessThan(
+      uniformRoute?.soilBreakdown?.["loose-sand"] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(penalizedRoute?.points[0]?.soilType).toBe("bedrock");
+
+    const app = createApp(soilGraph);
+    const soilPngRes = await app.request("/api/site/soil.png");
+    expect(soilPngRes.status).toBe(200);
+    expect(soilPngRes.headers.get("content-type")).toBe("image/png");
+    const bytes = new Uint8Array(await soilPngRes.arrayBuffer());
+    expect(Array.from(bytes.slice(0, 8))).toEqual(PNG_MAGIC);
+
+    const midSand = soilGraph.coordForCell(5, 5);
+    const elevRes = await app.request(
+      `/api/terrain/elevation?lat=${midSand.lat}&lon=${midSand.lon}`,
+    );
+    expect(elevRes.status).toBe(200);
+    const elevBody = (await elevRes.json()) as { soilType?: string; soilLabel?: string };
+    expect(elevBody.soilType).toBe("loose-sand");
+    expect(elevBody.soilLabel).toBe("LOOSE SAND");
+
+    const badSoilRes = await app.request("/api/graph/routes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        waypointA: start,
+        waypointB: goal,
+        maxSlopeDeg: 15,
+        soilSpeedFactors: { "loose-sand": 0.01 },
+      }),
+    });
+    expect(badSoilRes.status).toBe(400);
+  });
+
+  test("routes sequentially across ordered intermediate waypoints and reports blocked leg", async () => {
+    const ridgeGraph = new TerrainGraph(makeRidgeDataset());
+    const p1 = ridgeGraph.coordForCell(8, 2);
+    const p2 = ridgeGraph.coordForCell(1, 2);
+    const p3 = ridgeGraph.coordForCell(8, 8);
+
+    const directRes = ridgeGraph.planWaypointsRoutes([p1, p3], 15);
+    const multiRes = ridgeGraph.planWaypointsRoutes([p1, p2, p3], 15);
+    expect(directRes.status).toBe("ok");
+    expect(multiRes.status).toBe("ok");
+    expect(multiRes.snappedWaypoints).toHaveLength(3);
+
+    const directFirst = directRes.routes[0];
+    const multiFirst = multiRes.routes[0];
+    if (!directFirst || !multiFirst) throw new Error("Expected multi-waypoint route");
+    expect(multiFirst.totalDistanceM).toBeGreaterThan(directFirst.totalDistanceM + 500);
+    const visitsP2 = multiFirst.points.some(
+      (pt) => Math.abs(pt.lat - p2.lat) < 0.002 && Math.abs(pt.lon - p2.lon) < 0.002,
+    );
+    expect(visitsP2).toBe(true);
+
+    const blockedTarget = ridgeGraph.coordForCell(2, 5);
+    const blockedRes = ridgeGraph.planWaypointsRoutes([p1, p3, blockedTarget], 10);
+    expect(blockedRes.status).toBe("unreachable");
+    expect(blockedRes.blockedLegIndex).toBe(1);
+
+    const app = createApp(ridgeGraph);
+    const httpMulti = await app.request("/api/graph/routes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ waypoints: [p1, p2, p3], maxSlopeDeg: 15 }),
+    });
+    expect(httpMulti.status).toBe(200);
+    const multiJson = (await httpMulti.json()) as RoutePlanResponse;
+    expect(multiJson.status).toBe("ok");
+    expect(multiJson.snappedWaypoints).toHaveLength(3);
+    expect(multiJson.routes.length).toBeGreaterThanOrEqual(1);
+
+    const httpTooFew = await app.request("/api/graph/routes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ waypoints: [p1], maxSlopeDeg: 15 }),
+    });
+    expect(httpTooFew.status).toBe(400);
   });
 });

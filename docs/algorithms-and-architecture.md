@@ -7,21 +7,21 @@ This document covers the implemented terrain-graph prototype for Mars Mission Pl
 The root `package.json`, named `mars-mission-planner`, configures Bun workspaces across `apps/*` and `packages/*`.
 
 ```text
-packages/shared/src/     Coordinate geodesy, basemap layer metadata, and shared TypeScript types for @nimbs/shared
+packages/shared/src/     Coordinate geodesy, basemap layer metadata, 4-type soil classification and speed factors, and shared TypeScript types for @nimbs/shared
 apps/api/src/            Hono HTTP API, TerrainGraph engine, spatial weather field, weather generator/evaluator, PNG encoder, and tile proxy for @nimbs/api
 apps/web/src/            React and Leaflet console UI, ToolRegistry, time-simulation controls, MIL-STD-2525C tactical point symbology (with fgdcSymbols.ts retained as legacy archive), weather panel, and CSS design tokens for @nimbs/web
 scripts/dev.ts           Process launcher running @nimbs/api with --hot and @nimbs/web Vite dev server
 scripts/data/            Offline terrain and weather ingestion scripts (fetch-site.ts, fetch-weather.ts)
 scripts/assets/          FGDC geologic symbol extractor (extract-fgdc-symbols.ts)
 data/                    Gitignored terrain grid, hillshade PNG, site-weather.json, tile/weather caches, and tracked SOURCES.md
-docs/                    Visual language, tool extension guide, and architecture documentation
+docs/                    Visual language, tool extension guide, soil sources, and architecture documentation
 ```
 
-`@nimbs/shared` exposes `coords.ts`, `layers.ts`, and `types.ts` directly as TypeScript through `packages/shared/src/index.ts`. Both `@nimbs/api` and `@nimbs/web` depend on `@nimbs/shared` via `workspace:*`.
+`@nimbs/shared` exposes `coords.ts`, `layers.ts`, `soil.ts`, and `types.ts` directly as TypeScript through `packages/shared/src/index.ts`. Both `@nimbs/api` and `@nimbs/web` depend on `@nimbs/shared` via `workspace:*`.
 
 ```mermaid
 flowchart LR
-  COG["USGS STAC MRO CTX COG"] -->|HTTP Range| Fetch["scripts/data/fetch-site.ts"]
+  COG["USGS STAC MRO CTX & THEMIS NIR COG"] -->|HTTP Range| Fetch["scripts/data/fetch-site.ts"]
   Fetch -->|writes| Data["data/site-terrain.json and site-hillshade.png"]
   Data -->|loads| API["apps/api: Hono and TerrainGraph"]
   WMS["USGS WMS and Mars Trek WMTS"] -->|disk cache| API
@@ -68,6 +68,17 @@ Each dependency keeps local tooling simple and avoids native compilation bottlen
 
 The fetched Jezero Crater Delta and Rim dataset in `data/site-terrain.json` contains `1001` rows by `1001` columns, `1,002,001` elevation nodes at `20 m` spacing across `1000` intervals, bbox `[77.26644047791001, 18.49529395141885, 77.62258148283172, 18.832706048581155]`, center `{ lat: 18.664, lon: 77.44451098037086 }`, and elevations between `-2590.35 m` and `-1696.52 m`.
 
+### Martian soil classification
+
+Alongside elevation, `scripts/data/fetch-site.ts` streams the matching 100 m/px Mars Odyssey THEMIS Nighttime IR controlled mosaic (`mc13_syrtis_major_nir.tif` for Jezero, `mc23_aeolis_nir.tif` for Gale) and bilinearly resamples it onto the `1001 x 1001` grid. `classifyMarsSoilMatrix` in `packages/shared/src/soil.ts` fuses THEMIS IR brightness, 20 m local slope, and a `7 x 7` focal Topographic Position Index (`TPI`) to label every cell with one of 4 soil codes (`Uint8Array` / `number[]`):
+
+- `0` (`bedrock`, default factor human `1.00`, rover `1.00`): high-IR fractured rock and scarps (`>= 12 deg`).
+- `1` (`coarse-regolith`, default human `0.85`, rover `0.88`): moderately thermal-inert 1 to 2 mm rocky aprons.
+- `2` (`fine-regolith`, default human `0.70`, rover `0.72`): ferric dust mantles and silt plains.
+- `3` (`loose-sand`, default human `0.45`, rover `0.42`): low-IR windblown ripples and sand traps on flat or concave terrain (`<= 7.5 deg`).
+
+When an older dataset omits `soilTypes`, `TerrainGraph` derives the matrix on startup with `classifyMarsSoilMatrix`. Full dataset URLs and planetary mobility references live in [Martian soil sources](martian-soil-sources.md).
+
 ### Basemap tile proxy and disk caching
 
 `apps/api/src/routes/tiles.ts` proxies and caches global basemaps at `GET /api/tiles/:layer/:z/:x/:y`.
@@ -104,33 +115,34 @@ slopeDeg = atan(dh / max(1e-6, distM)) * 180 / pi
 
 `planRoutes` clamps `maxSlopeDeg` to `[0.5, 89]` and checks `isInsideBounds` for both endpoints. `snapToNode` rounds fractional grid coordinates to the nearest valid cell, expanding outward in square rings of radius `1..5` if the exact pixel is nodata.
 
-`runAStar(startIdx, goalIdx, maxSlopeDeg, mode)` uses a custom zero-allocation binary `MinHeap` (`popInto()` writing `poppedNode` and `poppedScore` instead of allocating objects) alongside preallocated reusable typed buffers (`Float64Array` `gScoreBuf`, `Int32Array` `parentBuf`, `Uint8Array` `closedBuf`, `Uint8Array` `validMask`). Neighbor passability avoids per-edge `Math.atan` by precomputing `maxDh[d] = tan(maxSlopeDeg) * dirDists[d]` for all 8 directions and comparing `abs(elev[v] - elev[u]) <= maxDh[d]`. The heuristic estimates remaining distance in meters on the local grid plane:
+`runAStar(startIdx, goalIdx, maxSlopeDeg, mode, weatherCtx, soilFactors)` uses a custom zero-allocation binary `MinHeap` (`popInto()` writing `poppedNode` and `poppedScore` instead of allocating objects) alongside preallocated reusable typed buffers (`Float64Array` `gScoreBuf`, `Int32Array` `parentBuf`, `Uint8Array` `closedBuf`, `Uint8Array` `validMask`, and a `Float64Array(4)` `soilFactorLut`). Neighbor passability avoids per-edge `Math.atan` by precomputing `maxDh[d] = tan(maxSlopeDeg) * dirDists[d]` for all 8 directions and comparing `abs(elev[v] - elev[u]) <= maxDh[d]`. Each step scales horizontal traversal cost by `segSoilFactor = (soilFactorLut[soil[u]] + soilFactorLut[soil[v]]) / 2`, so `soilTimeScale = 1 / segSoilFactor` steers paths away from slow loose sand when faster substrate exists nearby. The heuristic estimates remaining Octile distance on the local grid plane, scaled by the inverse max soil multiplier so `"shortest"` stays admissible (`heuristicWeight = 1` for `"shortest"`, `1.35` for non-shortest routes):
 
 ```text
-h(r, c) = hypot((r - goalR) * dyM, (c - goalC) * dxM)
+dx = |c - goalC| * dxM,  dy = |r - goalR| * dyM
+h(r, c) = (dx + dy + (sqrt(2) - 2) * min(dx, dy)) * invMaxSoilFactor * heuristicWeight
 ```
 
-Because every strategy weight function returns at least `stepDist`, `h` is admissible and never overestimates path cost.
+Because `"shortest"` multiplies `stepDist` by `soilTimeScale >= invMaxSoilFactor` with `heuristicWeight = 1`, `h` never overestimates the optimal soil-weighted `"shortest"` path cost.
 
 ### Route strategies
 
 `planRoutes` generates up to four distinct routes and deduplicates corridors using `overlapRatio(pathA, pathB) = sharedNodes / max(1, min(pathA.length, pathB.length))`.
 
-1. **Shortest safe, `route-shortest`.** Strategy `"shortest"` uses `weightFn = (dist) => dist`. If no path exists under `clampedSlope`, `planRoutes` skips the remaining strategies and runs minimax Dijkstra.
-2. **Lowest slope, `route-gentlest`.** Strategy `"gentlest"` penalizes steep steps quadratically relative to the limit:
+1. **Shortest safe, `route-shortest`.** Strategy `"shortest"` uses `cost = distM * soilTimeScale` (fastest soil-weighted path). If no path exists under `clampedSlope`, `planRoutes` skips the remaining strategies and runs minimax Dijkstra.
+2. **Lowest slope, `route-gentlest`.** Strategy `"gentlest"` penalizes steep steps quadratically relative to the limit on top of soil time scaling:
 
 ```text
 ratio = slopeDeg / max(1, clampedSlope)
-cost = distM * (1 + 4.5 * ratio * ratio)
+cost = distM * soilTimeScale * (1 + 4.5 * ratio * ratio)
 ```
 
 `planRoutes` appends this route only when `overlapRatio(gentlestPath, shortestPath) < 0.9`.
 
-3. **Alternate corridor, `route-alternate`.** Strategy `"alternate"` populates the preallocated `Uint8Array` `penaltyBuf` across a scaled square block (`radius = clamp(2, 8, round(cols / 100))`, which is `8` cells or `160 m` on the `1001 x 1001` grid) around intermediate nodes of already discovered paths while excluding `startIdx` and `goalIdx`. Stepping onto a masked cell multiplies cost to `distM * 3.5`; unmasked steps cost `distM`. `planRoutes` appends this route only when `overlapRatio(alternatePath, existing) < 0.85` for all prior routes.
+3. **Alternate corridor, `route-alternate`.** Strategy `"alternate"` populates the preallocated `Uint8Array` `penaltyBuf` across a scaled square block (`radius = clamp(2, 8, round(cols / 100))`, which is `8` cells or `160 m` on the `1001 x 1001` grid) around intermediate nodes of already discovered paths while excluding `startIdx` and `goalIdx`. Stepping onto a masked cell multiplies cost to `distM * soilTimeScale * 3.5`; unmasked steps cost `distM * soilTimeScale`. `planRoutes` appends this route only when `overlapRatio(alternatePath, existing) < 0.85` for all prior routes.
 
 4. **Thermal safe, `route-weather-safe`** (conditional). Strategy `"weather-safe"` runs only when a weather filter is active with `thermalWeight > 0`, and `planRoutes` appends it only when `overlapRatio(weatherSafePath, existing) < 0.88` for every prior route. See "Spatial weather fields and weather-constrained routing" below.
 
-`buildRouteSummary` records `totalDistanceM`, `elevationGainM`, and `elevationLossM` rounded to `0.1 m`, `maxSlopeDeg` and distance-weighted `meanSlopeDeg` rounded to `0.01°`, plus per-node `RoutePoint` entries with 6-decimal coordinates and incoming segment slopes.
+`buildRouteSummary` records `totalDistanceM`, `elevationGainM`, and `elevationLossM` rounded to `0.1 m`, `maxSlopeDeg` and distance-weighted `meanSlopeDeg` rounded to `0.01°`, distance-based `soilBreakdown` across the 4 soil classes, plus per-node `RoutePoint` entries with 6-decimal coordinates, incoming segment slopes, `soilType`, and `soilSpeedFactor`.
 
 ### Minimax Dijkstra for unreachable thresholds
 
@@ -173,11 +185,11 @@ Pressure follows `p = pScale * exp(-elev / 10800)` where `pScale = sample.pressu
 `apps/web/src/registry/toolRegistry.ts` manages rail tools via `ToolRegistry` methods `register`, `list` sorted ascending by `order`, and `get`. Following `docs/adding-tools.md`, `apps/web/src/App.tsx` registers five tools on the 64px vertical `.tool-rail` alongside a compact `BSC` / `ADV` mode switch:
 
 - `BSC` (basic mode): replaces parameter sliders in `RTE`, `WXR`, and `SET` with `TraversePresetControl` (`HUMAN` EVA suit vs `ROVER` pressurized vehicle presets), and switches `PTS` and marker popups/context menus to read-only point viewing while keeping `A` and `B` route waypoint placement active.
-- `ADV` (advance mode): exposes all slope, EVA threshold, and traverse speed sliders plus full map point and custom class creation, editing, and deletion.
+- `ADV` (advance mode): exposes all slope, EVA threshold, traverse speed, and 4 soil speed coefficient sliders plus full map point and custom class creation, editing, and deletion.
 - `route`, rail label `RTE`, order `1`: waypoint readouts, `TraversePresetControl` (in `BSC`) or `MaxSlopeControl` (in `ADV`), a `WEATHER ROUTING` toggle with a `T >= ... / P >= ... / LMST` strip, route strategy buttons, route weather check summary, summary stats, and `ElevationProfile`.
 - `points`, rail label `PTS`, order `2`: classified map markers, per-class visibility toggles, and (in `ADV`) class creation and themed symbol selection (`ThemedIconPicker`).
 - `weather`, rail label `WXR`, order `3`: `WeatherPanel` with a full `TimeSimulationControl`, NASA/PDS weather telemetry, simulated/hybrid provenance notice, scenario selector (`auto`, `nominal`, `dust-storm`, `cold-snap`), 24-hour LMST forecast strip, the 48-hour `TraverseWindowsPanel`, and either `TraversePresetControl` (`BSC`) or 5 EVA constraint sliders plus 3 traverse speed sliders (`ADV`).
-- `layers`, rail label `LYR`, order `4`: global basemap selector and toggles for the local site hillshade, slope hazard mask, pressure overlay, temperature overlay, and site bounding box, plus a compact `TimeSimulationControl`.
+- `layers`, rail label `LYR`, order `4`: global basemap selector and toggles for the local site hillshade, slope hazard mask, soil substrate overlay (`/api/site/soil.png`), pressure overlay, temperature overlay, and site bounding box, plus a compact `TimeSimulationControl`.
 - `settings`, rail label `SET`, order `5`: `TraversePresetControl` (`BSC`) or `MaxSlopeControl` (`ADV`), graph edge passability percentage, `-180..180` versus `0..360E` longitude display toggle, DEM grid stats, and a button to re-center on the local site patch.
 
 ### Classified points and FGDC symbology
@@ -199,7 +211,7 @@ Live NASA InSight weather endpoints no longer return current data (`mars.nasa.go
 - Real channels: `WeatherService` probes NASA Perseverance MEDA RSS and MSL REMS RSS with a 4s timeout and falls back to `data/site-weather.json` populated by `scripts/data/fetch-weather.ts` from `atmos.nmsu.edu` PDS4 MEDA (`DER_PS`, `CAL_ATS`, `DER_ANCILLARY`) and PDS3 REMS (`RME_*RMD*.TAB`).
 - Diurnal physics generator: `apps/api/src/weather/generator.ts` scales barometric pressure to target or crater-rim elevation using Martian scale height `MARS_SCALE_HEIGHT_M = 10_800` m (`P(z) = P_ref * exp(-(z - z_ref) / 10800)`) and adjusts air temperature with `MARS_LAPSE_RATE_K_PER_M = -0.0025` K/m. Seasonal pressure follows a two-harmonic CO2 condensation cycle, wind directions map into 16 compass sectors (`N` through `NNW`), and dust opacity `tau` attenuates solar irradiance via Beer-Lambert scaling.
 - Explicit provenance: every `MarsWeatherSnapshot` records `isSimulated`, `sourceType` (`"real"`, `"hybrid"`, or `"simulated"`), `realChannels`, `simulatedChannels`, and a `disclaimer` string displayed in the `WXR` sidebar. Missing channels (such as MEDA wind after Sol 315 or dust-storm scenario overrides) are explicitly marked simulated.
-- EVA evaluation: `evaluateEvaWeather` scales pressure and temperature to `route.maxElevationM` (defaulting to the site's maximum elevation rim), evaluates 5 interactive threshold checks (`air_temp`, `wind_speed`, `pressure`, `pressure_swing`, `eva_duration`) returning `GO`, `DEGRADED`, or `NO-GO`, estimates traverse duration from `totalDistanceM / limits.flatSpeedMPerH + elevationGainM / limits.climbSpeedMPerH + elevationLossM / limits.descentSpeedMPerH` (defaulting to `2500`, `350`, and `800` m/h), and selects the longest contiguous safe daylight traverse window (`safeWindow`).
+- EVA evaluation: `evaluateEvaWeather` scales pressure and temperature to `route.maxElevationM` (defaulting to the site's maximum elevation rim), evaluates 5 interactive threshold checks (`air_temp`, `wind_speed`, `pressure`, `pressure_swing`, `eva_duration`) returning `GO`, `DEGRADED`, or `NO-GO`, estimates traverse duration from `soilBreakdown` distance across the 4 soil classes divided by `flatSpeedMPerH * factor` (falling back to point-level `soilSpeedFactor` or `"fine-regolith"`) plus `elevationGainM / limits.climbSpeedMPerH + elevationLossM / limits.descentSpeedMPerH` (defaulting to `2500`, `350`, and `800` m/h), and selects the longest contiguous safe daylight traverse window (`safeWindow`).
 - Spatial field and 48-hour timeline: `computeSiteWeatherField` projects the snapshot onto the site grid at a given LMST hour (see "Spatial weather fields and weather-constrained routing"), and `evaluateEvaWeather` accepts an `lmstHour` that fills a `selectedHourWeather` floor and rim summary plus a 48-hour `departureSlots` timeline and ranked `recommendedWindows` of `TraverseWindowRecommendation`. The `WXR` panel drives both from the `TimeSimulationControl` slider.
 
 When `panelOpen` is true, the `64px` `.tool-rail` plus `416px` `.side-panel` equals `480px`, matching `--sidebar-width` in `apps/web/src/styles/tokens.css`, and shifts `.map-hud` left offset from `64px` to `480px`.
@@ -247,11 +259,12 @@ When `panelOpen` is true, the `64px` `.tool-rail` plus `416px` `.side-panel` equ
 | `GET /api/site` | None | `{ meta: SiteMetadata }` | `200`, `503` if dataset missing |
 | `GET /api/site/hillshade.png` | None | `image/png` with `Cache-Control: public, max-age=3600` | `200`, `404` if PNG missing |
 | `GET /api/site/passability.png` | Query `maxSlopeDeg`, default `15`, clamped `[0.5, 89]` | Dynamic RGBA `image/png` with `Cache-Control: public, max-age=300` | `200`, `503` if dataset missing |
+| `GET /api/site/soil.png` | None | Dynamic RGBA `image/png` color-coded by 4-class Martian soil substrate with `Cache-Control: public, max-age=3600` | `200`, `503` if dataset missing |
 | `GET /api/site/pressure.png` | Query `scenario`, optional `sol`, `lmstHour` (clamped `[0, 48]`, default `12`), `minPressurePa` (clamped `[0, 2500]`, default `650`) | RGBA `image/png` with `Cache-Control: public, max-age=120` and `X-Layer-Min`/`X-Layer-Max`/`X-Layer-Mean`, `X-Layer-Lmst`, `X-Layer-Unit: Pa` | `200`, `400` bad scenario or `sol`, `503` if dataset missing |
 | `GET /api/site/temperature.png` | Query `scenario`, optional `sol`, `lmstHour`, `minAirTempC` (clamped `[-180, 60]`, default `-75`) | RGBA `image/png` with `Cache-Control: public, max-age=120` and `X-Layer-Min`/`X-Layer-Max`/`X-Layer-Mean`, `X-Layer-Lmst`, `X-Layer-Unit: C` | `200`, `400` bad scenario or `sol`, `503` if dataset missing |
 | `GET /api/site/environment-summary` | Query `scenario`, optional `sol`, `lmstHour` (clamped `[0, 48]`, default `12`) | `SiteEnvironmentSummary` (`siteId`, `sol`, `lmstHour`, `lmstLabel`, `scenario`, `isSimulated`, min/max/mean `TempC` and `PressurePa`) | `200`, `400` bad scenario or `sol`, `503` if dataset missing |
-| `GET /api/terrain/elevation` | Query `lat`, `lon` as finite numbers | `{ lat, lon, insideSite, elevationM }` | `200`, `400` bad params, `503` if missing |
-| `POST /api/graph/routes` | JSON `{ waypointA, waypointB, maxSlopeDeg, weatherConstraints? }`, where `weatherConstraints` carries `enabled` plus optional `scenario`, `sol`, `lmstHour`, `minAirTempC`, `minPressurePa`, `thermalWeight` | `RoutePlanResponse` with `status`, `routes`, `passableEdgeRatio`, optional `minRequiredSlopeDeg`, `maxFeasibleMinTempC`, `maxFeasibleMinPressurePa`, `weatherApplied`, `appliedLmstHour`, `minTempFilterC`, `minPressureFilterPa`, `snappedA`, `snappedB` | `200`, `400` invalid body or constraints, `503` if missing |
+| `GET /api/terrain/elevation` | Query `lat`, `lon` as finite numbers | `{ lat, lon, insideSite, elevationM, soilType? }` (plus soil speed fields when inside site) | `200`, `400` bad params, `503` if missing |
+| `POST /api/graph/routes` | JSON `{ waypointA, waypointB, maxSlopeDeg, weatherConstraints?, soilSpeedFactors? }`, where `weatherConstraints` carries `enabled` plus optional `scenario`, `sol`, `lmstHour`, `minAirTempC`, `minPressurePa`, `thermalWeight` | `RoutePlanResponse` with `status`, `routes` (each including `soilBreakdown`), `passableEdgeRatio`, optional `minRequiredSlopeDeg`, `maxFeasibleMinTempC`, `maxFeasibleMinPressurePa`, `weatherApplied`, `appliedLmstHour`, `minTempFilterC`, `minPressureFilterPa`, `snappedA`, `snappedB` | `200`, `400` invalid body or constraints, `503` if missing |
 | `GET /api/tiles/:layer/:z/:x/:y` | Path params `layer`, `z`, `x`, `y` | `image/png` or `image/jpeg`, `X-Tile-Cache: HIT` or `MISS`, `Cache-Control: public, max-age=86400` | `200`, `400` bad coords, `404` unsupported layer/zoom, `502` upstream error, `504` fetch failure |
 | `GET /api/weather` | Query `site`, `scenario`, optional `sol`, `lmstHour` (`[0, 48]`), `refresh=1` | `{ weather: MarsWeatherSnapshot, evaluation: EvaWeatherEvaluation }` | `200`, `400` bad query params |
 | `POST /api/weather/evaluate` | JSON `WeatherEvaluateRequest` (`limits`, optional `site`, `scenario`, `sol`, `lmstHour`, `elevationM`, `route`, `weather`) | `{ weather: MarsWeatherSnapshot, evaluation: EvaWeatherEvaluation }` | `200`, `400` invalid body or limits |
@@ -275,12 +288,12 @@ If `bun` is installed at `~/.local/bin/bun` outside the default shell `PATH`, ex
 
 ### Automated test suites and lint scope
 
-The repository defines 29 `test` cases across 5 test files:
+The repository defines 32 `test` cases across 5 test files:
 
 - `packages/shared/src/coords.test.ts`, 3 tests: checks `[-180, 180)` longitude normalization, USGS Jezero HiRISE origin round-trip transforms, and `surfaceDistanceMeters` against `metersToLatDeg` and `metersToLonDeg`.
-- `apps/api/src/terrain/engine.test.ts`, 9 tests: 5 tests under "TerrainGraph and slope routing" build a synthetic `11 x 11` ridge grid with a pass at row `9` to verify strict `10°` detours, permissive `30°` direct crossings, `1°` `unreachable` results with `minRequiredSlopeDeg`, `out_of_bounds` rejections, and `createApp(graph)` HTTP responses; 4 tests under "Spatial weather fields and weather-constrained routing" build a `15 x 15` highland-valley grid to verify pressure-driven detours with attached route weather metrics, exact `maxFeasibleMinTempC` and `maxFeasibleMinPressurePa` bottleneck recovery, warmer-hour route unlocking with `48`-hour wrap interpolation, and the pressure, temperature, environment-summary, and weather-constrained route HTTP endpoints.
-- `apps/api/src/terrain/real-site.test.ts`, 3 tests gated by `describe.skipIf(!hasRealSite)` on `data/site-terrain.json`: verifies `1001 x 1001` Jezero grid loading, `/api/terrain/elevation` queries, `unreachable` threshold recovery via `minRequiredSlopeDeg`, and PNG magic bytes on `/api/site/passability.png` and `/api/site/hillshade.png`.
-- `apps/api/src/weather/weather.test.ts`, 10 tests: verifies barometric scale height adjustment, compass sectors and `K`/`C` conversions, nominal/dust-storm/cold-snap scenarios, hybrid real-channel provenance preservation, crater-rim pressure checks, thermal daylight window recommendations, MEDA RSS `--` filtering, memory/disk TTL caching and offline fallbacks, and `/api/weather` plus `/api/weather/evaluate` HTTP endpoints.
-- `apps/web/src/services/pointStore.test.ts`, 4 tests: checks default class visibility seeding, visibility toggling, custom class creation and `localStorage` persistence, and FGDC icon ID persistence with invalid-key fallback.
+- `apps/api/src/terrain/engine.test.ts`, 11 tests: 5 tests under "TerrainGraph and slope routing" build a synthetic `11 x 11` ridge grid with a pass at row `9` to verify strict `10°` detours, permissive `30°` direct crossings, `1°` `unreachable` results with `minRequiredSlopeDeg`, `out_of_bounds` rejections, and `createApp(graph)` HTTP responses; 4 tests under "Spatial weather fields and weather-constrained routing" build a `15 x 15` highland-valley grid to verify pressure-driven detours with attached route weather metrics, exact `maxFeasibleMinTempC` and `maxFeasibleMinPressurePa` bottleneck recovery, warmer-hour route unlocking with `48`-hour wrap interpolation, and the pressure, temperature, environment-summary, and weather-constrained route HTTP endpoints; 2 tests under "Martian soil matrix classification, overlay, and traverse speed routing" verify 4-class soil segmentation with `classifyMarsSoilMatrix`, loose-sand A* detours, per-route `soilBreakdown`, and `GET /api/site/soil.png`.
+- `apps/api/src/terrain/real-site.test.ts`, 3 tests gated by `describe.skipIf(!hasRealSite)` on `data/site-terrain.json`: verifies `1001 x 1001` Jezero grid loading and `soilTypes` coverage, `/api/terrain/elevation` elevation and `soilType` queries, `unreachable` threshold recovery via `minRequiredSlopeDeg`, and PNG magic bytes on `/api/site/passability.png`, `/api/site/soil.png`, and `/api/site/hillshade.png`.
+- `apps/api/src/weather/weather.test.ts`, 10 tests: verifies barometric scale height adjustment, compass sectors and `K`/`C` conversions, nominal/dust-storm/cold-snap scenarios, hybrid real-channel provenance preservation, crater-rim pressure checks, thermal daylight window recommendations, MEDA RSS `--` filtering, memory/disk TTL caching and offline fallbacks, soil-breakdown-scaled EVA duration evaluation, and `/api/weather` plus `/api/weather/evaluate` HTTP endpoints with `soilSpeedFactors` validation.
+- `apps/web/src/services/pointStore.test.ts`, 5 tests: checks default class visibility seeding, visibility toggling, custom class creation and `localStorage` persistence, MIL-STD-2525C catalog and 15-character SIDC validation, and legacy FGDC icon migration with unknown-key stripping.
 
 `bun run lint` runs `biome check apps packages scripts`, checking `apps/`, `packages/`, and `scripts/` while ignoring `docs/`, `data/`, `local/`, `node_modules/`, `dist/`, and `apps/web/src/styles/tokens.css` per `biome.json`.

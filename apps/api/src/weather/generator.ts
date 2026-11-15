@@ -1,5 +1,6 @@
 import {
   DEFAULT_EVA_WEATHER_LIMITS,
+  DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
   type EvaRouteContext,
   type EvaSafeWindow,
   type EvaStatus,
@@ -9,6 +10,7 @@ import {
   type MarsCoord,
   type MarsWeatherSnapshot,
   type MarsWeatherSolForecast,
+  SOIL_TYPE_ORDER,
   type SelectedHourWeatherSummary,
   type SiteMetadata,
   type TraverseDepartureSlot,
@@ -19,6 +21,9 @@ import {
   type WeatherHourlyPoint,
   type WeatherScenario,
   type WeatherSourceType,
+  computeSegmentHours,
+  resolvePointSoilFactor,
+  resolveSoilSpeedFactors,
 } from "@nimbs/shared";
 
 export {
@@ -1187,26 +1192,18 @@ function resolveLimits(partial?: Partial<EvaWeatherLimits>): EvaWeatherLimits {
       partial?.descentSpeedMPerH,
       DEFAULT_EVA_LIMITS.descentSpeedMPerH,
     ),
+    soilSpeedFactors: resolveSoilSpeedFactors(
+      partial?.soilSpeedFactors,
+      DEFAULT_EVA_LIMITS.soilSpeedFactors ?? DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
+    ),
   };
-}
-
-function computeSegmentHours(
-  distM: number,
-  gainM: number,
-  lossM: number,
-  limits: EvaWeatherLimits,
-): number {
-  return (
-    distM / limits.flatSpeedMPerH +
-    gainM / limits.climbSpeedMPerH +
-    lossM / limits.descentSpeedMPerH
-  );
 }
 
 function computePointsDurationHours(
   points: readonly TraversePointSample[],
   limits: EvaWeatherLimits,
 ): number {
+  const factors = resolveSoilSpeedFactors(limits.soilSpeedFactors);
   let total = 0;
   for (let i = 1; i < points.length; i += 1) {
     const prev = points[i - 1];
@@ -1216,15 +1213,55 @@ function computePointsDurationHours(
     const dElev = curr.elevationM - prev.elevationM;
     const gain = Math.max(0, dElev);
     const loss = Math.max(0, -dElev);
-    total += computeSegmentHours(dDist, gain, loss, limits);
+    const segFactor =
+      (resolvePointSoilFactor(prev, factors) + resolvePointSoilFactor(curr, factors)) * 0.5;
+    total += computeSegmentHours(dDist, gain, loss, limits, segFactor);
   }
   return total;
+}
+
+function computeSoilBreakdownFlatHours(
+  route: EvaRouteContext,
+  limits: EvaWeatherLimits,
+): number | null {
+  const breakdown = route.soilBreakdown;
+  if (!breakdown) return null;
+  const factors = resolveSoilSpeedFactors(limits.soilSpeedFactors);
+  let accountedDist = 0;
+  let flatHours = 0;
+  for (const soilId of SOIL_TYPE_ORDER) {
+    const segDist = breakdown[soilId] ?? 0;
+    if (!Number.isFinite(segDist) || segDist <= 0) continue;
+    accountedDist += segDist;
+    flatHours += segDist / (limits.flatSpeedMPerH * factors[soilId]);
+  }
+  const totalDist = route.totalDistanceM ?? accountedDist;
+  const remainder = Math.max(0, totalDist - accountedDist);
+  if (remainder > 0.1) {
+    flatHours += remainder / limits.flatSpeedMPerH;
+  }
+  return accountedDist > 0 ? flatHours : null;
 }
 
 function resolveRouteDurationHours(
   route: EvaRouteContext | undefined,
   limits: EvaWeatherLimits,
 ): number | null {
+  const soilFlatHours = route ? computeSoilBreakdownFlatHours(route, limits) : null;
+  if (soilFlatHours !== null && route) {
+    const gainM = Math.max(0, route.elevationGainM ?? 0);
+    const lossM = Math.max(0, route.elevationLossM ?? 0);
+    return roundTo(
+      soilFlatHours + gainM / limits.climbSpeedMPerH + lossM / limits.descentSpeedMPerH,
+      2,
+    );
+  }
+  const hasPointSoil =
+    route?.points?.some((p) => p.soilType !== undefined || p.soilSpeedFactor !== undefined) ??
+    false;
+  if (hasPointSoil && route?.points && route.points.length >= 2) {
+    return roundTo(computePointsDurationHours(route.points, limits), 2);
+  }
   if (route?.totalDistanceM !== undefined && Number.isFinite(route.totalDistanceM)) {
     const distM = Math.max(0, route.totalDistanceM);
     const gainM = Math.max(0, route.elevationGainM ?? 0);
@@ -1250,6 +1287,7 @@ function buildWalkTimeProfile(
 } {
   if (route?.points && route.points.length >= 2) {
     const pts = route.points;
+    const factors = resolveSoilSpeedFactors(limits.soilSpeedFactors);
     const rawVertices: WalkTimeSample[] = [
       { elapsedHours: 0, elevationM: pts[0]?.elevationM ?? floorElevationM },
     ];
@@ -1262,12 +1300,24 @@ function buildWalkTimeProfile(
       const dElev = curr.elevationM - prev.elevationM;
       const gain = Math.max(0, dElev);
       const loss = Math.max(0, -dElev);
-      cumHours += computeSegmentHours(dDist, gain, loss, limits);
+      const segFactor =
+        (resolvePointSoilFactor(prev, factors) + resolvePointSoilFactor(curr, factors)) * 0.5;
+      cumHours += computeSegmentHours(dDist, gain, loss, limits, segFactor);
       rawVertices.push({ elapsedHours: cumHours, elevationM: curr.elevationM });
     }
 
-    const totalDuration = cumHours > 0 ? cumHours : Math.max(0.25, fallbackDurationHours);
-    if (cumHours <= 0) {
+    const totalDuration =
+      fallbackDurationHours > 0
+        ? fallbackDurationHours
+        : cumHours > 0
+          ? cumHours
+          : Math.max(0.25, fallbackDurationHours);
+    if (cumHours > 0 && Math.abs(cumHours - totalDuration) > 1e-4) {
+      const scale = totalDuration / cumHours;
+      for (const v of rawVertices) {
+        v.elapsedHours *= scale;
+      }
+    } else if (cumHours <= 0) {
       for (let i = 0; i < rawVertices.length; i += 1) {
         const v = rawVertices[i];
         if (v) v.elapsedHours = (i / Math.max(1, rawVertices.length - 1)) * totalDuration;

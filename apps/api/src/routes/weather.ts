@@ -1,7 +1,16 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { SiteDataset, SiteMetadata } from "@nimbs/shared";
+import {
+  SOIL_SPEED_FACTOR_MAX,
+  SOIL_SPEED_FACTOR_MIN,
+  type SiteDataset,
+  type SiteMetadata,
+  type SoilTypeId,
+  isSoilTypeId,
+  parsePartialSoilSpeedFactors,
+  resolveSoilSpeedFactors,
+} from "@nimbs/shared";
 import { Hono } from "hono";
 import {
   DEFAULT_EVA_LIMITS,
@@ -129,6 +138,27 @@ function validateRoute(rawRoute: unknown): { route?: EvaRouteContext; error?: st
     out.maxElevationM = r.maxElevationM;
   }
 
+  if (r.soilBreakdown !== undefined) {
+    if (
+      r.soilBreakdown === null ||
+      typeof r.soilBreakdown !== "object" ||
+      Array.isArray(r.soilBreakdown)
+    ) {
+      return { error: "route.soilBreakdown must be an object" };
+    }
+    const breakdown: Partial<Record<SoilTypeId, number>> = {};
+    for (const [key, val] of Object.entries(r.soilBreakdown as Record<string, unknown>)) {
+      if (!isSoilTypeId(key)) {
+        return { error: `route.soilBreakdown.${key} is not a valid soil type` };
+      }
+      if (typeof val !== "number" || !Number.isFinite(val) || val < 0) {
+        return { error: `route.soilBreakdown.${key} must be a non-negative finite number` };
+      }
+      breakdown[key] = val;
+    }
+    out.soilBreakdown = breakdown;
+  }
+
   if (r.points !== undefined) {
     if (!Array.isArray(r.points)) {
       return { error: "route.points must be an array" };
@@ -185,6 +215,25 @@ function validateRoute(rawRoute: unknown): { route?: EvaRouteContext; error?: st
           return { error: `route.points[${i}].lon must be a finite number in [-360, 360]` };
         }
         sample.lon = pt.lon;
+      }
+      if (pt.soilType !== undefined) {
+        if (!isSoilTypeId(pt.soilType)) {
+          return { error: `route.points[${i}].soilType is not a valid soil type` };
+        }
+        sample.soilType = pt.soilType;
+      }
+      if (pt.soilSpeedFactor !== undefined) {
+        if (
+          typeof pt.soilSpeedFactor !== "number" ||
+          !Number.isFinite(pt.soilSpeedFactor) ||
+          pt.soilSpeedFactor < SOIL_SPEED_FACTOR_MIN ||
+          pt.soilSpeedFactor > SOIL_SPEED_FACTOR_MAX
+        ) {
+          return {
+            error: `route.points[${i}].soilSpeedFactor must be a finite number in [${SOIL_SPEED_FACTOR_MIN}, ${SOIL_SPEED_FACTOR_MAX}]`,
+          };
+        }
+        sample.soilSpeedFactor = pt.soilSpeedFactor;
       }
 
       sanitizedPoints.push(sample);
@@ -268,6 +317,19 @@ function validateLimits(rawLimits: Partial<EvaWeatherLimits> | undefined): {
       return { limits: {}, error: `${key} must be a finite number in [${minVal}, ${maxVal}]` };
     }
     out[key] = raw;
+  }
+
+  if (rawLimits.soilSpeedFactors !== undefined) {
+    const parsedSoil = parsePartialSoilSpeedFactors(
+      rawLimits.soilSpeedFactors,
+      "limits.soilSpeedFactors",
+    );
+    if (parsedSoil.error) {
+      return { limits: {}, error: parsedSoil.error };
+    }
+    if (parsedSoil.factors) {
+      out.soilSpeedFactors = resolveSoilSpeedFactors(parsedSoil.factors);
+    }
   }
 
   return { limits: out };

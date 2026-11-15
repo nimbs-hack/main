@@ -1,13 +1,17 @@
-import type { MarsCoord } from "@nimbs/shared";
+import type { MarsCoord, MissionUnitId } from "@nimbs/shared";
+import { UNIT_ACCENT_COLORS } from "../services/dualSim";
 
 interface ContextMenuProps {
   x: number;
   y: number;
   coord: MarsCoord;
-  hasWaypoints: boolean;
+  activeUnitId: MissionUnitId;
+  waypointCount: number;
+  suggestedInsertIndex: number | null;
   canAddPoint?: boolean;
-  onSetA: (coord: MarsCoord) => void;
-  onSetB: (coord: MarsCoord) => void;
+  onAppendWaypoint: (coord: MarsCoord) => void;
+  onInsertIntermediate: (coord: MarsCoord) => void;
+  onRemoveLastWaypoint: () => void;
   onAddPoint: (coord: MarsCoord) => void;
   onClear: () => void;
   onClose: () => void;
@@ -17,16 +21,21 @@ export function ContextMenu({
   x,
   y,
   coord,
-  hasWaypoints,
+  activeUnitId,
+  waypointCount,
+  suggestedInsertIndex,
   canAddPoint = true,
-  onSetA,
-  onSetB,
+  onAppendWaypoint,
+  onInsertIntermediate,
+  onRemoveLastWaypoint,
   onAddPoint,
   onClear,
   onClose,
 }: ContextMenuProps) {
-  const clampedLeft = Math.min(x, window.innerWidth - 230);
-  const clampedTop = Math.min(y, window.innerHeight - 190);
+  const clampedLeft = Math.min(x, window.innerWidth - 240);
+  const clampedTop = Math.min(y, window.innerHeight - 235);
+  const unitColor = UNIT_ACCENT_COLORS[activeUnitId];
+  const nextNumber = waypointCount + 1;
 
   return (
     <div
@@ -35,32 +44,41 @@ export function ContextMenu({
       onContextMenu={(e) => e.preventDefault()}
     >
       <div className="context-menu-coords">
-        {coord.lat.toFixed(5)}°, {coord.lon.toFixed(5)}°
+        <span className="context-menu-unit-dot" style={{ backgroundColor: unitColor }} />
+        <span>
+          U{activeUnitId} · {coord.lat.toFixed(5)}°, {coord.lon.toFixed(5)}°
+        </span>
       </div>
       <button
         type="button"
         className="context-menu-item"
         onClick={() => {
-          onSetA(coord);
+          onAppendWaypoint(coord);
           onClose();
         }}
       >
-        <span>Set A Waypoint</span>
-        <span className="context-menu-tag">A</span>
-      </button>
-      <button
-        type="button"
-        className="context-menu-item"
-        onClick={() => {
-          onSetB(coord);
-          onClose();
-        }}
-      >
-        <span>Set B Waypoint</span>
-        <span className="context-menu-tag" style={{ color: "var(--color-ok)" }}>
-          B
+        <span>Add Waypoint {nextNumber}</span>
+        <span className="context-menu-tag" style={{ color: unitColor }}>
+          {nextNumber}
         </span>
       </button>
+      {waypointCount >= 2 && suggestedInsertIndex !== null && (
+        <button
+          type="button"
+          className="context-menu-item"
+          onClick={() => {
+            onInsertIntermediate(coord);
+            onClose();
+          }}
+        >
+          <span>
+            Insert Stop ({suggestedInsertIndex}→{suggestedInsertIndex + 1})
+          </span>
+          <span className="context-menu-tag" style={{ color: unitColor }}>
+            MID
+          </span>
+        </button>
+      )}
       {canAddPoint && (
         <button
           type="button"
@@ -76,7 +94,22 @@ export function ContextMenu({
           </span>
         </button>
       )}
-      {hasWaypoints && (
+      {waypointCount >= 2 && (
+        <button
+          type="button"
+          className="context-menu-item"
+          onClick={() => {
+            onRemoveLastWaypoint();
+            onClose();
+          }}
+        >
+          <span>Remove Last (#{waypointCount})</span>
+          <span className="context-menu-tag" style={{ color: "var(--color-text-dim)" }}>
+            -{waypointCount}
+          </span>
+        </button>
+      )}
+      {waypointCount >= 1 && (
         <button
           type="button"
           className="context-menu-item"
@@ -85,7 +118,7 @@ export function ContextMenu({
             onClose();
           }}
         >
-          <span>Clear Waypoints</span>
+          <span>Clear Waypoints ({waypointCount})</span>
           <span className="context-menu-tag" style={{ color: "var(--color-text-dim)" }}>
             CLR
           </span>

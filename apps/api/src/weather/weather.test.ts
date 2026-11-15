@@ -435,5 +435,51 @@ describe("Weather HTTP API endpoints", () => {
       body: JSON.stringify({ limits: { flatSpeedMPerH: 10 } }),
     });
     expect(badSpeedEval.status).toBe(400);
+
+    // 4 soil type speed coefficients scale traverse hours accurately
+    const soilBreakdownEval = await app.request("/api/weather/evaluate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scenario: "nominal",
+        sol: 1859,
+        limits: {
+          ...DEFAULT_EVA_LIMITS,
+          flatSpeedMPerH: 2000,
+          soilSpeedFactors: {
+            bedrock: 1.0,
+            "coarse-regolith": 0.8,
+            "fine-regolith": 0.5,
+            "loose-sand": 0.25,
+          },
+        },
+        route: {
+          totalDistanceM: 2500,
+          elevationGainM: 0,
+          elevationLossM: 0,
+          maxElevationM: -2000,
+          soilBreakdown: {
+            bedrock: 1000, // 1000 / 2000 = 0.5h
+            "coarse-regolith": 0,
+            "fine-regolith": 1000, // 1000 / (2000 * 0.5) = 1.0h
+            "loose-sand": 500, // 500 / (2000 * 0.25) = 1.0h -> total 2.5h
+          },
+        },
+      }),
+    });
+    expect(soilBreakdownEval.status).toBe(200);
+    const soilBody = (await soilBreakdownEval.json()) as {
+      evaluation: { estimatedRouteHours: number | null };
+    };
+    expect(soilBody.evaluation.estimatedRouteHours).toBe(2.5);
+
+    const badSoilEval = await app.request("/api/weather/evaluate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        limits: { soilSpeedFactors: { bedrock: 5.0 } },
+      }),
+    });
+    expect(badSoilEval.status).toBe(400);
   });
 });

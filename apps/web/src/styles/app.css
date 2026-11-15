@@ -601,12 +601,30 @@ body,
 }
 
 .context-menu-coords {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 8px 12px;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--color-text-dim);
   border-bottom: var(--border-width) solid var(--color-line);
   font-variant-numeric: tabular-nums;
+}
+
+.context-menu-unit-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  background: var(--color-text-dim);
+}
+
+.context-menu-unit-dot.is-u1 {
+  background: #de233d;
+}
+
+.context-menu-unit-dot.is-u2 {
+  background: #38bdf8;
 }
 
 .context-menu-item {
@@ -1546,6 +1564,13 @@ body,
 .rte-icon-btn:hover {
   border-color: var(--color-text);
   color: var(--color-text);
+}
+
+.rte-icon-btn:disabled {
+  opacity: 0.32;
+  cursor: default;
+  border-color: var(--color-line);
+  color: var(--color-text-dim);
 }
 
 .rte-mid-dist {
@@ -2691,4 +2716,824 @@ body,
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   color: var(--color-text-muted);
+}
+
+/* Martian soil / substrate matrix UI controls and HUD indicators */
+.wx-soil-unit {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--color-text-dim);
+}
+
+.wx-soil-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wx-soil-swatch {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border: var(--border-width) solid rgba(255, 248, 243, 0.35);
+}
+
+.rte-soil-strip {
+  display: flex;
+  width: 100%;
+  height: 3px;
+  background: var(--color-bg);
+  border: var(--border-width) solid var(--color-line);
+  overflow: hidden;
+}
+
+.rte-soil-seg {
+  display: block;
+  height: 100%;
+}
+
+.hud-soil-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.hud-soil-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 10px;
+  margin-top: 2px;
+}
+
+.hud-soil-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-soil-factor {
+  margin-left: auto;
+  color: var(--color-text-muted);
+}
+
+/* Dual character rail switcher (1 / 2) and unit header tags */
+.rail-unit-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--color-bg);
+  border: var(--border-width) solid var(--color-line-strong);
+}
+
+.rail-unit-btn {
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-right: var(--border-width) solid var(--color-line);
+  background: transparent;
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rail-unit-btn:last-child {
+  border-right: 0;
+}
+
+.rail-unit-btn:hover {
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+}
+
+.rail-unit-btn.is-u1.is-active {
+  background: rgba(222, 35, 61, 0.22);
+  color: #ff6b7d;
+  border-bottom: 2px solid #de233d;
+}
+
+.rail-unit-btn.is-u2.is-active {
+  background: rgba(56, 189, 248, 0.2);
+  color: #7dd3fc;
+  border-bottom: 2px solid #38bdf8;
+}
+
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.unit-tag-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-bg);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Unit-colored sequential waypoint badges and map markers */
+.rte-wp-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-line);
+}
+
+.rte-wp-chain.is-move-on {
+  border-color: rgb(63 182 139 / 0.45);
+}
+
+.rte-wp-chain-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rte-wp-chain-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rte-move-toggle {
+  height: 18px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--color-bg);
+  border: var(--border-width) solid var(--color-line-strong);
+  border-radius: var(--radius);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.rte-move-toggle:hover {
+  border-color: var(--color-text);
+  color: var(--color-text);
+}
+
+.rte-move-toggle.is-on {
+  border-color: var(--color-ok);
+  background: rgb(63 182 139 / 0.14);
+  color: var(--color-text);
+}
+
+@keyframes rte-busy-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.rte-busy-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--color-accent);
+  display: inline-block;
+  animation: rte-busy-pulse 1s ease-in-out infinite;
+}
+
+.rte-wp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.rte-wp-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  background: var(--color-bg);
+  border: var(--border-width) solid var(--color-line);
+}
+
+.rte-wp-row-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.rte-wp-elev-sm {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.rte-wp-row-btns {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.rte-wp-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border: var(--border-width) dashed var(--color-line-strong);
+  background: var(--color-bg);
+}
+
+.rte-wp-empty.is-next {
+  opacity: 0.88;
+}
+
+.rte-wp-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-dim);
+}
+
+.rte-wp-badge.is-u1,
+.rte-wp-badge.is-u2 {
+  width: 24px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.rte-wp-badge.is-start.is-u1 {
+  border-color: #de233d;
+  background: var(--color-surface);
+  color: #ff6b7d;
+}
+
+.rte-wp-badge.is-mid.is-u1 {
+  border-color: #de233d;
+  background: rgba(222, 35, 61, 0.14);
+  color: #ff99a6;
+}
+
+.rte-wp-badge.is-end.is-u1 {
+  border-color: #de233d;
+  background: #de233d;
+  color: #ffffff;
+}
+
+.rte-wp-badge.is-start.is-u2 {
+  border-color: #38bdf8;
+  background: var(--color-surface);
+  color: #7dd3fc;
+}
+
+.rte-wp-badge.is-mid.is-u2 {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.14);
+  color: #bae6fd;
+}
+
+.rte-wp-badge.is-end.is-u2 {
+  border-color: #38bdf8;
+  background: #38bdf8;
+  color: #050709;
+}
+
+.waypoint-pin.is-u1,
+.waypoint-pin.is-u2 {
+  width: 24px;
+  height: 24px;
+  font-size: 11px;
+}
+
+.waypoint-pin.is-start.is-u1 {
+  border-color: #de233d;
+  color: #ff6b7d;
+  background: var(--color-surface);
+}
+
+.waypoint-pin.is-mid.is-u1 {
+  border-color: #de233d;
+  background: #2d0b11;
+  color: #ff99a6;
+}
+
+.waypoint-pin.is-end.is-u1 {
+  border-color: #de233d;
+  background: #de233d;
+  color: #ffffff;
+}
+
+.waypoint-pin.is-start.is-u2 {
+  border-color: #38bdf8;
+  color: #7dd3fc;
+  background: var(--color-surface);
+}
+
+.waypoint-pin.is-mid.is-u2 {
+  border-color: #38bdf8;
+  background: #09212e;
+  color: #bae6fd;
+}
+
+.waypoint-pin.is-end.is-u2 {
+  border-color: #38bdf8;
+  background: #38bdf8;
+  color: #050709;
+}
+
+.waypoint-pin.is-secondary {
+  opacity: 0.72;
+}
+
+.waypoint-pin.is-draggable {
+  cursor: grab;
+  outline: 1px dashed var(--color-text);
+  outline-offset: 2px;
+}
+
+.waypoint-pin.is-draggable:active {
+  cursor: grabbing;
+}
+
+.sim-mover-pin {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  background: #050709;
+  border: 2px solid var(--color-text);
+  color: var(--color-text);
+}
+
+.sim-mover-pin.is-u1 {
+  border-color: #de233d;
+  color: #ff6b7d;
+}
+
+.sim-mover-pin.is-u2 {
+  border-color: #38bdf8;
+  color: #7dd3fc;
+}
+
+.sim-mover-pin.is-u1.is-walking {
+  background: #3b0b13;
+  color: #ffffff;
+}
+
+.sim-mover-pin.is-u2.is-walking {
+  background: #0a2533;
+  color: #ffffff;
+}
+
+.sim-mover-pin.is-arrived {
+  border-color: var(--color-ok);
+  color: var(--color-ok);
+}
+
+/* Dual Simulation (SIM) 6th tab */
+.sim-setup-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.sim-setup-btn {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  padding: 6px 8px;
+  min-width: 0;
+  background: var(--color-surface-raised);
+  border: var(--border-width) solid var(--color-line);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sim-setup-btn:hover,
+.sim-setup-btn.is-ready {
+  border-color: var(--color-line-strong);
+}
+
+.sim-setup-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+}
+
+.sim-setup-label {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.sim-setup-meta {
+  flex-basis: 100%;
+  padding-left: 13px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sim-time-card .sim-clock-row {
+  flex-wrap: wrap;
+  row-gap: 3px;
+}
+
+.sim-time-card .mono-value {
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.sim-daylight-tag.is-done {
+  border-color: var(--color-ok);
+  color: var(--color-ok);
+}
+
+.sim-axis-row:has(> span:nth-child(3):last-child) {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sim-controls-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sim-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sim-dep-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: var(--border-width) solid var(--color-line);
+}
+
+.sim-dep-row > .value-label {
+  white-space: nowrap;
+}
+
+.sim-dep-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sim-dep-actions .compact-btn {
+  white-space: nowrap;
+  padding: 0 7px;
+}
+
+.sim-dep-val {
+  min-width: 44px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-lanes-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  margin-top: 8px;
+  background: var(--color-surface-raised);
+  border: var(--border-width) solid var(--color-line);
+}
+
+.sim-lane-end {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-lane-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 50px;
+  align-items: center;
+  gap: 6px;
+}
+
+.sim-lane-row.is-empty .sim-lane-track {
+  opacity: 0.45;
+}
+
+.sim-lane-tag {
+  padding: 2px 0;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  border: var(--border-width) solid var(--color-line);
+  background: var(--color-bg);
+}
+
+.sim-lane-tag.is-u1 {
+  border-color: #de233d;
+  color: #de233d;
+}
+
+.sim-lane-tag.is-u2 {
+  border-color: #38bdf8;
+  color: #38bdf8;
+}
+
+.sim-lane-track {
+  position: relative;
+  height: 14px;
+  background: var(--color-bg);
+  border: var(--border-width) solid var(--color-line);
+  overflow: hidden;
+}
+
+.sim-lane-active {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.sim-lane-soil-seg {
+  display: block;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.sim-lane-cap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-1px);
+}
+
+.sim-lane-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--color-text);
+  transform: translateX(-1px);
+  pointer-events: none;
+}
+
+.sim-lane-eta {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sim-lane-eta.is-done {
+  color: var(--color-ok);
+  font-weight: 700;
+}
+
+.sim-live-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sim-unit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px;
+  background: var(--color-surface-raised);
+  border: var(--border-width) solid var(--color-line);
+  border-top-width: 2px;
+}
+
+.sim-unit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.sim-unit-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.sim-unit-mode {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--color-text-dim);
+  text-transform: uppercase;
+}
+
+.sim-unit-empty {
+  padding: 10px 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-dim);
+}
+
+.sim-unit-status-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.sim-unit-state {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-unit-state.is-arrived {
+  color: var(--color-ok);
+}
+
+.sim-unit-dist {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sim-unit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 6px;
+}
+
+.sim-unit-grid > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.sim-k {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--color-text-dim);
+  letter-spacing: 0.06em;
+}
+
+.sim-v {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-unit-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: 4px;
+  border-top: var(--border-width) solid var(--color-line);
+}
+
+.sim-soil-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--color-text-muted);
+}
+
+.sim-wxr-mini {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-charts-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  margin-top: 8px;
+  background: var(--color-surface-raised);
+  border: var(--border-width) solid var(--color-line);
+}
+
+.sim-charts-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sim-legend-tags {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.sim-chart-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 6px;
+  border-top: var(--border-width) solid var(--color-line);
+}
+
+.sim-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sim-chart-vals {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-chart-svg {
+  display: block;
+  width: 100%;
+  height: 64px;
+  background: var(--color-bg);
+  border: var(--border-width) solid var(--color-line);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.sim-chart-bounds {
+  display: flex;
+  justify-content: flex-end;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
 }

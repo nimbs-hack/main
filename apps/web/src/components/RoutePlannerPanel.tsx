@@ -2,6 +2,7 @@ import type {
   ComputedRoute,
   LonFormat,
   MarsCoord,
+  MissionUnitId,
   RoutePlanResponse,
   RoutePoint,
   RouteStrategy,
@@ -12,8 +13,11 @@ import {
   type EvaWeatherEvaluation,
   type EvaWeatherLimits,
   type RouteBlockedReason,
+  SOIL_TYPE_CATALOG,
+  SOIL_TYPE_ORDER,
   TRAVERSE_PRESETS,
 } from "../services/api";
+import { UNIT_ACCENT_COLORS } from "../services/dualSim";
 import { ElevationProfile } from "./ElevationProfile";
 import { MaxSlopeControl } from "./MaxSlopeControl";
 import { TraversePresetControl } from "./TraversePresetControl";
@@ -26,6 +30,7 @@ import {
 } from "./routeVisuals";
 
 interface RoutePlannerPanelProps {
+  activeUnitId: MissionUnitId;
   uiMode: UiMode;
   presetId: TraversePresetId;
   onSelectPreset: (id: TraversePresetId) => void;
@@ -36,9 +41,12 @@ interface RoutePlannerPanelProps {
   onToggleWeatherRouting: () => void;
   weatherLimits: EvaWeatherLimits;
   simClockLabel: string;
-  waypointA: MarsCoord | null;
-  waypointB: MarsCoord | null;
-  onSwapWaypoints: () => void;
+  waypoints: MarsCoord[];
+  moveWaypoints: boolean;
+  onToggleMoveWaypoints: () => void;
+  onMoveWaypoint: (index: number, delta: -1 | 1) => void;
+  onRemoveWaypoint: (index: number) => void;
+  onReverseWaypoints: () => void;
   onClearWaypoints: () => void;
   lonFormat: LonFormat;
   routePlan: RoutePlanResponse | null;
@@ -110,6 +118,7 @@ function slopeToneColor(slopeDeg: number, maxSlopeDeg: number): string {
 }
 
 export function RoutePlannerPanel({
+  activeUnitId,
   uiMode,
   presetId,
   onSelectPreset,
@@ -120,9 +129,12 @@ export function RoutePlannerPanel({
   onToggleWeatherRouting,
   weatherLimits,
   simClockLabel,
-  waypointA,
-  waypointB,
-  onSwapWaypoints,
+  waypoints,
+  moveWaypoints,
+  onToggleMoveWaypoints,
+  onMoveWaypoint,
+  onRemoveWaypoint,
+  onReverseWaypoints,
   onClearWaypoints,
   lonFormat,
   routePlan,
@@ -139,79 +151,131 @@ export function RoutePlannerPanel({
   const passablePct = routePlan
     ? Math.max(0, Math.min(100, routePlan.passableEdgeRatio * 100))
     : null;
+  const unitColor = UNIT_ACCENT_COLORS[activeUnitId];
 
   return (
     <>
       <div className="panel-header">
-        <h1 className="panel-title">Route</h1>
-        <p className="panel-desc">Right-click map for A and B in {siteCompactLabel} km grid.</p>
+        <div className="panel-title-row">
+          <h1 className="panel-title">Route</h1>
+          <span className="unit-tag-pill" style={{ borderColor: unitColor, color: unitColor }}>
+            UNIT {activeUnitId} · {TRAVERSE_PRESETS[presetId].label}
+          </span>
+        </div>
+        <p className="panel-desc">
+          Right-click map to add numbered waypoints 1, 2, 3... in {siteCompactLabel} km grid.
+        </p>
         <div className="panel-rule" />
       </div>
 
-      {/* Compact A -> B corridor strip */}
-      <div className="rte-corridor">
-        <div className={`rte-wp-slot ${waypointA ? "is-set" : ""}`}>
-          <div className="rte-wp-badge is-a">A</div>
-          <div className="rte-wp-info">
-            <span className="rte-wp-elev">
-              {routePlan?.snappedA
-                ? `${routePlan.snappedA.elevationM.toFixed(0)} m`
-                : waypointA
-                  ? "SET"
-                  : "---"}
-            </span>
-            <span className="rte-wp-coord">
-              {waypointA ? formatShortCoord(waypointA, lonFormat) : "R-CLICK"}
-            </span>
-          </div>
-        </div>
-
-        <div className="rte-corridor-mid">
-          <div className={`rte-track-line ${routingBusy ? "is-busy" : ""}`} />
-          <div className="rte-mid-controls">
-            {waypointA && waypointB && (
+      {/* Sequential numbered waypoint list (1 -> 2 -> 3 ...) */}
+      <div className={`rte-wp-chain ${moveWaypoints ? "is-move-on" : ""}`}>
+        <div className="rte-wp-chain-head">
+          <span className="value-label">WAYPOINTS · {waypoints.length}</span>
+          <div className="rte-wp-chain-actions">
+            {routingBusy && <span className="rte-busy-dot" aria-label="Routing" />}
+            {selectedRoute && (
+              <span className="rte-mid-dist">
+                {formatRouteDistance(selectedRoute.totalDistanceM)}
+              </span>
+            )}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={moveWaypoints}
+              className={`rte-move-toggle ${moveWaypoints ? "is-on" : ""}`}
+              title="Drag waypoints on map with mouse"
+              onClick={onToggleMoveWaypoints}
+            >
+              <span className={`rte-dot ${moveWaypoints ? "is-ok" : ""}`} />
+              <span>MOVE</span>
+            </button>
+            {waypoints.length >= 2 && (
               <button
                 type="button"
                 className="rte-icon-btn"
-                title="Swap A and B"
-                onClick={onSwapWaypoints}
+                title="Reverse waypoint sequence"
+                onClick={onReverseWaypoints}
               >
-                ⇄
+                ⇅
               </button>
             )}
-            {(waypointA || waypointB) && (
+            {waypoints.length >= 1 && (
               <button
                 type="button"
                 className="rte-icon-btn"
-                title="Clear waypoints"
+                title={`Clear U${activeUnitId} waypoints`}
                 onClick={onClearWaypoints}
               >
                 ×
               </button>
             )}
           </div>
-          {selectedRoute && (
-            <span className="rte-mid-dist">
-              {formatRouteDistance(selectedRoute.totalDistanceM)}
-            </span>
-          )}
         </div>
 
-        <div className={`rte-wp-slot is-right ${waypointB ? "is-set" : ""}`}>
-          <div className="rte-wp-info">
-            <span className="rte-wp-elev">
-              {routePlan?.snappedB
-                ? `${routePlan.snappedB.elevationM.toFixed(0)} m`
-                : waypointB
-                  ? "SET"
-                  : "---"}
-            </span>
-            <span className="rte-wp-coord">
-              {waypointB ? formatShortCoord(waypointB, lonFormat) : "R-CLICK"}
-            </span>
+        {waypoints.length === 0 ? (
+          <div className="rte-wp-empty">
+            <div className={`rte-wp-badge is-start is-u${activeUnitId}`}>1</div>
+            <span className="rte-wp-hint">Right-click map for waypoint 1</span>
           </div>
-          <div className="rte-wp-badge is-b">B</div>
-        </div>
+        ) : (
+          <div className="rte-wp-list">
+            {waypoints.map((wp, idx) => {
+              const num = idx + 1;
+              const snapped = routePlan?.snappedWaypoints?.[idx];
+              const isEnd = waypoints.length > 1 && idx === waypoints.length - 1;
+              const roleClass = idx === 0 ? "is-start" : isEnd ? "is-end" : "is-mid";
+              return (
+                <div
+                  key={`${idx}-${wp.lat.toFixed(6)}-${wp.lon.toFixed(6)}`}
+                  className="rte-wp-row"
+                >
+                  <div className={`rte-wp-badge is-u${activeUnitId} ${roleClass}`}>{num}</div>
+                  <div className="rte-wp-row-meta">
+                    <span className="rte-wp-elev-sm">
+                      {snapped ? `${snapped.elevationM.toFixed(0)} m` : "SET"}
+                    </span>
+                    <span className="rte-wp-coord">{formatShortCoord(wp, lonFormat)}</span>
+                  </div>
+                  <div className="rte-wp-row-btns">
+                    <button
+                      type="button"
+                      className="rte-icon-btn"
+                      disabled={idx === 0}
+                      title={`Move #${num} earlier`}
+                      onClick={() => onMoveWaypoint(idx, -1)}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      className="rte-icon-btn"
+                      disabled={idx === waypoints.length - 1}
+                      title={`Move #${num} later`}
+                      onClick={() => onMoveWaypoint(idx, 1)}
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      className="rte-icon-btn"
+                      title={`Remove #${num}`}
+                      onClick={() => onRemoveWaypoint(idx)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            {waypoints.length === 1 && (
+              <div className="rte-wp-empty is-next">
+                <div className={`rte-wp-badge is-end is-u${activeUnitId}`}>2</div>
+                <span className="rte-wp-hint">Right-click map for waypoint 2</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Slope + Weather constraint strip */}
@@ -283,7 +347,10 @@ export function RoutePlannerPanel({
         <div className="rte-blocked-card">
           <div className="rte-blocked-head">
             <span className="rte-blocked-tag">
-              BLOCKED · {blockedReasonTag(routePlan.blockedReason)}
+              {routePlan.blockedLegIndex !== undefined
+                ? `BLOCKED ${routePlan.blockedLegIndex + 1}→${routePlan.blockedLegIndex + 2}`
+                : "BLOCKED"}{" "}
+              · {blockedReasonTag(routePlan.blockedReason)}
             </span>
             <div className="rte-blocked-actions">
               {uiMode === "advance" &&
@@ -437,6 +504,32 @@ export function RoutePlannerPanel({
                       <span className="rte-wx-chip is-press">{rt.minPressurePa.toFixed(0)}Pa</span>
                     )}
                   </div>
+
+                  {rt.soilBreakdown && rt.totalDistanceM > 0 && (
+                    <div
+                      className="rte-soil-strip"
+                      title={SOIL_TYPE_ORDER.map((id) => {
+                        const pct = ((rt.soilBreakdown?.[id] ?? 0) / rt.totalDistanceM) * 100;
+                        return `${SOIL_TYPE_CATALOG[id].shortLabel} ${pct.toFixed(0)}%`;
+                      }).join(" · ")}
+                    >
+                      {SOIL_TYPE_ORDER.map((id) => {
+                        const dist = rt.soilBreakdown?.[id] ?? 0;
+                        if (dist <= 0) return null;
+                        const pct = (dist / rt.totalDistanceM) * 100;
+                        return (
+                          <span
+                            key={id}
+                            className="rte-soil-seg"
+                            style={{
+                              width: `${pct.toFixed(1)}%`,
+                              backgroundColor: SOIL_TYPE_CATALOG[id].colorHex,
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {spark && (

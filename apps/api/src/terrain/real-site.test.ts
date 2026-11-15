@@ -42,7 +42,9 @@ describe.skipIf(!hasRealSite)("Real Jezero Crater site dataset", () => {
     const elevBody = (await elevRes.json()) as ElevationResponse;
     expect(elevBody.insideSite).toBe(true);
     expect(elevBody.elevationM).not.toBeNull();
+    expect(elevBody.soilType).toBeDefined();
     expect(graph.elevationAt(meta.center)).not.toBeNull();
+    expect(dataset.soilTypes?.length).toBe(meta.rows * meta.cols);
 
     const outsideRes = await app.request("/api/terrain/elevation?lat=0&lon=0");
     expect(outsideRes.status).toBe(200);
@@ -101,6 +103,12 @@ describe.skipIf(!hasRealSite)("Real Jezero Crater site dataset", () => {
     expect(maskRes.headers.get("content-type")).toBe("image/png");
     const maskBytes = new Uint8Array(await maskRes.arrayBuffer());
     expect(Array.from(maskBytes.slice(0, 8))).toEqual(PNG_MAGIC);
+
+    const soilRes = await app.request("/api/site/soil.png");
+    expect(soilRes.status).toBe(200);
+    expect(soilRes.headers.get("content-type")).toBe("image/png");
+    const soilBytes = new Uint8Array(await soilRes.arrayBuffer());
+    expect(Array.from(soilBytes.slice(0, 8))).toEqual(PNG_MAGIC);
 
     if (existsSync(HILLSHADE_PNG_PATH)) {
       const hsRes = await app.request("/api/site/hillshade.png");

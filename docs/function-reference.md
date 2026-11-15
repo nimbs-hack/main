@@ -93,11 +93,17 @@ Declares verified global Mars basemap layer metadata proxied through `/api/tiles
 
 Defines `DEFAULT_MARS_BASE_LAYER` (`id: "usgs-mdim"`, `maxNativeZoom: 9`) and `MARS_BASE_LAYERS` (`usgs-mdim`, `usgs-themis`, `usgs-mola-themis`, `mola-trek`). Contains no functions.
 
+### packages/shared/src/soil.ts
+
+Defines the 4 Martian substrate classes (`"bedrock"`, `"coarse-regolith"`, `"fine-regolith"`, `"loose-sand"` mapped to codes `0..3`), per-preset traverse speed factors, factor validation, and THEMIS NIR + CTX terrain soil classification in [packages/shared/src/soil.ts](../packages/shared/src/soil.ts).
+
+Exports `SOIL_TYPE_ORDER`, `SOIL_TYPE_CATALOG`, `SOIL_SPEED_FACTOR_MIN` (`0.1`), `SOIL_SPEED_FACTOR_MAX` (`1.5`), `DEFAULT_HUMAN_SOIL_SPEED_FACTORS`, `DEFAULT_ROVER_SOIL_SPEED_FACTORS`, `resolveSoilSpeedFactors`, `maxSoilSpeedFactor`, `parsePartialSoilSpeedFactors`, and `classifyMarsSoilMatrix`. See [Martian soil sources](martian-soil-sources.md) for physical criteria and references.
+
 ### packages/shared/src/types.ts
 
-Defines shared TypeScript interfaces, union types, and `DEFAULT_EVA_WEATHER_LIMITS` in [packages/shared/src/types.ts](../packages/shared/src/types.ts).
+Defines shared TypeScript interfaces, union types, `TRAVERSE_PRESETS`, and `DEFAULT_EVA_WEATHER_LIMITS` in [packages/shared/src/types.ts](../packages/shared/src/types.ts).
 
-Exports `DEFAULT_EVA_WEATHER_LIMITS` (`minAirTempC: -75`, `maxWindSpeedMps: 15`, `minPressurePa: 650`, `maxPressureSwingPa: 35`, `maxEvaHours: 4`) and 30 type contracts covering terrain grids, routes, weather snapshots, 48-hour traverse slots, and map layers. Contains no functions.
+Exports `DEFAULT_EVA_WEATHER_LIMITS` (`minAirTempC: -75`, `maxWindSpeedMps: 15`, `minPressurePa: 650`, `maxPressureSwingPa: 35`, `maxEvaHours: 4`), `TRAVERSE_PRESETS` (including per-soil speed defaults), and type contracts covering terrain grids, soil matrices and breakdowns, routes, weather snapshots, 48-hour traverse slots, and map layers. Contains no functions.
 
 ---
 
@@ -268,15 +274,15 @@ Computes a soft thermal-and-pressure penalty score used by `"gentlest"` and `"we
 2. Computes proximity caution factors `nearTemp` over a `5` K margin above `minAirTempK` and `nearPress` over `pressCautionSpanPa` above `minPressurePa`.
 3. Returns `0.55 * tempDeficit + 0.45 * pressDeficit + 0.6 * Math.max(nearTemp, nearPress)`.
 
-##### `private runAStar(startIdx: number, goalIdx: number, maxSlopeDeg: number, mode: RouteStrategy, weatherCtx?: ResolvedWeatherContext): number[] | null`
+##### `private runAStar(startIdx: number, goalIdx: number, maxSlopeDeg: number, mode: RouteStrategy, weatherCtx?: ResolvedWeatherContext, soilFactors?: SoilSpeedFactors): number[] | null`
 
-Runs single-source A* search over the grid graph using preallocated typed buffers.
+Runs single-source A* search over the grid graph using preallocated typed buffers and a `Float64Array(4)` `soilFactorLut`.
 
 1. Immediately returns `null` when `weatherCtx` is active and either `startIdx` or `goalIdx` fails `isCellWeatherPassable`.
 2. Resets `gScoreBuf` to `+Infinity`, `parentBuf` to `-1`, `closedBuf` to `0`, and clears `MinHeap`.
 3. Precomputes `maxDh[d] = dirDists[d] * Math.tan(maxSlopeDeg) + 1e-9` to reject steep edges without calling `Math.atan` on every step.
-4. Seeds the heap with admissible Euclidean grid-plane distance `Math.hypot((r - goalR) * dyM, (c - goalC) * dxM)`.
-5. Applies strategy weights per step: `"shortest"` uses `dist`; `"gentlest"` uses `dist * (1 + 4.5 * ratio^2 + thermalWeight * 1.0 * thermalRisk)`; `"weather-safe"` uses `dist * (1 + thermalWeight * 80 * thermalRisk + 0.5 * ratio^2)` with `WEATHER_SAFE_THERMAL_GAIN = 80`; `"alternate"` multiplies `dist` by `3.5` when `penaltyBuf[v]` is set.
+4. Seeds the heap with an Octile grid-plane distance estimate scaled by inverse max soil speed factor (`heuristicWeight = 1` for `"shortest"` to preserve admissibility, `1.35` for non-shortest routes).
+5. Scales each step by `soilTimeScale = 1 / edgeSoilFactor`: `"shortest"` uses `dist * soilTimeScale`; `"gentlest"` uses `dist * soilTimeScale * (1 + 4.5 * ratio^2 + thermalWeight * 1.0 * thermalRisk)`; `"weather-safe"` uses `dist * soilTimeScale * (1 + thermalWeight * 80 * thermalRisk + 0.5 * ratio^2)` with `WEATHER_SAFE_THERMAL_GAIN = 80`; `"alternate"` multiplies `dist * soilTimeScale` by `3.5` when `penaltyBuf[v]` is set.
 6. Walks `parentBuf` backward from `goalIdx` on success, reverses, and returns node indices, or returns `null`.
 
 ##### `private findMaxFeasibleNodeValue(startIdx: number, goalIdx: number, maxSlopeDeg: number, values: Float32Array): number | null`
@@ -287,9 +293,9 @@ Runs maximin Dijkstra over slope-passable edges using `bestSlopeBuf` and `MinHea
 
 Runs minimax Dijkstra over all valid cells to find the tightest `maxSlopeDeg` threshold that connects `startIdx` and `goalIdx`. Relaxes `candSlope = Math.max(uSlope, edgeSlope)` and returns `Math.ceil(heap.poppedScore * 10) / 10` when `goalIdx` pops, or `null` when no valid cell path exists.
 
-##### `private buildRouteSummary(id: string, label: string, strategy: RouteStrategy, nodePath: number[], weatherCtx?: ResolvedWeatherContext): ComputedRoute`
+##### `private buildRouteSummary(id: string, label: string, strategy: RouteStrategy, nodePath: number[], weatherCtx?: ResolvedWeatherContext, soilFactors?: SoilSpeedFactors): ComputedRoute`
 
-Converts cell indices into a `ComputedRoute` payload. Accumulates distance, elevation gain/loss, peak slope, and distance-weighted mean slope; rounds `lat`/`lon` to 6 decimals, elevation to `0.01` m, distance to `0.1` m, and slope to `0.01` deg. When `weatherCtx` is defined, attaches per-point `tempC` and `pressurePa` plus route-level min/max telemetry.
+Converts cell indices into a `ComputedRoute` payload. Accumulates distance, elevation gain/loss, peak slope, distance-weighted mean slope, and per-class `soilBreakdown` shares; rounds `lat`/`lon` to 6 decimals, elevation to `0.01` m, distance to `0.1` m, and slope to `0.01` deg, and records point-level `soilType` and `soilSpeedFactor`. When `weatherCtx` is defined, attaches per-point `tempC` and `pressurePa` plus route-level min/max telemetry.
 
 ##### `private overlapRatio(pathA: number[], pathB: number[]): number`
 
@@ -322,6 +328,10 @@ Public entry point called by `POST /api/graph/routes`.
 ##### `renderSlopeMaskPng(maxSlopeDeg: number): Uint8Array`
 
 Renders an RGBA PNG mask for `GET /api/site/passability.png`. Sets valid cells with `localMaxSlope > maxSlopeDeg` to amber-orange `rgba(245, 158, 11, 175)`, cells with `localMaxSlope > maxSlopeDeg * 0.75` to caution yellow `rgba(234, 179, 8, 55)`, and remaining cells transparent, encoding with `encodeRgbaPng(cols, rows, rgba, 1)`.
+
+##### `renderSoilMaskPng(): Uint8Array`
+
+Renders an RGBA PNG mask for `GET /api/site/soil.png`. Colors valid cells by their classified soil code (`0` bedrock, `1` coarse regolith, `2` fine regolith, `3` loose sand) using `SOIL_TYPE_CATALOG` colors and leaves invalid nodata cells transparent, encoding via `encodeRgbaPng`.
 
 ### apps/api/src/terrain/weatherField.ts
 
@@ -600,7 +610,7 @@ Internal helper scanning a single 24-hour sol at `targetElevationM` to count day
 
 Exported function computing the EVA verdict, 5 suit checks, selected-hour telemetry, and 48-hour traverse windows.
 
-1. Resolves floor and rim elevations, scales pressure and temperature bounds to `evaluationElevationM`, computes `selectedHourWeather` at `lmstHour` defaulting to `12`, and runs `computeTraverseWindows`.
+1. Resolves floor and rim elevations, applies resolved per-soil speed factors (`soilBreakdown`, point `soilSpeedFactor`, or fallback `"fine-regolith"`) when computing EVA duration and walk profiles, scales pressure and temperature bounds to `evaluationElevationM`, computes `selectedHourWeather` at `lmstHour` defaulting to `12`, and runs `computeTraverseWindows`.
 2. Evaluates checks `"air_temp"`, `"wind_speed"`, `"pressure"`, `"pressure_swing"`, and `"eva_duration"` against `limits` with near-limit caution bands at `+5` C temp, `1.04x` pressure, `0.8x` wind, `0.85x` pressure swing, and `+1.0` h window margin.
 3. Combines worst check status into overall verdict `status`, formats human-readable `summary`, and attaches provenance metadata.
 
@@ -759,8 +769,8 @@ Exported React root component coordinating all panels, overlays, and server call
 1. Hydrates `pointClasses`, `points`, and `hiddenClassIds` synchronously from `loadPointState()` and writes updates back through `savePointState()`.
 2. Loads `SiteMetadata` via `fetchSiteMeta()`, basemap layers via `fetchBaseLayers()`, and initial weather via `fetchWeatherSnapshot()`.
 3. Advances `simLmstHour` by `+0.5` hours every `600` ms while `isPlayingTime` is true, wrapping from `48` back to `0`.
-4. Debounces cursor elevation lookups against `fetchElevation` by `45` ms when inside `site.bbox`, route planning against `planGraphRoutes` with `DEFAULT_THERMAL_WEIGHT = 0.35` and `AbortController` by `120` ms, weather constraint evaluation against `evaluateWeatherConstraints` by `80` ms, and site weather summary requests against `fetchEnvironmentSummary` by `160` ms when temperature or pressure overlays are active.
-5. Registers 5 `ToolDefinition` panels in `ToolRegistry` with ids `"route"`, `"points"`, `"weather"`, `"layers"`, and `"settings"`, sets `leftHudOffset = panelOpen ? 480 : 64`, manages `uiMode` (`"basic"` vs `"advance"`) and `presetId` (`"human"` vs `"rover"`) via the rail `BSC`/`ADV` switch, locks map point/class editing when `uiMode === "basic"`, and renders the rail, drawer, `MapView`, telemetry HUD, floating `TimeSimulationControl`, and `ContextMenu`.
+4. Debounces cursor elevation lookups against `fetchElevation` by `45` ms when inside `site.bbox` (displaying cursor soil substrate and multiplier), route planning against `planGraphRoutes` with `DEFAULT_THERMAL_WEIGHT = 0.35`, active `soilSpeedFactors`, and `AbortController` by `120` ms, weather constraint evaluation against `evaluateWeatherConstraints` (forwarding `soilBreakdown` and `soilType` samples) by `80` ms, and site weather summary requests against `fetchEnvironmentSummary` by `160` ms when temperature or pressure overlays are active.
+5. Registers 5 `ToolDefinition` panels in `ToolRegistry` with ids `"route"`, `"points"`, `"weather"`, `"layers"`, and `"settings"`, sets `leftHudOffset = panelOpen ? 480 : 64`, manages `uiMode` (`"basic"` vs `"advance"`), `presetId` (`"human"` vs `"rover"`), and `showSoilLayer` (`SOIL SUBSTRATE MATRIX`), locks map point/class editing when `uiMode === "basic"`, and renders the rail, drawer, `MapView`, telemetry and soil legend HUDs, floating `TimeSimulationControl`, and `ContextMenu`.
 
 ### apps/web/src/registry/toolRegistry.ts
 
@@ -902,12 +912,12 @@ Exported React component controlling the Leaflet map lifecycle:
 
 1. Initializes `L.map` with `L.CRS.EPSG4326`, initial center `[18.46, 77.523]`, zoom `13`, `terrainRasterPane` at `zIndex: 250`, and layers for routes, waypoints, and points.
 2. Computes true Martian geodesic scale bar width across a `120` px horizontal chord using `surfaceDistanceMeters`, selecting the largest step in `NICE_SCALE_METERS` fitting within `110` px.
-3. Updates active EPSG:4326 `L.TileLayer`, fits `site.bbox` with left drawer padding `leftInsetPx + 40`, toggles site hillshade and bounding box, and debounces temperature `160` ms at `zIndex: 2`, pressure `160` ms at `zIndex: 3`, with `0.56` opacity when both are active or `0.74` alone, and slope hazard `150` ms at `zIndex: 4` with `0.78` opacity.
+3. Updates active EPSG:4326 `L.TileLayer`, fits `site.bbox` with left drawer padding `leftInsetPx + 40`, toggles site hillshade, soil substrate overlay (`/api/site/soil.png`), and bounding box, and debounces temperature `160` ms at `zIndex: 2`, pressure `160` ms at `zIndex: 3`, with `0.56` opacity when both are active or `0.74` alone, and slope hazard `150` ms at `zIndex: 4` with `0.78` opacity.
 4. Draws non-selected routes translucent beneath the selected route casing and core stroke, renders `A` and `B` waypoints, and synchronizes point markers and popups.
 
 ### apps/web/src/components/RoutePlannerPanel.tsx
 
-Displays route planning controls, waypoint cards, alternative route cards with sparklines, weather routing toggles, and the detailed elevation profile in [apps/web/src/components/RoutePlannerPanel.tsx](../apps/web/src/components/RoutePlannerPanel.tsx).
+Displays route planning controls, waypoint cards, alternative route cards with sparklines and soil breakdown strips, weather routing toggles, and the detailed elevation profile in [apps/web/src/components/RoutePlannerPanel.tsx](../apps/web/src/components/RoutePlannerPanel.tsx).
 
 #### `StrategyGlyph({ strategy, color }: { strategy: RouteStrategy; color: string })`
 
@@ -1152,9 +1162,9 @@ Internal helper terminating `apiProc` and `webProc` cleanly and exiting with sta
 
 ### scripts/data/fetch-site.ts
 
-Streams USGS MRO CTX Cloud-Optimized GeoTIFF DTMs and hillshade rasters to produce `data/site-terrain.json` and `data/site-hillshade.png` in [scripts/data/fetch-site.ts](../scripts/data/fetch-site.ts).
+Streams USGS MRO CTX Cloud-Optimized GeoTIFF DTMs, hillshade rasters, and Mars Odyssey THEMIS Nighttime IR controlled mosaics to produce `data/site-terrain.json` and `data/site-hillshade.png` in [scripts/data/fetch-site.ts](../scripts/data/fetch-site.ts).
 
-Module constants: `PRESETS` for `"jezero"` and `"mount-sharp"`, `DEFAULT_SITE_SIZE_KM = 20`, `DEFAULT_CELL_SIZE_M = 20`, and `DEFAULT_HILLSHADE_SIZE = 1000`.
+Module constants: `PRESETS` (including `dtmUrl`, `hillshadeUrl`, `themisNirUrl`, and `soilSourceTitle`) for `"jezero"` and `"mount-sharp"`, `DEFAULT_SITE_SIZE_KM = 20`, `DEFAULT_CELL_SIZE_M = 20`, and `DEFAULT_HILLSHADE_SIZE = 1000`.
 
 #### `parseCliArg(prefix: string): string | undefined`
 
@@ -1195,7 +1205,8 @@ Internal entrypoint orchestrating remote ingestion:
 1. Parses `--site=`, `--size-km=`, and `--grid=`, opens the preset `dtmUrl` via `geotiff` `fromUrl`, and scales east-west projection width by `1 / cos(lat)`.
 2. Probes 6 candidate offsets on a `180` m/px overview, prioritizing `>= 99%` valid coverage and breaking ties by elevation relief.
 3. Resamples the chosen extent near `cellSizeM * 0.95`, calls `fillIsolatedNodata`, derives `bbox`, `center`, `widthMeters`, and `heightMeters` with `equirectangularToCoord` and `surfaceDistanceMeters`, and computes min/max elevation.
-4. Streams `hillshadeUrl`, encodes `1000x1000` `data/site-hillshade.png` via `encodeRgbaPng`, and writes `data/site-terrain.json`.
+4. Streams `themisNirUrl`, resamples the 100 m/px nighttime IR window onto the output grid, and calls `classifyMarsSoilMatrix` to generate `soilTypes` plus `soilSourceTitle` and `soilUrl` metadata.
+5. Streams `hillshadeUrl`, encodes `1000x1000` `data/site-hillshade.png` via `encodeRgbaPng`, and writes `data/site-terrain.json`.
 
 ### scripts/data/fetch-weather.ts
 

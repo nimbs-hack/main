@@ -3,11 +3,14 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   DEFAULT_EVA_WEATHER_LIMITS,
+  DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
   MARS_BASE_LAYERS,
   type RoutePlanRequest,
   type RouteWeatherConstraints,
+  SOIL_TYPE_CATALOG,
   type SiteDataset,
   type WeatherScenario,
+  parsePartialSoilSpeedFactors,
 } from "@nimbs/shared";
 import { type Context, Hono } from "hono";
 import { tilesRouter } from "./routes/tiles";
@@ -228,6 +231,20 @@ export function createApp(injectedGraph?: TerrainGraph, weatherService?: Weather
     });
   });
 
+  app.get("/api/site/soil.png", async (c) => {
+    const graph = await resolveGraph();
+    if (!graph) {
+      return c.json({ error: "Site terrain dataset not found." }, 503);
+    }
+    const png = graph.renderSoilMaskPng();
+    return new Response(new Uint8Array(png), {
+      headers: {
+        "Content-Type": "image/png",
+        "Cache-Control": "public, max-age=3600",
+      },
+    });
+  });
+
   app.get("/api/site/pressure.png", async (c) => {
     const resolved = await resolveSiteWeatherField(c, resolveGraph, activeWeatherService);
     if (resolved instanceof Response) return resolved;
@@ -294,7 +311,10 @@ export function createApp(injectedGraph?: TerrainGraph, weatherService?: Weather
     }
     const insideSite = graph.isInsideBounds({ lat, lon });
     const elevationM = graph.elevationAt({ lat, lon });
-    return c.json({ lat, lon, insideSite, elevationM });
+    const soilType = graph.soilAt({ lat, lon });
+    const soilLabel = soilType ? SOIL_TYPE_CATALOG[soilType].label : null;
+    const soilSpeedFactor = soilType ? DEFAULT_HUMAN_SOIL_SPEED_FACTORS[soilType] : null;
+    return c.json({ lat, lon, insideSite, elevationM, soilType, soilLabel, soilSpeedFactor });
   });
 
   app.post("/api/graph/routes", async (c) => {
@@ -303,23 +323,37 @@ export function createApp(injectedGraph?: TerrainGraph, weatherService?: Weather
       return c.json({ error: "Site terrain dataset not found." }, 503);
     }
     const body = (await c.req.json().catch(() => null)) as Partial<RoutePlanRequest> | null;
+    const rawWaypoints =
+      Array.isArray(body?.waypoints) && body.waypoints.length >= 2
+        ? body.waypoints
+        : body?.waypointA && body?.waypointB
+          ? [body.waypointA, body.waypointB]
+          : null;
     if (
-      !body?.waypointA ||
-      !body?.waypointB ||
-      !Number.isFinite(body.waypointA.lat) ||
-      !Number.isFinite(body.waypointA.lon) ||
-      !Number.isFinite(body.waypointB.lat) ||
-      !Number.isFinite(body.waypointB.lon) ||
-      !Number.isFinite(body.maxSlopeDeg)
+      !rawWaypoints ||
+      rawWaypoints.length < 2 ||
+      rawWaypoints.length > 25 ||
+      rawWaypoints.some((wp) => !wp || !Number.isFinite(wp.lat) || !Number.isFinite(wp.lon)) ||
+      !Number.isFinite(body?.maxSlopeDeg)
     ) {
-      return c.json({ error: "Invalid waypointA, waypointB, or maxSlopeDeg payload" }, 400);
+      return c.json({ error: "Invalid waypoints (min 2) or maxSlopeDeg payload" }, 400);
     }
 
+    const maxSlopeDeg = Number(body?.maxSlopeDeg);
+
     const { constraints, error: wcError } = validateRouteWeatherConstraints(
-      body.weatherConstraints,
+      body?.weatherConstraints,
     );
     if (wcError) {
       return c.json({ error: wcError }, 400);
+    }
+
+    const { factors: soilSpeedFactors, error: soilError } = parsePartialSoilSpeedFactors(
+      body?.soilSpeedFactors,
+      "soilSpeedFactors",
+    );
+    if (soilError) {
+      return c.json({ error: soilError }, 400);
     }
 
     let weatherFilter: TerrainWeatherFilter | undefined;
@@ -342,11 +376,11 @@ export function createApp(injectedGraph?: TerrainGraph, weatherService?: Weather
       };
     }
 
-    const result = graph.planRoutes(
-      body.waypointA,
-      body.waypointB,
-      Number(body.maxSlopeDeg),
+    const result = graph.planWaypointsRoutes(
+      rawWaypoints,
+      maxSlopeDeg,
       weatherFilter,
+      soilSpeedFactors,
     );
     return c.json(result);
   });

@@ -1,13 +1,22 @@
-import type {
-  EvaWeatherCheck,
-  EvaWeatherEvaluation,
-  EvaWeatherLimits,
-  MarsWeatherSnapshot,
-  TraversePresetId,
-  UiMode,
-  WeatherCheckId,
-  WeatherScenario,
+import {
+  type EvaWeatherCheck,
+  type EvaWeatherEvaluation,
+  type EvaWeatherLimits,
+  type MarsWeatherSnapshot,
+  type MissionUnitId,
+  SOIL_SPEED_FACTOR_MAX,
+  SOIL_SPEED_FACTOR_MIN,
+  SOIL_TYPE_CATALOG,
+  SOIL_TYPE_ORDER,
+  type SoilTypeId,
+  TRAVERSE_PRESETS,
+  type TraversePresetId,
+  type UiMode,
+  type WeatherCheckId,
+  type WeatherScenario,
+  resolveSoilSpeedFactors,
 } from "../services/api";
+import { UNIT_ACCENT_COLORS } from "../services/dualSim";
 import { TimeSimulationControl, evaStatusClass } from "./TimeSimulationControl";
 import { TraversePresetControl } from "./TraversePresetControl";
 import { TraverseWindowsPanel } from "./TraverseWindowsPanel";
@@ -15,6 +24,7 @@ import { TraverseWindowsPanel } from "./TraverseWindowsPanel";
 export { evaStatusClass };
 
 interface WeatherPanelProps {
+  activeUnitId: MissionUnitId;
   uiMode: UiMode;
   presetId: TraversePresetId;
   onSelectPreset: (id: TraversePresetId) => void;
@@ -27,6 +37,7 @@ interface WeatherPanelProps {
   loading: boolean;
   error: string | null;
   hasSelectedRoute: boolean;
+  waypointCount?: number;
   onChangeLimits: (next: EvaWeatherLimits) => void;
   onResetLimits: () => void;
   onChangeScenario: (scenario: WeatherScenario) => void;
@@ -36,10 +47,12 @@ interface WeatherPanelProps {
   onRefresh: () => void;
 }
 
+type NumericLimitKey = Exclude<keyof EvaWeatherLimits, "soilSpeedFactors">;
+
 interface LimitSliderSpec {
   id: string;
   checkId?: WeatherCheckId;
-  key: keyof EvaWeatherLimits;
+  key: NumericLimitKey;
   label: string;
   shortTag?: string;
   unit: string;
@@ -259,6 +272,7 @@ function clampSpec(spec: LimitSliderSpec, raw: number): number {
 }
 
 export function WeatherPanel({
+  activeUnitId,
   uiMode,
   presetId,
   onSelectPreset,
@@ -271,6 +285,7 @@ export function WeatherPanel({
   loading,
   error,
   hasSelectedRoute,
+  waypointCount = 0,
   onChangeLimits,
   onResetLimits,
   onChangeScenario,
@@ -372,11 +387,41 @@ export function WeatherPanel({
         .join(" | ")
     : "";
 
+  const resolvedSoilFactors = resolveSoilSpeedFactors(limits.soilSpeedFactors);
+
+  const updateSoilFactor = (soilId: SoilTypeId, nextValue: number) => {
+    const clamped = Math.max(
+      SOIL_SPEED_FACTOR_MIN,
+      Math.min(SOIL_SPEED_FACTOR_MAX, Math.round(nextValue * 100) / 100),
+    );
+    onChangeLimits({
+      ...limits,
+      soilSpeedFactors: {
+        ...resolvedSoilFactors,
+        [soilId]: clamped,
+      },
+    });
+  };
+
   return (
     <>
       <div className="panel-header">
-        <h1 className="panel-title">Weather &amp; EVA</h1>
-        <p className="panel-desc">Suit limits vs Mars telemetry.</p>
+        <div className="panel-title-row">
+          <h1 className="panel-title">Weather &amp; EVA</h1>
+          <span
+            className="unit-tag-pill"
+            style={{
+              borderColor: UNIT_ACCENT_COLORS[activeUnitId],
+              color: UNIT_ACCENT_COLORS[activeUnitId],
+            }}
+          >
+            UNIT {activeUnitId} · {TRAVERSE_PRESETS[presetId].label}
+          </span>
+        </div>
+        <p className="panel-desc">
+          Suit limits vs Mars telemetry for U{activeUnitId}
+          {waypointCount >= 2 ? ` (1→${waypointCount})` : ""}.
+        </p>
         <div className="panel-rule" />
       </div>
 
@@ -645,6 +690,75 @@ export function WeatherPanel({
                 onChange={(nextValue) => updateLimit(spec, nextValue)}
               />
             ))}
+          </div>
+
+          <div className="divider" />
+
+          <div className="wx-sliders-header">
+            <span className="value-label">SOIL COEFFICIENTS</span>
+            <span className="wx-soil-unit">SPEED MULTIPLIER</span>
+          </div>
+
+          <div className="wx-sliders-list">
+            {SOIL_TYPE_ORDER.map((soilId) => {
+              const spec = SOIL_TYPE_CATALOG[soilId];
+              const factor = resolvedSoilFactors[soilId];
+              const pct = Math.max(
+                0,
+                Math.min(
+                  100,
+                  ((factor - SOIL_SPEED_FACTOR_MIN) /
+                    (SOIL_SPEED_FACTOR_MAX - SOIL_SPEED_FACTOR_MIN)) *
+                    100,
+                ),
+              );
+              const effKmh = ((limits.flatSpeedMPerH * factor) / 1000).toFixed(2);
+              return (
+                <div
+                  key={soilId}
+                  className="mars-slider-wrap wx-slider-item"
+                  title={spec.description}
+                >
+                  <div className="field-label-row">
+                    <label className="value-label wx-soil-label" htmlFor={`wx-soil-${soilId}`}>
+                      <span className="wx-soil-swatch" style={{ backgroundColor: spec.colorHex }} />
+                      {spec.label}
+                    </label>
+                    <span className="mono-value">
+                      {factor.toFixed(2)}x · {effKmh} km/h
+                    </span>
+                  </div>
+                  <div className="slope-input-row">
+                    <input
+                      id={`wx-soil-${soilId}`}
+                      type="range"
+                      className="mars-slider"
+                      min={SOIL_SPEED_FACTOR_MIN}
+                      max={SOIL_SPEED_FACTOR_MAX}
+                      step={0.05}
+                      value={factor}
+                      onChange={(e) => updateSoilFactor(soilId, Number(e.target.value))}
+                      style={{
+                        background: `linear-gradient(90deg, ${spec.colorHex} ${pct}%, var(--color-line-strong) ${pct}%)`,
+                      }}
+                    />
+                    <input
+                      type="number"
+                      className="number-input"
+                      aria-label={`${spec.label} speed factor`}
+                      min={SOIL_SPEED_FACTOR_MIN}
+                      max={SOIL_SPEED_FACTOR_MAX}
+                      step={0.05}
+                      value={factor}
+                      onChange={(e) => {
+                        const num = Number(e.target.value);
+                        if (Number.isFinite(num)) updateSoilFactor(soilId, num);
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </>
       )}

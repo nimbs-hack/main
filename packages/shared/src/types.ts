@@ -1,4 +1,10 @@
 import type { MarsBBox, MarsCoord } from "./coords";
+import {
+  DEFAULT_HUMAN_SOIL_SPEED_FACTORS,
+  DEFAULT_ROVER_SOIL_SPEED_FACTORS,
+  type SoilSpeedFactors,
+  type SoilTypeId,
+} from "./soil";
 
 export type LonFormat = "180" | "360";
 
@@ -20,6 +26,10 @@ export interface SiteMetadata {
   minElevationM: number;
   maxElevationM: number;
   nodataValue: number;
+  /** Optional planetary thermal-inertia / regolith data attribution. */
+  soilSourceTitle?: string;
+  /** Optional COG URL used to derive the regolith substrate matrix. */
+  soilUrl?: string;
 }
 
 /** Serialized 2D elevation grid stored under data/site-terrain.json. */
@@ -27,6 +37,8 @@ export interface SiteDataset {
   meta: SiteMetadata;
   /** Row-major (north-to-south, west-to-east) elevations in SI meters relative to Mars areoid. */
   elevationsM: number[];
+  /** Optional row-major 4-class Martian soil substrate matrix (0=bedrock, 1=coarse, 2=fine, 3=loose-sand). */
+  soilTypes?: number[];
 }
 
 export interface ElevationResponse {
@@ -34,6 +46,9 @@ export interface ElevationResponse {
   lon: number;
   insideSite: boolean;
   elevationM: number | null;
+  soilType?: SoilTypeId | null;
+  soilLabel?: string | null;
+  soilSpeedFactor?: number | null;
 }
 
 export type RouteStrategy = "shortest" | "gentlest" | "alternate" | "weather-safe";
@@ -164,6 +179,8 @@ export interface EvaWeatherLimits {
   climbSpeedMPerH: number;
   /** Vertical descent rate (meters per hour). */
   descentSpeedMPerH: number;
+  /** Per-soil horizontal traverse speed multipliers in [0.1, 1.5]. */
+  soilSpeedFactors?: SoilSpeedFactors;
 }
 
 export const DEFAULT_EVA_WEATHER_LIMITS: EvaWeatherLimits = {
@@ -175,6 +192,7 @@ export const DEFAULT_EVA_WEATHER_LIMITS: EvaWeatherLimits = {
   flatSpeedMPerH: 2500,
   climbSpeedMPerH: 350,
   descentSpeedMPerH: 800,
+  soilSpeedFactors: { ...DEFAULT_HUMAN_SOIL_SPEED_FACTORS },
 };
 
 export type UiMode = "basic" | "advance";
@@ -195,7 +213,10 @@ export const TRAVERSE_PRESETS: Record<TraversePresetId, TraversePreset> = {
     label: "HUMAN",
     subtitle: "EVA SUIT",
     maxSlopeDeg: 7,
-    limits: { ...DEFAULT_EVA_WEATHER_LIMITS },
+    limits: {
+      ...DEFAULT_EVA_WEATHER_LIMITS,
+      soilSpeedFactors: { ...DEFAULT_HUMAN_SOIL_SPEED_FACTORS },
+    },
   },
   rover: {
     id: "rover",
@@ -211,6 +232,7 @@ export const TRAVERSE_PRESETS: Record<TraversePresetId, TraversePreset> = {
       flatSpeedMPerH: 5000,
       climbSpeedMPerH: 700,
       descentSpeedMPerH: 1200,
+      soilSpeedFactors: { ...DEFAULT_ROVER_SOIL_SPEED_FACTORS },
     },
   },
 };
@@ -221,6 +243,8 @@ export interface TraversePointSample {
   slopeDeg?: number;
   lat?: number;
   lon?: number;
+  soilType?: SoilTypeId;
+  soilSpeedFactor?: number;
 }
 
 export interface EvaRouteContext {
@@ -229,6 +253,8 @@ export interface EvaRouteContext {
   elevationLossM?: number;
   minElevationM?: number;
   maxElevationM?: number;
+  /** Optional distance traveled over each Martian soil type (meters). */
+  soilBreakdown?: Partial<Record<SoilTypeId, number>>;
   /** Optional sampled points along the route for time-varying traverse simulation. */
   points?: TraversePointSample[];
 }
@@ -378,6 +404,10 @@ export interface RoutePoint {
   distanceM: number;
   /** Unsigned local segment slope in degrees. */
   slopeDeg: number;
+  /** Classified Martian substrate type at this node. */
+  soilType?: SoilTypeId;
+  /** Soil-dependent traverse speed multiplier applied along the incoming segment. */
+  soilSpeedFactor?: number;
   /** Modeled surface air temperature (C) at the planned simulation hour. */
   tempC?: number;
   /** Modeled local surface pressure (Pa) at the planned simulation hour. */
@@ -393,6 +423,8 @@ export interface ComputedRoute {
   elevationLossM: number;
   maxSlopeDeg: number;
   meanSlopeDeg: number;
+  /** Distance covered per soil type along this route (SI meters). */
+  soilBreakdown?: Partial<Record<SoilTypeId, number>>;
   minTempC?: number;
   maxTempC?: number;
   minPressurePa?: number;
@@ -401,9 +433,11 @@ export interface ComputedRoute {
 }
 
 export interface RoutePlanRequest {
-  waypointA: MarsCoord;
-  waypointB: MarsCoord;
+  waypoints?: MarsCoord[];
+  waypointA?: MarsCoord;
+  waypointB?: MarsCoord;
   maxSlopeDeg: number;
+  soilSpeedFactors?: Partial<SoilSpeedFactors>;
   weatherConstraints?: RouteWeatherConstraints;
 }
 
@@ -413,6 +447,7 @@ export interface RoutePlanResponse {
   status: "ok" | "out_of_bounds" | "unreachable";
   message?: string;
   blockedReason?: RouteBlockedReason;
+  blockedLegIndex?: number;
   maxSlopeDeg: number;
   minRequiredSlopeDeg?: number;
   maxFeasibleMinTempC?: number;
@@ -424,6 +459,7 @@ export interface RoutePlanResponse {
   passableEdgeRatio: number;
   snappedA?: MarsCoord & { elevationM: number };
   snappedB?: MarsCoord & { elevationM: number };
+  snappedWaypoints?: Array<MarsCoord & { elevationM: number }>;
   routes: ComputedRoute[];
 }
 
