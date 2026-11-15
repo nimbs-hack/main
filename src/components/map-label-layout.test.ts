@@ -90,3 +90,14 @@ test('a cluster holds together while its points drift slightly apart', () => {
   const previous = new Map(four.map((a) => [a.id, 'cluster:p0|p1|p2|p3']))
   expect(clusterAnchors(four, () => 0, new Set(), previous).filter((a) => a.members)).toHaveLength(1)
 })
+
+test('six portrait labels stay separate when the crew gathers beside a site', () => {
+  const crew = Array.from({ length: 6 }, (_, i) => ({
+    id: `crew-${i}`, x: 700 + i * 4, y: 520 - i * 5, width: i === 0 ? 172 : 140, selected: i === 0,
+  }))
+  const placed = placeMapLabels(crew, 1440, 1000, [{ x: 708, y: 485, width: 80, height: 24 }])
+  expect(placed).toHaveLength(6)
+  for (const label of placed) for (const other of placed) {
+    if (label.id !== other.id) expect(overlaps(label.box, other.box)).toBe(false)
+  }
+})

@@ -1,5 +1,6 @@
 import { cumulative, distance } from './geo'
 import type { LatLon } from './geo'
+import type { Site } from '../api'
 import type { Ground } from './ground'
 import { slopeLevel } from './route-profile'
 import { COARSE_DETAIL, detailLabel } from './terrain-detail'
@@ -62,6 +63,23 @@ export function stopsOnly(plan: Plan): Plan {
 // Start, stops and target: the points the route has to pass, in order.
 export function stopPath(plan: Plan): LatLon[] {
   return planPath(stopsOnly(plan))
+}
+
+// Reconcile the map after a mission edit, including undoing its last stop.
+// A target placed before the start stays a target while it is the only site.
+export function withMissionSites(plan: Plan, sites: Pick<Site, 'lat' | 'lon' | 'name'>[]): Plan {
+  const points: LatLon[] = sites.map(({ lat, lon }) => [lat, lon])
+  const same = (a: LatLon | null, b: LatLon | null) => a === b || Boolean(a && b && a[0] === b[0] && a[1] === b[1])
+  // Mission files round coordinates to microdegrees. Keep a newly placed B
+  // as B while its persisted coordinate is rounded.
+  const atTarget = points.length === 1 && plan.target && plan.target.every((value, i) => Math.abs(value - points[0][i]) <= 1e-6)
+  const targetOnly = Boolean(atTarget && !same(plan.start, points[0]))
+  const start = targetOnly ? null : points[0] ?? null
+  const target = targetOnly ? points[0] : points.length > 1 ? points.at(-1)! : null
+  const waypoints = points.slice(1, -1)
+  const stops = userWaypoints(plan)
+  if (same(plan.start, start) && same(plan.target, target) && stops.length === waypoints.length && stops.every((p, i) => same(p, waypoints[i]))) return plan
+  return { ...plan, start, target, startName: start ? sites[0].name : null, waypoints, generated: [] }
 }
 
 // Puts the stop into the leg between stops where it adds the least walking.

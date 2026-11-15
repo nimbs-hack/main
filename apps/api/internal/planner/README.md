@@ -22,9 +22,9 @@ The same steps by hand, from `apps/api`:
 
 ```sh
 go run ./cmd/hr-planner types                              # mission types and phase presets
-go run ./cmd/hr-planner pack internal/planner/examples/ares-3.json --roster internal/planner/examples/roster.json
-go run ./cmd/hr-planner plan internal/planner/examples/ares-3.mhr   # add --detail or --json
-go run ./cmd/hr-planner unpack internal/planner/examples/ares-3.mhr # back to JSON
+go run ./cmd/hr-planner pack internal/planner/examples/gale-expedition.json --roster internal/planner/examples/roster.json
+go run ./cmd/hr-planner plan internal/planner/examples/gale-expedition.mhr   # add --detail or --json
+go run ./cmd/hr-planner unpack internal/planner/examples/gale-expedition.mhr # back to JSON
 ```
 
 `plan` takes a packed `.mhr` file or a mission JSON. Exit code 1 means the mission or file is bad, 2 means the command was.

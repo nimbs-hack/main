@@ -161,7 +161,7 @@ func TestAPlanStopMustBeASiteAndDifferFromTheOneBefore(t *testing.T) {
 		{[]any{"B", "A"}, ""},
 	} {
 		source := map[string]any{"route": test.route, "sites": sites}
-		mission := example(t, "ares-3.json")
+		mission := example(t, "gale-expedition.json")
 		mission.Sites, mission.Tasks = nil, nil
 		data, _ := json.Marshal(mission)
 		var raw map[string]any

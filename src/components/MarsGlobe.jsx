@@ -35,7 +35,7 @@ import { SAMPLED_RASTERS, SCIENCE_LAYERS, SCIENCE_RASTERS } from '../data/scienc
 import { addScienceOverlay } from '../data/science-overlay'
 import { distance, resample } from '../data/geo'
 import { buildProfile, slopeLevel, summarize } from '../data/route-profile'
-import { DEFAULT_LIMITS, EMPTY_PLAN, SUIT, assess, withReasons, insertWaypoint, isGenerated, moveVertex, planPath, removeWaypoint, stopPath, stopsOnly } from '../data/plan'
+import { DEFAULT_LIMITS, EMPTY_PLAN, SUIT, assess, withReasons, withMissionSites, insertWaypoint, isGenerated, moveVertex, planPath, removeWaypoint, stopPath, stopsOnly } from '../data/plan'
 import { planStops } from '../data/stops'
 import { addPlanOverlay } from './plan-overlay'
 import { areaStats, buildGrid, joinLegs, routeOptions, sameReason } from '../data/route-options'
@@ -1105,36 +1105,39 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   }, [viewer, plan, profile, limits.slope])
 
   const startAt = (point, startName = null) => {
-    setPlan((current) => {
-      const far = current.target && distance(current.target, point) > NEW_PLAN_DISTANCE
-      // A new start elsewhere drops the route but keeps the planned time.
-      return far ? { ...EMPTY_PLAN, when: current.when, start: point, startName } : { ...stopsOnly(current), start: point, startName }
-    })
+    const far = plan.target && distance(plan.target, point) > NEW_PLAN_DISTANCE
+    // A new start elsewhere drops the route but keeps the planned time.
+    const next = far ? { ...EMPTY_PLAN, when: plan.when, start: point, startName } : { ...stopsOnly(plan), start: point, startName }
+    setPlan(next)
+    mission?.onRoutePoints(stopPath(next))
   }
 
   // The route follows the plan. When a stop or a stop's site changes, the
   // start, stops and target become the plan's sites in order. The picked
-  // strategy and start time stay. Points moved on the map hold until the plan
-  // changes again.
+  // strategy and start time stay. Right-click endpoints also update the
+  // mission, so they are saved and follow undo and redo.
   const routeSites = mission
     ? planStops(mission)
         .map((index) => mission.sites[index])
         .filter((entry) => entry && Number.isFinite(entry.lat) && Number.isFinite(entry.lon))
     : []
   const routeSitesKey = JSON.stringify(routeSites.map((entry) => [entry.lat, entry.lon, entry.name]))
+  const previousMissionRoute = useRef(routeSitesKey)
   useEffect(() => {
-    if (routeSites.length < 2) return
-    const points = routeSites.map((entry) => [entry.lat, entry.lon])
-    setPlan((current) =>
-      current.start && current.target && samePoints(stopPath(current), points)
-        ? current
-        : { ...current, start: points[0], startName: routeSites[0].name, target: points.at(-1), waypoints: points.slice(1, -1), generated: [] },
-    )
+    // Keep routes saved before map points became mission sites. Later edits,
+    // including undoing the first point, still reconcile an empty plan.
+    const legacy = previousMissionRoute.current === routeSitesKey && routeSites.length === 0
+    previousMissionRoute.current = routeSitesKey
+    if (mission && !legacy) setPlan((current) => withMissionSites(current, routeSites))
   }, [routeSitesKey])
 
   const actions = {
     start: (point) => startAt(point),
-    target: (point) => setPlan((current) => ({ ...stopsOnly(current), target: point })),
+    target: (point) => {
+      const next = { ...stopsOnly(plan), target: point }
+      setPlan(next)
+      mission?.onRoutePoints(stopPath(next))
+    },
     waypoint: (point) => setPlan((current) => insertWaypoint(current, point)),
     // Stays on, so several sites can be added in a row.
     site: (point) => mission?.onAddSite(point),

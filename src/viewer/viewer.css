@@ -676,44 +676,8 @@ details[open] > summary .more-button .icon {
   bottom: var(--viewer-status-height, var(--statusbar-height));
 }
 
-.rail {
-  position: absolute;
-  top: 50%;
-  right: var(--space-8);
-  display: grid;
-  translate: 0 -50%;
-  border: var(--border-width) solid var(--color-line-strong);
-  background: var(--color-surface);
-}
-
-#viewer:not(.sidebar-open) .rail {
-  display: none;
-}
-
-.rail__button {
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  border: 0;
-  border-top: var(--border-width) solid var(--color-line);
-  background: none;
-  font-size: var(--text-data);
-  font-weight: 600;
-}
-
-.rail__button .icon {
-  display: block;
-  margin: auto;
-}
-
-.rail__button:first-child {
-  border-top: 0;
-}
-
-.rail__button[aria-pressed='true'] {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -2px;
-}
+.map .map-labels { z-index: 1; }
+.rail { z-index: 2; overflow: visible; }
 
 .key {
   flex-wrap: wrap;
@@ -909,76 +873,15 @@ select {
   flex: 1;
   text-align: right;
 }
-.team__symbol {
+.team__portrait {
+  display: grid;
   flex: none;
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--color-text);
-}
-.team__symbol--self {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-}
-
-/* Crew uses crosshair marks, distinct from numbered site pins. */
-.crew-pins {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-.crew-pin {
-  position: absolute;
-  width: 44px;
-  height: 44px;
-  translate: -50% -50%;
-  padding: 0;
-  border: 0;
-  background: none;
-  pointer-events: auto;
-}
-.crew-pin__dot {
-  position: absolute;
-  left: 10px;
-  top: 10px;
-  width: 24px;
-  height: 24px;
-  border: 2px solid var(--color-text);
-  background: var(--color-bg);
-}
-.crew-pin__dot::after {
-  content: '+';
-  position: absolute;
-  inset: 0;
-  color: var(--color-text);
-  font-size: var(--text-heading);
-  line-height: 20px;
-  text-align: center;
-}
-.crew-pin--self .crew-pin__dot {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-}
-.crew-pin--self .crew-pin__dot::after {
-  color: var(--color-bg);
-}
-.crew-pin__name {
-  position: absolute;
-  padding: var(--space-1) var(--space-2);
+  width: var(--control-height);
+  height: var(--control-height);
   border: var(--border-width) solid var(--color-line-strong);
-  background: var(--color-bg);
-  font-size: var(--text-data);
-  font-weight: 600;
-  line-height: 1.4;
-  white-space: nowrap;
 }
-.crew-pin:focus-visible {
-  outline: none;
-}
-.crew-pin:focus-visible .crew-pin__dot,
-.crew-pin:hover .crew-pin__name {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
+.team__portrait.is-selected { outline: 2px solid var(--color-accent); }
+.team__portrait > * { width: 100%; height: 100%; object-fit: cover; }
 
 @media (max-width: 860px) {
   .panel {

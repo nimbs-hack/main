@@ -3,9 +3,10 @@ import { BoundingSphere, Cartesian2, Cartesian3, Cartographic, EllipsoidalOcclud
 import type { LatLon } from '../data/geo'
 import { DATUM_OFFSET } from '../data/terrain.js'
 import { symbolImage } from '../data/markers'
-import { clusterAnchors, leaderPath, placeMapLabels, type LabelAnchor, type Offset, type PlacedLabel, type Rect } from './map-label-layout'
+import { clusterAnchors, placeMapLabels, type LabelAnchor, type Offset, type Rect } from './map-label-layout'
 import './map-labels.css'
 import CrewReadout from './CrewReadout'
+import { crewPin, crewPortrait, drawLeader, leader, linkHover } from './map-label-dom'
 
 export type MapLabel = {
   id: string
@@ -24,37 +25,6 @@ export type MapLabel = {
 // click on their cluster lists them instead.
 const COLOCATED_METERS = 30
 const SVG = 'http://www.w3.org/2000/svg'
-
-type Leader = { group: SVGGElement; paths: SVGPathElement[] }
-
-function leader(svg: SVGSVGElement): Leader {
-  const group = document.createElementNS(SVG, 'g') as SVGGElement
-  const paths = ['map-label__casing', 'map-label__leader'].map((name) => {
-    const path = document.createElementNS(SVG, 'path') as SVGPathElement
-    path.setAttribute('class', name)
-    group.appendChild(path)
-    return path
-  })
-  svg.appendChild(group)
-  return { group, paths }
-}
-
-function drawLeader(line: Leader, label: PlacedLabel) {
-  const [start, elbow, end] = leaderPath(label, label.box, label.side)
-  const d = `M${start.x},${start.y} L${elbow.x},${elbow.y} L${end.x},${end.y}`
-  line.paths.forEach((path) => path.setAttribute('d', d))
-  line.group.removeAttribute('display')
-}
-
-// Hovering or focusing a row lifts its leader above the others so it can be traced.
-function linkHover(button: HTMLButtonElement, line: Leader, svg: SVGSVGElement) {
-  const on = () => { line.group.classList.add('is-active'); svg.appendChild(line.group) }
-  const off = () => line.group.classList.remove('is-active')
-  button.addEventListener('pointerenter', on)
-  button.addEventListener('focus', on)
-  button.addEventListener('pointerleave', off)
-  button.addEventListener('blur', off)
-}
 
 function countText(rows: { item: MapLabel }[]) {
   const crew = rows.filter((row) => row.item.kind === 'crew').length
@@ -90,18 +60,7 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
       if (item.kind === 'crew') {
         button.setAttribute('aria-haspopup', 'dialog')
         button.setAttribute('aria-expanded', 'false')
-        const initials = document.createElement('span')
-        initials.className = 'map-label__portrait map-label__initials'
-        initials.textContent = item.text.slice(0, 2)
-        initials.setAttribute('aria-hidden', 'true')
-        if (item.portrait) {
-          const photo = document.createElement('img')
-          photo.className = 'map-label__portrait'
-          photo.src = item.portrait
-          photo.alt = ''
-          photo.onerror = () => photo.replaceWith(initials)
-          button.appendChild(photo)
-        } else button.appendChild(initials)
+        button.appendChild(crewPortrait(item.text, item.portrait))
       }
       if (item.symbol) {
         const icon = document.createElement('img')
@@ -116,12 +75,7 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
       const line = leader(svg)
       // A person is a diamond, so they are never taken for a site or a route
       // point, which are round.
-      const pin = item.kind === 'crew' ? document.createElementNS(SVG, 'path') : null
-      if (pin) {
-        pin.setAttribute('class', 'map-label__crew-pin')
-        pin.setAttribute('d', 'M0 -6.5 6.5 0 0 6.5 -6.5 0Z')
-        svg.appendChild(pin)
-      }
+      const pin = item.kind === 'crew' ? crewPin(svg) : null
       linkHover(button, line, svg)
       const location = Cartographic.fromDegrees(item.point[1], item.point[0], DATUM_OFFSET)
       const row = { item, button, line, pin, location, terrainHeight: DATUM_OFFSET, width: Math.min(320, button.scrollWidth + 8), position: new Cartesian3(), screen: { x: 0, y: 0 } }
@@ -140,7 +94,7 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
 
     // Cluster rows are made on demand and kept by their member list, so a
     // cluster that survives a camera move keeps its element and focus.
-    type Cluster = { button: HTMLButtonElement; line: Leader; ring: SVGCircleElement }
+    type Cluster = { button: HTMLButtonElement; line: ReturnType<typeof leader>; ring: SVGCircleElement }
     const clusters = new Map<string, Cluster>()
     const expanded = new Set<string>()
     // Last frame's result, so labels and clusters hold still between frames.
