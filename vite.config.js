@@ -33,4 +33,8 @@ export default defineConfig({
   // on each mouse move then floods it until the dev server stops answering,
   // so errors stay in the browser console.
   server: { forwardConsole: false },
+  // The dev server bundles Cesium into one 12 MB file and leaves it
+  // unminified. Minified it is a third of that, which the browser downloads
+  // and parses faster each time the planner's map opens.
+  optimizeDeps: { rolldownOptions: { output: { minify: true } } },
 })

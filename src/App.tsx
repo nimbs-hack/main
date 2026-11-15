@@ -1,6 +1,5 @@
 import { type ReactNode, Suspense, lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { Viewer } from 'cesium'
-import StatusBar from './components/StatusBar.jsx'
 import { INITIAL_MAP_STATUS, mapStatusReducer, mapStatusState } from './globe/map-status.ts'
 import { type Astronaut, type Catalog, type Planned, PlannerError, fetchCatalog, fileBytes, plainWords, requestPlan } from './api'
 import { Mark, StageIcon } from './components/icons'
@@ -40,7 +39,15 @@ import {
 const loadSites = () => import('./steps/SitesPage')
 const loadGlobe = () => import('./globe/GlobeCanvas')
 const SitesPage = lazy(() => loadSites().then((module) => ({ default: module.SitesPage })))
+// The status bar reads the map under the cursor, so it needs the map library
+// too. Imported here directly, it made every page, Home included, wait for
+// that library before asking the planner anything.
+const StatusBar = lazy(() => import('./components/StatusBar.jsx'))
 const GlobeCanvas = lazy(() => loadGlobe().then((module) => ({ default: module.GlobeCanvas })))
+// Opened straight onto a map page: fetch its map code while the planner
+// gives its first answer, rather than after it.
+if (stepFromHash() === 'sites') void loadSites()
+else if (stepFromHash() === 'review') void loadGlobe()
 
 const mapLoading = (
   <main className="stage stage--loading">
@@ -764,12 +771,14 @@ function Editor({ catalog, planned: opening, library: kept, fileId: openingId }:
               />
             </Suspense>
           </div>
-          <StatusBar
-            viewer={reviewViewer}
-            status={mapStatusState(mapStatus)}
-            credits={[`CTX ${imagerySource}: NASA / JPL / USGS / MSSS / The Murray Lab / Esri`, 'Terrain: NASA Mars Trek']}
-            onRetry={() => setRetryKey((key) => key + 1)}
-          />
+          <Suspense fallback={<footer className="statusbar" />}>
+            <StatusBar
+              viewer={reviewViewer}
+              status={mapStatusState(mapStatus)}
+              credits={[`CTX ${imagerySource}: NASA / JPL / USGS / MSSS / The Murray Lab / Esri`, 'Terrain: NASA Mars Trek']}
+              onRetry={() => setRetryKey((key) => key + 1)}
+            />
+          </Suspense>
         </KeepAlive>
       )}
     </div>
