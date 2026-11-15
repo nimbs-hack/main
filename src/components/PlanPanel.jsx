@@ -234,7 +234,7 @@ const CATS = [
   { id: 'dose', icon: 'dose', title: 'Radiation' },
   { id: 'weather', icon: 'weather', title: 'Weather' },
 ]
-const MISSION_CAT = { id: 'mission', icon: 'mission', title: 'Sites' }
+const MISSION_CAT = { id: 'mission', icon: 'mission', title: 'Sites plan' }
 
 // A reading older than this is flagged on the rail. The rovers report about
 // once a sol, so a month without one means the feed stopped.
@@ -466,7 +466,7 @@ export default function PlanPanel({
         {showMission && (
           <section className="plan__card plan__card--limits" aria-label="Mission sites">
             <div className="plan__scroll" id="plan-panel" role="tabpanel" aria-labelledby="plan-tab-mission">
-              <h3 className="plan__tab-title"><Icon name="mission" />Sites</h3>
+              <h3 className="plan__tab-title"><Icon name="mission" />{MISSION_CAT.title}</h3>
               {missionSites}
             </div>
           </section>

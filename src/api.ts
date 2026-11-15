@@ -33,6 +33,8 @@ export interface Site {
   name: string
   lat: number
   lon: number
+  // What the site is and why the crew goes there. Up to 500 bytes of UTF-8.
+  info?: string
 }
 
 // `site`, `phase` and `crew` are positions in the mission's lists, from zero.

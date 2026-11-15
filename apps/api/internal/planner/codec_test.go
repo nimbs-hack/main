@@ -121,7 +121,7 @@ func TestTheFileStaysSmall(t *testing.T) {
 func TestASiteCostsNineBytesPlusItsNameATaskSixPlusItsNote(t *testing.T) {
 	mission := bare(t)
 	base := len(encode(t, mission))
-	mission.Sites = []Site{{"A", -4.5895, 137.4417}}
+	mission.Sites = []Site{{Name: "A", Lat: -4.5895, Lon: 137.4417}}
 	withSite := len(encode(t, mission))
 	mission.Tasks = []Task{{Site: 0, Phase: 1, Crew: []int{2}, Kind: "sample", EVA: true, Hours: 3}}
 	withTask := len(encode(t, mission))
@@ -132,7 +132,7 @@ func TestASiteCostsNineBytesPlusItsNameATaskSixPlusItsNote(t *testing.T) {
 
 func TestEachCrewMemberAfterTheFirstCostsATaskOneByte(t *testing.T) {
 	mission := bare(t)
-	mission.Sites = []Site{{"A", 1, 2}}
+	mission.Sites = []Site{{Name: "A", Lat: 1, Lon: 2}}
 	mission.Tasks = []Task{{Site: 0, Phase: 1, Crew: []int{2}, Kind: "sample", EVA: true, Hours: 3}}
 	alone := len(encode(t, mission))
 	mission.Tasks[0].Crew = []int{0, 2, 3}
@@ -157,7 +157,7 @@ func TestAVersionTwoFileIsStillRead(t *testing.T) {
 
 	// Version 2 kept the bits that now count crew members at zero.
 	shared := bare(t)
-	shared.Sites = []Site{{"A", 1, 2}}
+	shared.Sites = []Site{{Name: "A", Lat: 1, Lon: 2}}
 	shared.Tasks = []Task{{Site: 0, Phase: 0, Crew: []int{0, 1}, Kind: "sample", EVA: true, Hours: 3}}
 	mixed := encode(t, shared)
 	mixed[6] = 2<<4 | mixed[6]&0x0f
@@ -166,9 +166,9 @@ func TestAVersionTwoFileIsStillRead(t *testing.T) {
 
 func TestCoordinatesKeepTheirSignAndSixDecimals(t *testing.T) {
 	mission := bare(t)
-	mission.Sites = []Site{{"SW", -89.999999, -179.999999}, {"NE", 90, 180}, {"ZERO", 0, 0.0000004}}
+	mission.Sites = []Site{{Name: "SW", Lat: -89.999999, Lon: -179.999999}, {Name: "NE", Lat: 90, Lon: 180}, {Name: "ZERO", Lat: 0, Lon: 0.0000004}}
 	decoded, err := DecodeMission(encode(t, mission))
-	want := []Site{{"SW", -89.999999, -179.999999}, {"NE", 90, 180}, {"ZERO", 0, 0}}
+	want := []Site{{Name: "SW", Lat: -89.999999, Lon: -179.999999}, {Name: "NE", Lat: 90, Lon: 180}, {Name: "ZERO", Lat: 0, Lon: 0}}
 	if err != nil || !reflect.DeepEqual(decoded.Sites, want) {
 		t.Errorf("sites = %+v, %v", decoded.Sites, err)
 	}
@@ -176,7 +176,7 @@ func TestCoordinatesKeepTheirSignAndSixDecimals(t *testing.T) {
 
 func TestAnUnassignedInsideTaskSurvives(t *testing.T) {
 	mission := bare(t)
-	mission.Sites = []Site{{"A", 1, 2}}
+	mission.Sites = []Site{{Name: "A", Lat: 1, Lon: 2}}
 	mission.Tasks = []Task{{Site: 0, Phase: 0, Crew: []int{}, Kind: "other", EVA: false, Hours: 127.5, Note: "inventory"}}
 	decoded, err := DecodeMission(encode(t, mission))
 	if err != nil || !reflect.DeepEqual(decoded.Tasks, mission.Tasks) {

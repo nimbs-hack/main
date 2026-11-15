@@ -9,15 +9,10 @@ const WHERE = ['eva', 'inside'] as const
 // The mission file counts the people on a task after the first in four bits.
 const MOST_ON_A_TASK = 16
 
-type Point = [number, number] | null
-
-const at = (point: Point, site: Site): boolean => point !== null && point[0] === site.lat && point[1] === site.lon
-
-// Which end of the EVA route a site is, for its row.
-function role(site: Site, start: Point, target: Point): string {
-  const isStart = at(start, site)
-  const isTarget = at(target, site)
-  return isStart && isTarget ? 'Start and target' : isStart ? 'Start' : isTarget ? 'Target' : ''
+// Where a site falls on the route, which visits the sites in list order.
+function role(index: number, count: number): string {
+  if (count < 2) return ''
+  return index === 0 ? 'Start' : index === count - 1 ? 'Target' : `Stop ${index}`
 }
 
 export function SitesStep({
@@ -28,11 +23,8 @@ export function SitesStep({
   onSelect,
   placing,
   onPlacing,
-  routeStart,
-  routeTarget,
-  onStart,
-  onTarget,
   onUpdateSite,
+  onMoveSite,
   onRemoveSite,
   onAddTask,
   onUpdateTask,
@@ -45,13 +37,9 @@ export function SitesStep({
   onSelect: (selection: Selection) => void
   placing: boolean
   onPlacing: (placing: boolean) => void
-  // The ends of the EVA route, as [lat, lon], or null.
-  routeStart: Point
-  routeTarget: Point
-  // Make the site the start or the target of the EVA route.
-  onStart: (site: Site) => void
-  onTarget: (site: Site) => void
   onUpdateSite: (index: number, patch: Partial<Site>, field: string) => void
+  // Moves a site to another place in the list, and so in the route.
+  onMoveSite: (index: number, to: number) => void
   onRemoveSite: (index: number) => void
   onAddTask: (site: number) => void
   onUpdateTask: (index: number, patch: Partial<Task>, field: string) => void
@@ -68,13 +56,14 @@ export function SitesStep({
       {draft.sites.length === 0 && !placing && (
         <p className="note">No sites yet. Press Add sites and click the map once for each.</p>
       )}
+      {draft.sites.length === 1 && <p className="note">Add a second site and the EVA route runs from this one to it.</p>}
 
       <ol className="items">
         {draft.sites.map((site, i) => {
           const tasks = draft.tasks.map((task, index) => ({ task, index })).filter(({ task }) => task.site === i)
           const hours = tasks.reduce((sum, { task }) => sum + task.hours, 0)
           const validPosition = !Number.isNaN(site.lat) && !Number.isNaN(site.lon)
-          const end = role(site, routeStart, routeTarget)
+          const end = role(i, draft.sites.length)
           const work =
             tasks.length === 0
               ? 'no task'
@@ -93,6 +82,14 @@ export function SitesStep({
                 value={site.name}
                 maxLength={31}
                 onChange={(name) => onUpdateSite(i, { name }, 'name')}
+              />
+              <TextField
+                label="Info"
+                value={site.info ?? ''}
+                maxLength={500}
+                lines={3}
+                placeholder="What is here and why the crew goes"
+                onChange={(info) => onUpdateSite(i, { info }, 'info')}
               />
               <div className="fields fields--2">
                 <NumberField
@@ -196,21 +193,11 @@ export function SitesStep({
               </ul>
 
               <div className="actions">
-                <Button
-                  aria-pressed={at(routeStart, site)}
-                  disabled={!validPosition}
-                  title="The EVA route starts here"
-                  onClick={() => onStart(site)}
-                >
-                  Start here
+                <Button disabled={i === 0} title="Visit this site one stop sooner" onClick={() => onMoveSite(i, i - 1)}>
+                  Move up
                 </Button>
-                <Button
-                  aria-pressed={at(routeTarget, site)}
-                  disabled={!validPosition}
-                  title="The EVA route ends here. The Route tab assesses the walk"
-                  onClick={() => onTarget(site)}
-                >
-                  Target here
+                <Button disabled={i === draft.sites.length - 1} title="Visit this site one stop later" onClick={() => onMoveSite(i, i + 1)}>
+                  Move down
                 </Button>
                 <Button onClick={() => onAddTask(i)}>Add task</Button>
                 <Button className="button--remove" onClick={() => onRemoveSite(i)}>

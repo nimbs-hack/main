@@ -6,7 +6,7 @@ It has four parts:
 
 - The planner, in Go, in `apps/api/internal/planner`. It has a command line and an HTTP API. Its [README](apps/api/internal/planner/README.md) covers the model, the mission file format, the sources of every rate and the limits.
 - The editor, in React and TypeScript, in `src`. It opens on Home, which lists the mission files kept in this browser. A mission is then made in four stages, each its own page with a tab in the top bar: Crew, Phases, Sites and Review. Sites is the 3D Mars map with EVA route planning, map tools and science layers.
-- The viewer, in plain TypeScript, in `src/viewer`. It is a second, small page at `/viewer.html` that opens a mission file, shows its sites on a 3D map and what the mission needs, and takes small edits. [Mission viewer](#mission-viewer) below covers it.
+- The viewer, in plain TypeScript, in `src/viewer`. It is a second, small page at `/viewer.html` that opens a mission file, shows its sites on a 3D map, the route through them and what the mission needs. Its Edit button opens the mission here. [Mission viewer](#mission-viewer) below covers it.
 - The API server, in Go, in `apps/api`. It serves the planner and proxies and caches the globe's imagery and terrain tiles.
 
 Everything the planner reports is a planning estimate built from published NASA rates.
@@ -62,7 +62,7 @@ The open mission is in the top bar on the right. Its name is typed in place, and
 | Home | Every mission file, newest first, each with its sites joined by straight lines over CTX imagery. A row opens to what the mission holds, with a line for each stage, **Edit** and **Delete**. The file being edited is outlined. A first run starts with the example mission. The list lives in this browser and holds 50 missions. |
 | Crew | People as tiles: a portrait, the call sign, then two buttons. **Select** puts someone on the crew, and those on it are outlined in red. The arrow opens a person's information under their row to read or edit. Search narrows the tiles by call sign or role. **+** beside the title adds a new person. A portrait shows when `src/assets/crew` has a file named after the call sign. **Add photo** in a person's information puts your own picture on their tile, cut to a square. Added photos stay in this browser and are not in the mission file. |
 | Phases | Set each phase's length, recycling, EVA hours and power. Drag a phase by its grip to reorder. A changed value turns blue and offers the preset back. |
-| Sites | The first tab of the left panel holds the mission's points. **Add points** and click the map once for each; open a point to name it and give it tasks. Under **Who**, press each person who works on a task; everyone pressed works its whole length. The points are the EVA route, in list order. **Method** on the Route tab picks how each leg is found: Fast, Flat, Thermal or Detour search the terrain for a path under the slope limit, and Straight lines does no search. While the route is worked out, grey lines join the points and the map and the panel both say Routing. Then the panel gives a go or no-go verdict. Drag a numbered pin to move its point. Points any distance apart are routed. The farther apart they are, the coarser the terrain the route is checked against, and past 120 m between checks the verdict says how far apart they are and stays at caution or worse. **Add EVA to mission** gives the last point one EVA task as long as the travel and the work. |
+| Sites | **Sites plan**, the first tab of the left panel, holds the mission's sites in the order they are visited. **Add sites** and click the map once for each. Open a site to give it a name, info (what is there and why the crew goes) and coordinates, and to add its tasks. Under **Who**, press each person who works on a task; everyone pressed works its whole length. **Move up** and **Move down** change the order. The EVA route runs through the sites in that order, first to last, and follows the list when a site is added, moved or removed. The Route tab then gives a go or no-go verdict for the walk. **Add EVA to mission** gives the last site one EVA task as long as the travel and the work. |
 | Review | The only page with results: cautions, totals, loads on the vehicle, tables by phase, by site with distances, and by crew, with the mission's sites on the planet beside them. Save the mission file here. |
 
 A stage with a problem in it is marked **Fix** on its tab. The Review tab shows how many cautions are waiting.
@@ -101,7 +101,7 @@ Once a file opens, the page is the map. A mission with no sites or symbols has n
 | --- | --- |
 | Live view | Each crew member's suit sensors and position. **You are** picks who you are, and is not saved |
 | Mission | Cautions, supplies with the margin, vehicle loads on demand |
-| Sites | Each site with its coordinates, the distance from the site before it and its tasks. Then the mission's symbols |
+| Sites | Each site with its coordinates, info, the distance along the route from the site before it, and its tasks. Then the mission's symbols |
 | Crew | Each person's radiation dose against the career limit, mission totals and daily needs |
 | Phases | Supplies by phase |
 | Briefing | The briefing text |

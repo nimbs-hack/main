@@ -25,12 +25,6 @@ interface Eva {
 interface MapHooks {
   placing: string | null
   onPlacing: (mode: string | null) => void
-  // The ends of the EVA route, or null. Points are planetocentric latitude
-  // and east longitude, -180 to 180.
-  start: [number, number] | null
-  target: [number, number] | null
-  onStart: (point: [number, number], name: string) => void
-  onTarget: (point: [number, number]) => void
 }
 
 // MarsGlobe is plain JavaScript. These are the props this page relies on.
@@ -68,9 +62,9 @@ function evaNote({ verdict, distance, maxSlope }: Eva): string {
 }
 
 // The sites stage: the map with the plan panel on its left. The mission's
-// sites and tasks are one tab of that panel, next to the EVA route settings.
-// An assessed EVA becomes a site with a task, so its hours count against the
-// phase.
+// sites and tasks are its Sites plan tab, next to the EVA route settings. The
+// EVA route runs through the sites in list order. An assessed EVA becomes a
+// task at its target site, so its hours count against the phase.
 export function SitesPage({
   missionId,
   catalog,
@@ -84,6 +78,7 @@ export function SitesPage({
   onAddSite,
   onAddEva,
   onUpdateSite,
+  onMoveSite,
   onRemoveSite,
   onAddTask,
   onUpdateTask,
@@ -101,6 +96,7 @@ export function SitesPage({
   onAddSite: (lat: number, lon: number) => void
   onAddEva: (lat: number, lon: number, hours: number, note: string) => void
   onUpdateSite: (index: number, patch: Partial<Site>, field: string) => void
+  onMoveSite: (index: number, to: number) => void
   onRemoveSite: (index: number) => void
   onAddTask: (site: number) => void
   onUpdateTask: (index: number, patch: Partial<Task>, field: string) => void
@@ -151,7 +147,7 @@ export function SitesPage({
         onScienceSource={setScienceCredit}
         onViewer={setViewer}
         mission={mission}
-        missionPanel={({ placing, onPlacing, start, target, onStart, onTarget }: MapHooks) => (
+        missionPanel={({ placing, onPlacing }: MapHooks) => (
           <div className="sites" onBlur={onSettle}>
             <SitesStep
               catalog={catalog}
@@ -161,11 +157,8 @@ export function SitesPage({
               onSelect={onSelect}
               placing={placing === 'site'}
               onPlacing={(on) => onPlacing(on ? 'site' : null)}
-              routeStart={start}
-              routeTarget={target}
-              onStart={(entry) => onStart([entry.lat, entry.lon], entry.name)}
-              onTarget={(entry) => onTarget([entry.lat, entry.lon])}
               onUpdateSite={onUpdateSite}
+              onMoveSite={onMoveSite}
               onRemoveSite={onRemoveSite}
               onAddTask={onAddTask}
               onUpdateTask={onUpdateTask}

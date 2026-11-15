@@ -707,6 +707,7 @@ function Editor({ catalog, planned: opening, library: kept, fileId: openingId }:
                   `${draft.sites[i]!.name} removed${gone > 0 ? ` with its ${count(gone, 'task')}` : ''}.`,
                 )
               }}
+              onMoveSite={(i, to) => structural((d) => edits.moveSite(d, i, to), { list: 'site', index: to })}
               onAddTask={(site) => commit((d) => edits.addTask(d, site))}
               onUpdateTask={(i, patch, field) => commit((d) => edits.updateTask(d, i, patch), `task ${i} ${field}`)}
               onRemoveTask={(i) => commit((d) => edits.removeTask(d, i))}

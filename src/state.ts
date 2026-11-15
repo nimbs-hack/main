@@ -352,6 +352,18 @@ export function createEdits(catalog: Catalog) {
       ...draft,
       sites: replaceAt(draft.sites, index, { ...draft.sites[index]!, ...patch }),
     }),
+    // Moves a site to position `to` in the list, which is the order the route
+    // visits them. Its tasks go with it.
+    moveSite: (draft: Draft, index: number, to: number): Draft => {
+      if (to < 0 || to >= draft.sites.length || to === index) return draft
+      const order = draft.sites.map((_, i) => i)
+      order.splice(to, 0, ...order.splice(index, 1))
+      return {
+        ...draft,
+        sites: order.map((i) => draft.sites[i]!),
+        tasks: retarget(draft, (task) => ({ ...task, site: order.indexOf(task.site) })),
+      }
+    },
     // A site takes its tasks with it.
     removeSite: (draft: Draft, index: number): Draft => ({
       ...draft,

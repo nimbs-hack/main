@@ -431,6 +431,7 @@ function sitesTab({ planned: { mission } }: Doc): Child {
           typeof leg === 'number' && h('span', { class: 'site__leg', title: walked(i)?.title }, `${meters(walked(i)?.distance ?? leg)} from ${mission.sites[i - 1]!.name}`),
         ),
         h('p', { class: 'site__place' }, formatLatLon(site.lat, site.lon)),
+        site.info && h('p', { class: 'site__info' }, site.info),
         legNote(i),
         mission.tasks.map((task) => task.site === i && taskCard(mission, task)),
       )

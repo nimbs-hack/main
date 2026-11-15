@@ -483,16 +483,14 @@ function followWalker(viewer, point, heading, playing, elevation) {
  * `mission` ties the map to the mission being planned. It is optional:
  *   { crew, sites, taskCounts, selected, onSelect(index), onAddSite([lat, lon]),
  *     onAddEva({ target, seconds, distance, maxSlope, verdict }) }
- * Sites are { name, lat, lon } in planetocentric latitude and east longitude,
- * -180 to 180. They are drawn as numbered markers, apart from the EVA route:
- * one EVA walks to one site, and Add EVA to mission records it there.
- * `mission.flag` puts a caution dot on the Sites tab.
+ * Sites are { name, lat, lon, info } in planetocentric latitude and east
+ * longitude, -180 to 180. They are drawn as numbered markers, and the EVA
+ * route runs through them in list order: the first is the start, the last the
+ * target, the rest stops. Add EVA to mission records the walk as a task at
+ * the target site. `mission.flag` puts a caution dot on the Sites plan tab.
  * `missionPanel` renders the mission's sites and tasks as a tab of the plan
- * panel and gets { placing, onPlacing, start, target, onStart, onTarget } to
- * drive the map from it. While placing is 'site' every click adds a site,
- * until Esc or onPlacing(null). onStart([lat, lon], name) and
- * onTarget([lat, lon]) set the ends of the EVA route; start and target are
- * the current ends, or null.
+ * panel and gets { placing, onPlacing } to drive the map from it. While
+ * placing is 'site' every click adds a site, until Esc or onPlacing(null).
  */
 export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onScienceSource, onViewer, mission = null, missionPanel = null }) {
   const container = useRef(null)
@@ -1065,6 +1063,22 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     })
   }
 
+  // The route follows the site list. When sites are added, moved or removed,
+  // the start, stops and target become the sites in order. The picked
+  // strategy and start time stay. Points moved on the map hold until the list
+  // changes again.
+  const routeSites = (mission?.sites ?? []).filter((entry) => Number.isFinite(entry.lat) && Number.isFinite(entry.lon))
+  const routeSitesKey = JSON.stringify(routeSites.map((entry) => [entry.lat, entry.lon, entry.name]))
+  useEffect(() => {
+    if (routeSites.length < 2) return
+    const points = routeSites.map((entry) => [entry.lat, entry.lon])
+    setPlan((current) =>
+      current.start && current.target && samePoints(stopPath(current), points)
+        ? current
+        : { ...current, start: points[0], startName: routeSites[0].name, target: points.at(-1), waypoints: points.slice(1, -1), generated: [] },
+    )
+  }, [routeSitesKey])
+
   const actions = {
     start: (point) => startAt(point),
     target: (point) => setPlan((current) => ({ ...stopsOnly(current), target: point })),
@@ -1329,7 +1343,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
             maxSlope: assessment.maxSlope,
             verdict: assessment.verdict,
           }) : null}
-          missionSites={missionPanel?.({ placing, onPlacing: setPlacing, start: plan.start, target: plan.target, onStart: startAt, onTarget: actions.target })}
+          missionSites={missionPanel?.({ placing, onPlacing: setPlacing })}
           missionFlag={mission?.flag ?? null}
           missionFocus={missionSelected}
         />

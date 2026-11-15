@@ -21,6 +21,22 @@ type Marker struct {
 type missionExtras struct {
 	Markers  []Marker `json:"markers,omitempty"`
 	Briefing string   `json:"briefing,omitempty"`
+	// One entry for each site, in site order, when any site has info.
+	SiteInfo []string `json:"siteInfo,omitempty"`
+}
+
+// siteInfo is the sites' info in site order, or nil when no site has any.
+func siteInfo(sites []Site) []string {
+	info := make([]string, len(sites))
+	has := false
+	for i, site := range sites {
+		info[i] = site.Info
+		has = has || site.Info != ""
+	}
+	if !has {
+		return nil
+	}
+	return info
 }
 
 // The frontend catalog test checks this list against the rendered symbols.

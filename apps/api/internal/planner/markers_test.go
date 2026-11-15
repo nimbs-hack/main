@@ -111,3 +111,26 @@ func TestVersionFourRejectsDamagedOrOversizedExtras(t *testing.T) {
 		t.Fatalf("oversized packet: %v", err)
 	}
 }
+
+func TestSiteInfoSurvivesARoundTripAndOnlyItRaisesTheVersion(t *testing.T) {
+	mission := bare(t)
+	mission.Sites = []Site{{Name: "A", Lat: 1, Lon: 2}, {Name: "B", Lat: 3, Lon: 4, Info: "Boxwork ridges.\nSample the light-toned veins."}}
+	file := encode(t, mission)
+	decoded, err := DecodeMission(file)
+	if err != nil || file[6]>>4 != 4 || !reflect.DeepEqual(decoded.Sites, mission.Sites) {
+		t.Fatalf("version %d, sites %+v, %v", file[6]>>4, decoded.Sites, err)
+	}
+	mission.Sites[1].Info = ""
+	if file := encode(t, mission); file[6]>>4 != 3 {
+		t.Errorf("sites without info wrote version %d, want 3", file[6]>>4)
+	}
+}
+
+func TestSiteInfoOverTheLimitIsRefused(t *testing.T) {
+	source := map[string]any{"name": "A", "lat": 1.0, "lon": 2.0, "info": strings.Repeat("x", MaxSiteInfo+1)}
+	c := &checker{}
+	c.site(source, "site 1")
+	if c.err == nil || !strings.Contains(c.err.Error(), "site 1 info") {
+		t.Errorf("err = %v", c.err)
+	}
+}

@@ -48,29 +48,28 @@ export function TextField({
   onChange,
   maxLength,
   placeholder,
+  lines,
 }: {
   label: string
   value: string
   onChange: (value: string) => void
   maxLength?: number
   placeholder?: string
+  // More than one line of free text, such as a note.
+  lines?: number
 }) {
   const id = useId()
+  const shared = { id, value, maxLength, placeholder, onChange: (e: { target: { value: string } }) => onChange(e.target.value) }
   return (
     <div className="field">
       <label className="label" htmlFor={id}>
         {label}
       </label>
-      <input
-        id={id}
-        className="input"
-        value={value}
-        maxLength={maxLength}
-        placeholder={placeholder}
-        spellCheck={false}
-        autoComplete="off"
-        onChange={(e) => onChange(e.target.value)}
-      />
+      {lines ? (
+        <textarea {...shared} className="input input--lines" rows={lines} />
+      ) : (
+        <input {...shared} className="input" spellCheck={false} autoComplete="off" />
+      )}
     </div>
   )
 }

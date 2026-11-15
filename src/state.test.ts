@@ -37,3 +37,17 @@ test('an existing astronaut profile wins over the former sample entry', () => {
   saved = [person, edited]
   expect(loadRoster(catalog)).toEqual([edited])
 })
+
+test('moving a site reorders the route and its tasks go with it', async () => {
+  const { createEdits } = await import('./state')
+  const edits = createEdits({ taskKinds: ['sample'] } as unknown as Parameters<typeof createEdits>[0])
+  const site = (name: string) => ({ name, lat: 0, lon: 0 })
+  const task = (at: number, note: string) => ({ site: at, phase: 0, crew: [], kind: 'sample', eva: true, hours: 1, note })
+  const draft = { sites: [site('A'), site('B'), site('C')], tasks: [task(0, 'a'), task(2, 'c'), task(1, 'b')] } as unknown as Parameters<typeof edits.moveSite>[0]
+  const moved = edits.moveSite(draft, 2, 0)
+  expect(moved.sites.map((s) => s.name)).toEqual(['C', 'A', 'B'])
+  // Each task still points at the site it was made for.
+  expect(moved.tasks.map((t) => [moved.sites[t.site]!.name, t.note])).toEqual([['A', 'a'], ['C', 'c'], ['B', 'b']])
+  expect(edits.moveSite(draft, 0, -1)).toBe(draft)
+  expect(edits.moveSite(draft, 2, 3)).toBe(draft)
+})

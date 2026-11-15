@@ -191,7 +191,13 @@ type Site struct {
 	Name string  `json:"name"`
 	Lat  float64 `json:"lat"`
 	Lon  float64 `json:"lon"`
+	// What the site is and why the crew goes there. Readable UTF-8, up to
+	// MaxSiteInfo bytes, kept with the symbols and briefing in the file.
+	Info string `json:"info,omitempty"`
 }
+
+// MaxSiteInfo is the longest site info in bytes.
+const MaxSiteInfo = 500
 
 // Task is a piece of work at a site. Site, Phase and Crew are positions in
 // the mission's lists, counted from zero.
@@ -383,6 +389,7 @@ func (c *checker) site(value any, where string) Site {
 		Name: c.text(input["name"], where+" name", 1),
 		Lat:  c.measure(input["lat"], where+" lat", -90, 90, 1, 1e6),
 		Lon:  c.measure(input["lon"], where+" lon", -180, 180, 1, 1e6),
+		Info: c.extraText(or(input["info"], ""), where+" info", 0, MaxSiteInfo, true),
 	}
 }
 

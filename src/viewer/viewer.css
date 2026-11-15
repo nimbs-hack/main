@@ -505,6 +505,12 @@ button:disabled {
   font-size: var(--text-label);
 }
 
+.site__info {
+  margin-top: var(--space-2);
+  color: var(--color-text-muted);
+  white-space: pre-line;
+}
+
 .site__note {
   margin-top: var(--space-1);
   font-size: var(--text-data);
