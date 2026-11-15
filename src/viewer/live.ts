@@ -1,5 +1,5 @@
 import type { Mission } from '../api'
-import { MARS_RADIUS } from '../data/geo'
+import { type LatLon, MARS_RADIUS } from '../data/geo'
 
 export interface CrewPosition {
   member: number
@@ -22,12 +22,13 @@ export const SIDE_GAP = 6
 const MIN_ROUTE = 1
 
 // A local simulation, not telemetry or a traversability assessment. The crew
-// walks as a group along the mission's route: the straight legs from site to
-// site in file order, the dashed line on the map. At the last site they turn
-// back. A mission with one site has no route, so the crew circles it. These
-// positions never enter the file.
-export function simulatedPositions(mission: Pick<Mission, 'crew' | 'sites'>, seconds: number, self: number): CrewPosition[] {
-  const sites = mission.sites.filter((site) => Number.isFinite(site.lat + site.lon) && Math.abs(site.lat) <= 90)
+// walks as a group along `path`, the route the map draws from site to site,
+// or the sites themselves in file order before the route is found. At the
+// end they turn back. A mission with one site has no route, so the crew
+// circles it. These positions never enter the file.
+export function simulatedPositions(mission: Pick<Mission, 'crew' | 'sites'>, seconds: number, self: number, path?: LatLon[]): CrewPosition[] {
+  const points = path ?? mission.sites.map((site): LatLon => [site.lat, site.lon])
+  const sites = points.filter(([lat, lon]) => Number.isFinite(lat + lon) && Math.abs(lat) <= 90).map(([lat, lon]) => ({ lat, lon }))
   const anchor = sites[0]
   if (!anchor) return []
   // Meters east and north of the first site. Exact enough for one site and

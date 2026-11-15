@@ -1,8 +1,8 @@
 import { MARS_RADIUS, distance } from './geo'
 import type { LatLon } from './geo'
 import type { Ground } from './ground'
-import { groundPace, stepTime } from './plan'
-import type { Limits } from './plan'
+import { groundPace, stepTime } from './limits'
+import type { Limits } from './limits'
 
 // Route alternatives between a start and a target. A grid is laid along the
 // start-to-target line and every node gets terrain elevation and a night IR

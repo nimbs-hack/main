@@ -22,9 +22,14 @@ export function missionRegion(points: ReadonlyArray<readonly [number, number]>):
   const west = lons[after]!, east = west + 360 - gap
   const south = Math.min(...valid.map(([lat]) => lat)), north = Math.max(...valid.map(([lat]) => lat))
   const lat = (south + north) / 2, lon = (west + east) / 2
-  // A 500 m minimum buffer contains the simulated crew around a lone site.
-  const latPad = Math.max(500 / METERS_PER_DEGREE, (north - south) * 0.1)
-  const lonPad = Math.max(500 / (METERS_PER_DEGREE * Math.max(0.01, Math.cos(lat * Math.PI / 180))), (east - west) * 0.1)
+  // The route search looks up to 35% of a leg's length to either side of it
+  // (src/data/route-options.ts), so the region reaches 40% of the mission's
+  // longer side past each edge. 500 m at least, for the crew around a lone
+  // site.
+  const cos = Math.max(0.01, Math.cos(lat * Math.PI / 180))
+  const reach = Math.max(500, 0.4 * Math.max((north - south) * METERS_PER_DEGREE, (east - west) * METERS_PER_DEGREE * cos))
+  const latPad = reach / METERS_PER_DEGREE
+  const lonPad = reach / (METERS_PER_DEGREE * cos)
   return { lat, lon, bounds: { south: Math.max(-90, south - latPad), north: Math.min(90, north + latPad), west: west - lonPad, east: east + lonPad } }
 }
 

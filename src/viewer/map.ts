@@ -1,5 +1,5 @@
-// The viewer's map: the mission's sites on 3D ground, with the straight line
-// from each site to the next.
+// The viewer's map: the mission's sites on 3D ground, with the route from
+// each site to the next (./route) once the region's terrain is in.
 //
 // The ground is flat-projected around the middle of the mission: meters east
 // and north of that point. That is exact enough for one site and the routes
@@ -24,6 +24,7 @@ import { type IconName, icon } from './icons'
 import type { CrewPosition } from './live'
 import { type Frame, createFlatRenderer, createGlRenderer } from './gl'
 import { type MissionRegion, intersectBounds, missionRegion } from './region'
+import { type RouteLeg, type SiteRoute, routeSites } from './route'
 import { type Bounds, MAX_LEVEL, METERS_PER_DEGREE, type Patch, createTileSource, patchId } from './tiles'
 import { type Basis, HALF_FOV, MIN_PITCH, type View, basis, ground, matrix, pixelsPerMeter, project } from './view'
 
@@ -44,6 +45,9 @@ export interface MapEvents {
   cursor(text: string): void
   // Pixels per meter at the middle of the map.
   scale(pixelsPerMeter: number): void
+  // The route between the sites, found once the region's terrain is in.
+  // Null with fewer than two sites, and until then.
+  route(route: SiteRoute | null): void
 }
 
 const MIN_DIST = 150
@@ -64,7 +68,7 @@ const rgb = (hex: string): [number, number, number] => {
 }
 
 export function createMap(root: HTMLElement, events: MapEvents) {
-  const colors = { bg: token('--color-bg'), text: token('--color-text'), accent: token('--color-accent') }
+  const colors = { bg: token('--color-bg'), text: token('--color-text'), accent: token('--color-accent'), hazard: token('--color-hazard') }
   const font = `600 ${token('--text-data')} ${token('--font-sans')}`
   const background = rgb(colors.bg)
   const blank = rgb(token('--color-surface-raised'))
@@ -106,6 +110,7 @@ export function createMap(root: HTMLElement, events: MapEvents) {
   let mission = 0
   let loads = 0
   let sites: Site[] = []
+  let route: SiteRoute | null = null
   let markers: Marker[] = []
   let selected = -1
   let pins: Array<{ x: number; y: number; site: number }> = []
@@ -316,7 +321,19 @@ export function createMap(root: HTMLElement, events: MapEvents) {
       if (base) renderer.drop(base)
       base = patch
       h0 = tiles.heightAt(origin.lat, origin.lon) ?? h0
+      findRoute()
     })
+  }
+
+  // Searches the legs on the terrain loaded so far. The region's own patch is
+  // in by now and covers each leg's search corridor.
+  function findRoute() {
+    route = sites.length > 1 ? routeSites(sites.map((site) => [site.lat, site.lon]), tiles.heightAt) : null
+    routeKeyText.textContent = route ? `Route, shortest under ${route.limit}°` : 'Site order. Finding the route'
+    blockedKey.hidden = !route?.legs.some((leg) => leg.status === 'blocked')
+    blockedKeyText.textContent = route ? `No path under ${route.limit}°` : ''
+    events.route(route)
+    requestDraw()
   }
 
   // On a slow graphics chip the ground is drawn at half resolution while the
@@ -406,57 +423,70 @@ export function createMap(root: HTMLElement, events: MapEvents) {
     const station = period * 4
     const reach = view.dist * 3
     const band = new Path2D()
-    const dashes = new Path2D()
-    for (let i = 1; i < places.length; i++) {
-      const [ax, ay] = places[i - 1]!
-      const [bx, by] = places[i]!
-      const length = Math.hypot(bx - ax, by - ay)
-      if (length === 0) continue
-      // Only the part of the leg near the camera target is drawn.
-      const along = ((target.x - ax) * (bx - ax) + (target.y - ay) * (by - ay)) / length
-      const off = (target.x - ax) ** 2 + (target.y - ay) ** 2 - along ** 2
-      if (off > reach ** 2) continue
-      const chord = Math.sqrt(reach ** 2 - off)
-      const from = Math.max(0, along - chord)
-      const to = Math.min(length, along + chord)
-      if (to <= from) continue
-      // Ground height is read at stations four dashes apart, and is linear
-      // between them.
-      const first = Math.floor(from / station)
-      const heights: number[] = []
-      for (let k = first; (k - 1) * station < to; k++) {
-        const s = clamp(k * station, 0, length)
-        heights.push(zOf(ax + ((bx - ax) * s) / length, ay + ((by - ay) * s) / length))
-      }
-      const point = (s: number) => {
-        const k = Math.min(s / station - first, heights.length - 1.001)
-        const low = Math.max(0, Math.floor(k))
-        const z = heights[low]! + (heights[low + 1]! - heights[low]!) * (k - low)
-        return at(ax + ((bx - ax) * s) / length, ay + ((by - ay) * s) / length, z)
-      }
-      let open = false
-      for (let s = from; ; s = Math.min(to, (Math.floor(s / period) + 1) * period)) {
-        const p = point(s)
-        if (!p) open = false
-        else if (open) band.lineTo(p[0], p[1])
-        else band.moveTo(p[0], p[1])
-        open = p !== null
-        if (s >= to) break
-      }
-      for (let k = Math.floor(from / period); k * period < to; k++) {
-        const start = point(Math.max(from, k * period))
-        const end = point(Math.min(to, (k + DASH) * period))
-        if (!start || !end) continue
-        dashes.moveTo(start[0], start[1])
-        dashes.lineTo(end[0], end[1])
+    const dashes = { ok: new Path2D(), blocked: new Path2D() }
+    // Draws a line along the ground. `offset` is how far along the whole line
+    // the first point is, so dashes run on across its corners.
+    const strokeLine = (line: Array<[number, number]>, into: Path2D) => {
+      let offset = 0
+      for (let i = 1; i < line.length; offset += Math.hypot(line[i]![0] - line[i - 1]![0], line[i]![1] - line[i - 1]![1]), i++) {
+        const [ax, ay] = line[i - 1]!
+        const [bx, by] = line[i]!
+        const length = Math.hypot(bx - ax, by - ay)
+        if (length === 0) continue
+        // Only the part near the camera target is drawn.
+        const along = ((target.x - ax) * (bx - ax) + (target.y - ay) * (by - ay)) / length
+        const off = (target.x - ax) ** 2 + (target.y - ay) ** 2 - along ** 2
+        if (off > reach ** 2) continue
+        const chord = Math.sqrt(reach ** 2 - off)
+        const from = Math.max(0, along - chord)
+        const to = Math.min(length, along + chord)
+        if (to <= from) continue
+        // Ground height is read at stations four dashes apart, and is linear
+        // between them.
+        const first = Math.floor(from / station)
+        const heights: number[] = []
+        for (let k = first; (k - 1) * station < to; k++) {
+          const s = clamp(k * station, 0, length)
+          heights.push(zOf(ax + ((bx - ax) * s) / length, ay + ((by - ay) * s) / length))
+        }
+        const point = (s: number) => {
+          const k = Math.min(s / station - first, heights.length - 1.001)
+          const low = Math.max(0, Math.floor(k))
+          const z = heights[low]! + (heights[low + 1]! - heights[low]!) * (k - low)
+          return at(ax + ((bx - ax) * s) / length, ay + ((by - ay) * s) / length, z)
+        }
+        let open = false
+        for (let s = from; ; s = Math.min(to, (Math.floor(s / period) + 1) * period)) {
+          const p = point(s)
+          if (!p) open = false
+          else if (open) band.lineTo(p[0], p[1])
+          else band.moveTo(p[0], p[1])
+          open = p !== null
+          if (s >= to) break
+        }
+        for (let k = Math.floor((offset + from) / period); k * period < offset + to; k++) {
+          const start = point(Math.max(from, k * period - offset))
+          const end = point(Math.min(to, (k + DASH) * period - offset))
+          if (!start || !end) continue
+          into.moveTo(start[0], start[1])
+          into.lineTo(end[0], end[1])
+        }
       }
     }
+    // Until the route is found, the sites in order, straight.
+    const legs: Array<Pick<RouteLeg, 'status' | 'points'>> =
+      route?.legs ?? sites.slice(1).map((site, i) => ({ status: 'unknown', points: [[sites[i]!.lat, sites[i]!.lon], [site.lat, site.lon]] }))
+    for (const leg of legs) strokeLine(leg.points.map(([lat, lon]) => toScene(lat, lon)), leg.status === 'blocked' ? dashes.blocked : dashes.ok)
     pen.strokeStyle = colors.bg
     pen.lineWidth = 5.5
     pen.stroke(band)
-    pen.strokeStyle = colors.accent
     pen.lineWidth = 2.5
-    pen.stroke(dashes)
+    pen.strokeStyle = colors.accent
+    pen.stroke(dashes.ok)
+    // A leg with no path under the limit is straight, in the over-limit color.
+    pen.lineWidth = 3.5
+    pen.strokeStyle = colors.hazard
+    pen.stroke(dashes.blocked)
 
     // Pins and symbols first, then names. A name gives way to a pin, a
     // symbol, or a name already drawn: the selected site's, then the other
@@ -646,13 +676,29 @@ export function createMap(root: HTMLElement, events: MapEvents) {
     view.pitch = view.pitch < TOP_DOWN - 0.1 ? TOP_DOWN : TILTED
     moved()
   })
-  const orderKey = h('span', { class: 'key__item' }, h('span', { class: 'key__line' }), 'Site order · Not a walked route')
+  const routeKeyText = h('span', null, 'Site order. Finding the route')
+  const orderKey = h(
+    'span',
+    {
+      class: 'key__item',
+      title: "The viewer's own route search, on the terrain this map loaded, under the planner's Nominal limits. The planner's Sites stage can find other routes.",
+    },
+    h('span', { class: 'key__line' }),
+    routeKeyText,
+  )
+  const blockedKeyText = h('span')
+  const blockedKey = h(
+    'span',
+    { class: 'key__item', hidden: true, title: 'Drawn straight. The route search found no path under the slope limit on this leg.' },
+    h('span', { class: 'key__line key__line--blocked' }),
+    blockedKeyText,
+  )
   const reliefKey = h(
     'span',
     { class: 'key__item', title: `Heights are drawn ${RELIEF} times taller than they are, so slopes look steeper. Shading and relief do not show which slopes are safe.` },
     `Heights ×${RELIEF}`,
   )
-  const key = h('p', { class: 'key', hidden: true }, reliefKey, orderKey)
+  const key = h('p', { class: 'key', hidden: true }, reliefKey, orderKey, blockedKey)
   // The page shows these controls only while its sidebar is open.
   const rail = h(
     'div',
@@ -721,6 +767,10 @@ export function createMap(root: HTMLElement, events: MapEvents) {
       view.pitch = renderer.flat ? TOP_DOWN : TILTED
       key.hidden = rail.hidden = !region
       orderKey.hidden = sites.length < 2
+      route = null
+      routeKeyText.textContent = 'Site order. Finding the route'
+      blockedKey.hidden = true
+      events.route(null)
       reliefKey.hidden = renderer.flat
       if (!region) {
         // Nothing to load. The page shows the globe instead.

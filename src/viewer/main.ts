@@ -21,6 +21,7 @@ import { icon } from './icons'
 import { type MapStatus, createMap } from './map'
 import { SUIT } from '../data/suit'
 import { WALK_SPEED, advanceSimulation, simulatedPositions, type CrewPosition } from './live'
+import { type SiteRoute, routeLine } from './route'
 import { type Level, type SuitReading, readSuitSensors, readingLevels, worstLevel } from './sensors'
 
 interface Doc {
@@ -53,6 +54,8 @@ let livePaused = false
 let self = 0
 let liveSeconds = 0
 let positions: CrewPosition[] = []
+// The route between the sites, once the map has found it.
+let route: SiteRoute | null = null
 // Suit sensor readings, one for each crew member, and whose are open.
 let readings: SuitReading[] = []
 const openCrew = new Set<number>()
@@ -190,13 +193,19 @@ const map = createMap(mapRoot, {
     scaleBar.style.width = `${length * pixelsPerMeter}px`
     scaleLabel.textContent = length >= 1000 ? `${num(length / 1000)} km` : `${num(length)} m`
   },
+  route(next) {
+    route = next
+    // The crew moves onto the route, and the Sites tab gets its distances.
+    updatePositions()
+    if (sidebarOpen) renderPanel()
+  },
 })
 
 // The simulation only updates markers and readouts. It never replans the
 // mission. Readouts change in place, so open rows and focus stay put.
 let liveLevel: Level = 'ok'
 function updatePositions() {
-  positions = doc && liveEnabled ? simulatedPositions(doc.planned.mission, liveSeconds, self) : []
+  positions = doc && liveEnabled ? simulatedPositions(doc.planned.mission, liveSeconds, self, route ? routeLine(route) : undefined) : []
   readings = doc ? readSuitSensors(doc.planned.mission.crew.length, liveSeconds) : []
   map.setCrew(positions, livePaused)
   const level = worstOf(readings)
@@ -375,9 +384,27 @@ function taskCard(mission: Mission, task: Task) {
   )
 }
 
+const ROUTE_NOTE = "The viewer's own route search on the terrain its map loaded, shortest under the planner's Nominal limits. The planner's Sites stage can find other routes."
+
 function sitesTab({ planned: { mission } }: Doc): Child {
   if (mission.sites.length === 0) return h('p', { class: 'note' }, 'This mission has no sites.')
   const legs = siteLegs(mission.sites)
+  // The route's leg into site `i`, with what its distance means.
+  const walked = (i: number) => {
+    const leg = route?.legs[i - 1]
+    if (!leg) return null
+    const title = leg.status === 'ok' ? `Along the route. Steepest step ${num(leg.maxSlope ?? 0)}° on the search grid.` : 'Straight line: the route search has no path here.'
+    return { distance: leg.distance, title }
+  }
+  // Under a site: why the leg into it is drawn straight.
+  const legNote = (i: number) => {
+    const leg = route?.legs[i - 1]
+    if (!leg || leg.status === 'ok') return null
+    const from = mission.sites[i - 1]!.name
+    if (leg.status === 'unknown') return h('p', { class: 'site__note is-caution' }, `No terrain from ${from}, so the route is unknown. Drawn straight.`)
+    const needs = leg.needs === null ? '' : ` A ${num(Math.ceil(leg.needs))}° limit would have one.`
+    return h('p', { class: 'site__note is-hazard' }, `No path from ${from} under ${route!.limit}°. Drawn straight.${needs}`)
+  }
   return [
     mission.sites.map((site, i) => {
       const leg = legs[i]
@@ -401,16 +428,19 @@ function sitesTab({ planned: { mission } }: Doc): Child {
             },
             `${i + 1} ${site.name}`,
           ),
-          typeof leg === 'number' && h('span', { class: 'site__leg' }, `${meters(leg)} from ${mission.sites[i - 1]!.name}`),
+          typeof leg === 'number' && h('span', { class: 'site__leg', title: walked(i)?.title }, `${meters(walked(i)?.distance ?? leg)} from ${mission.sites[i - 1]!.name}`),
         ),
         h('p', { class: 'site__place' }, formatLatLon(site.lat, site.lon)),
+        legNote(i),
         mission.tasks.map((task) => task.site === i && taskCard(mission, task)),
       )
     }),
     h(
       'section',
       null,
-      row('Through all sites', meters(totalLegs(legs)), 'Straight lines between sites over the Mars sphere. Not a walked route.'),
+      route
+        ? row('Route through all sites', meters(route.distance), ROUTE_NOTE)
+        : row('Through all sites', meters(totalLegs(legs)), 'Straight lines between sites over the Mars sphere, until the route is found.'),
       row(
         'Task hours',
         amount(
@@ -748,7 +778,7 @@ function liveTab({ planned: { mission } }: Doc): Child {
         'p',
         { class: 'note' },
         mission.sites.length > 1
-          ? 'Positions: simulated crew walking the line from site to site, out and back. Not crew telemetry. The line is straight, not a checked route.'
+          ? `Positions: simulated crew walking the route from site to site, out and back. Not crew telemetry. ${ROUTE_NOTE}`
           : mission.sites.length === 1
             ? `Positions: simulated around ${mission.sites[0]!.name}. Not crew telemetry.`
             : 'Positions: none, the mission has no site.',

@@ -505,6 +505,11 @@ button:disabled {
   font-size: var(--text-label);
 }
 
+.site__note {
+  margin-top: var(--space-1);
+  font-size: var(--text-data);
+}
+
 .task {
   margin-top: var(--space-3);
   padding: 0 var(--space-3) var(--space-1);
@@ -703,6 +708,12 @@ details[open] > summary .more-button .icon {
   height: 2.5px;
   background: repeating-linear-gradient(90deg, var(--color-accent) 0 6px, var(--color-bg) 6px 11px);
   box-shadow: 0 0 0 1.5px var(--color-bg);
+}
+
+/* A leg with no path under the limit: straight, in the over-limit color. */
+.key__line--blocked {
+  height: 3.5px;
+  background: repeating-linear-gradient(90deg, var(--color-hazard) 0 6px, var(--color-bg) 6px 11px);
 }
 
 .status {

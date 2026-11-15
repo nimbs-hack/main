@@ -89,7 +89,7 @@ Mission sites are points with a label: number, name, task count. The selected on
 
 ## Mission viewer
 
-`/viewer.html` reads a mission file on a device that cannot carry the editor. It loads neither React nor the map library: about 29 kB of script and style gzipped, plus the font, against about 1.3 MB for the editor. In development, add `/viewer.html` to the address Vite prints. The page needs the API server, which plans the mission and serves the tiles.
+`/viewer.html` reads a mission file on a device that cannot carry the editor. It loads neither React nor the map library: about 33 kB of script and style gzipped, plus the font, against about 1.3 MB for the editor. In development, add `/viewer.html` to the address Vite prints. The page needs the API server, which plans the mission and serves the tiles.
 
 Before a file opens, the page shows Mars as a globe that turns once every two minutes, drawn from the Viking color mosaic tiles in `public/tiles`. **Open a mission file** and **Try an example** sit under it. No terrain loads until a mission opens. With reduced motion on, the globe stands still.
 
@@ -112,7 +112,7 @@ Edit passes the mission through the browser's storage under `nimbs:planner:incom
 
 Crew positions and suit readings are both simulated. Nothing here is telemetry, and none of it goes into the mission file. **Data sources**, at the bottom of the tab, says so.
 
-The crew walks as one group along the dashed line from site to site, out to the last site and back, at 1.2 m/s. They walk two abreast, 6 m apart, with 8 m between rows. With only one site, each person circles it instead. When markers would overlap on screen, the map draws one group marker instead, such as "You and 5 others". Zoom in, or click the group, to see each person. **You are** picks which crew member is you, the first by default.
+The crew walks as one group along the route, from the first site to the last in their order and back, at 1.2 m/s. Until the route is found they walk straight from site to site. They walk two abreast, 6 m apart, with 8 m between rows. With only one site, each person circles it instead. When markers would overlap on screen, the map draws one group marker instead, such as "You and 5 others". Zoom in, or click the group, to see each person. **You are** picks which crew member is you, the first by default.
 
 Each crew member is a row showing heart rate and oxygen time left. Open the row, or click the person on the map, for their suit readings:
 
@@ -129,12 +129,15 @@ Everything updates once a second without redrawing terrain. Pause freezes positi
 ### The viewer's map
 
 - The ground is the same terrain and CTX imagery as the editor's globe, drawn by about 600 lines of WebGL 1 code. Close in at the four rover sites it shows the HiRISE mosaics. The cursor readout gives coordinates and elevation above the MOLA areoid.
-- Sites are numbered squares in file order, joined by a dashed straight line. A mission file holds sites, not a walked route. The route the editor's Sites page finds stays in the editor's browser, and the map key says the line is not a walked route.
+- Sites are numbered squares in file order. A dashed line routes through them in that order: site 1 to site 2, then site 2 to site 3, and on to the last.
+- The viewer finds the route itself (`src/viewer/route.ts`), because a mission file holds sites, not the route the planner's Sites stage picked. Each leg is the planner's search (`src/data/route-options.ts`) on the terrain the map loaded, the shortest path under the default Nominal limits (20°). It reads no night infrared, so it offers no Thermal or Detour route. The planner can find others.
+- Until the region's terrain is in, the line runs straight and the key says "Finding the route". A leg with no path under the limit stays straight and turns red and wider. The key lists it, and the Sites tab says which limit would work. A leg with no terrain at an end stays straight too, and the Sites tab calls the route unknown.
+- The Sites tab gives distances along the route.
 - Drag to move, scroll to zoom, right-drag or Shift+drag to turn and tilt. On a touch screen, pinch to zoom and twist to turn. The arrow keys move the map, Shift with them turns and tilts it, and + and - zoom. With the sidebar open, buttons on the right zoom, show the whole mission, face north and tilt.
 - Heights are always three times taller than true, and the map key says "Heights ×3". There is no switch back to true scale. Slopes look steeper than they are, so judge them from the planner, not the picture. The flat map has no relief and drops the note.
 - Clicking a site's name in the panel brings it to the middle of the map. Clicking a pin opens the site in the panel.
 - The ground is a flat map around the middle of the mission, not a globe. That is exact enough for one site and the routes around it. Far from the middle, east-west distances stretch.
-- The map loads only the mission's region: the box around its sites and symbols, plus 10% or at least 500 m on each side. The camera can't leave it, and can't pull back past twice the distance that shows the whole mission. Past the region's edge the map is empty.
+- The map loads only the mission's region: the box around its sites and symbols, plus 40% of its longer side, or at least 500 m, on each side. The route search looks up to 35% of a leg's length to either side, so its whole corridor is loaded. The camera can't leave it, and can't pull back past twice the distance that shows the whole mission. Past the region's edge the map is empty.
 - The status bar reports loading and missing terrain or imagery, with **Retry**. Ground with no terrain is drawn level. Imagery arrives tile by tile, and the coarser ground stays under it until it does.
 
 ### On a weak device
@@ -144,7 +147,7 @@ Everything updates once a second without redrawing terrain. Pause freezes positi
 - When frames take longer than about 45 ms, the ground is drawn at half resolution while the camera moves and sharp again when it stops. In Chromium's software renderer that brings a frame from about 100 ms to about 40 ms at 960 by 810 pixels.
 - Without WebGL the same tiles are drawn flat, seen from above, and the status bar says the map is flat. Adding `?flat` to the address asks for that on a device whose 3D is broken.
 
-Nobody outside the team has used the viewer yet. A first walkthrough should have someone open and close the sidebar, find themselves and a teammate, locate a person, open a suit reading and say what the caution means, and press Edit and find the same mission in the planner. For recovery, have them open a damaged file, retry, and open a mission with no sites. Check that nobody takes the dashed site line for a walked route, and that **Data sources** makes it clear the positions and readings are simulated. Browser tests don't replace this.
+Nobody outside the team has used the viewer yet. A first walkthrough should have someone open and close the sidebar, find themselves and a teammate, locate a person, open a suit reading and say what the caution means, and press Edit and find the same mission in the planner. For recovery, have them open a damaged file, retry, and open a mission with no sites. Check that people read the dashed route as a suggestion and not the plan, and that **Data sources** makes it clear the positions and readings are simulated. Browser tests don't replace this.
 
 ## Route search
 
