@@ -50,19 +50,7 @@
   border-top: 1px solid var(--color-line);
 }
 
-.pointmenu__layers {
-  display: grid;
-  gap: 2px;
-  padding: var(--space-1) var(--space-3) var(--space-2);
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-.pointmenu__layers > div { display: flex; justify-content: space-between; gap: var(--space-3); }
-.pointmenu__layers dt { color: var(--color-text-dim); }
-.pointmenu__layers dd { display: flex; align-items: center; gap: var(--space-2); font-variant-numeric: tabular-nums; }
-.pointmenu__swatch { width: 8px; height: 8px; outline: 1px solid var(--color-line-strong); }
-
-/* One-line facts: geologic unit, weather estimate. The code leads in mono. */
+/* One-line facts: weather estimate. The code leads in mono. */
 .pointmenu__fact {
   padding: 0 var(--space-3) var(--space-2);
   color: var(--color-text-muted);

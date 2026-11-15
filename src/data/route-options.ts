@@ -356,8 +356,11 @@ export type RouteOption = {
   id: Strategy
   name: string
   note: string
-  // Interior turn points, ready to become plan waypoints.
+  // Interior points, ready to become plan waypoints: the turn points, plus
+  // the user's stops when the route joins legs between them.
   waypoints: LatLon[]
+  // The waypoints the search made, which are all but the stops.
+  generated: LatLon[]
   // Every node on the path, for drawing.
   line: LatLon[]
   distance: number
@@ -398,6 +401,7 @@ function summarize(grid: Grid, field: Field, nodes: number[], limits: Limits, st
   return {
     ...strategy,
     waypoints: turns.slice(1, -1).map((i) => grid.points[i]),
+    generated: turns.slice(1, -1).map((i) => grid.points[i]),
     line: nodes.map((i) => grid.points[i]),
     distance: length,
     time,
@@ -442,5 +446,49 @@ export function routeOptions(grid: Grid, field: Field, limits: Limits, thermalPe
   if (risk) consider('thermal', findPath(grid, field, 'thermal', limit, { risk }), KEEP_THERMAL)
   const penalty = corridorPenalty(grid, found.map((f) => f.path))
   consider('detour', findPath(grid, field, 'detour', limit, { penalty }), KEEP_DETOUR)
+  return { status: 'ok', options }
+}
+
+/**
+ * One route per strategy through the user's stops, from routes found leg by
+ * leg. `legs[i]` runs from stop i to stop i + 1, and `stops` are the stops
+ * between the legs. A strategy shows only when every leg has it. A route is
+ * the same as another only when it is the same on every leg.
+ */
+export function joinLegs(legs: RoutePlan[], stops: LatLon[]): RoutePlan {
+  if (legs.length === 1) return legs[0]
+  const blocked = legs.filter((leg) => leg.status === 'blocked')
+  if (blocked.length) {
+    const needs = blocked.map((leg) => (leg.status === 'blocked' ? leg.needs : null))
+    return { status: 'blocked', options: [], needs: needs.includes(null) ? null : Math.max(...(needs as number[])) }
+  }
+  const options: RouteOption[] = []
+  for (const strategy of STRATEGIES) {
+    const parts = legs.map((leg) => leg.options.find((option) => option.id === strategy.id))
+    if (parts.some((part) => !part)) continue
+    const legOptions = parts as RouteOption[]
+    const twin = legOptions[0].sameAs
+    const sameAs = twin && legOptions.every((part) => part.sameAs === twin) && options.some((o) => o.name === twin) ? twin : null
+    const waypoints: LatLon[] = []
+    const generated: LatLon[] = []
+    const line: LatLon[] = []
+    legOptions.forEach((part, i) => {
+      waypoints.push(...part.waypoints)
+      generated.push(...part.generated)
+      line.push(...(i ? part.line.slice(1) : part.line))
+      if (i < stops.length) waypoints.push(stops[i])
+    })
+    const slopes = legOptions.map((part) => part.maxSlope).filter((slope): slope is number => slope !== null)
+    options.push({
+      ...strategy,
+      waypoints,
+      generated,
+      line,
+      distance: legOptions.reduce((sum, part) => sum + part.distance, 0),
+      time: legOptions.reduce((sum, part) => sum + part.time, 0),
+      maxSlope: slopes.length ? Math.max(...slopes) : null,
+      sameAs,
+    })
+  }
   return { status: 'ok', options }
 }

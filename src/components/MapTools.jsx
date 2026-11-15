@@ -95,7 +95,7 @@ function HeightField({ label, value, onChange }) {
  * them on its own canvas layer. MarsGlobe routes map clicks here through
  * `clickRef` while a tool is on. The panel opens left of the camera rail.
  */
-export default function MapTools({ viewer, terrainProvider, tool, onTool, seed, limits, planStart, onUseRoute, clickRef }) {
+export default function MapTools({ viewer, terrainProvider, tool, onTool, limits, planStart, onUseRoute, clickRef }) {
   const overlay = useRef(null)
   const [ruler, setRuler] = useState([])
   const [hover, setHover] = useState(null)
@@ -110,14 +110,6 @@ export default function MapTools({ viewer, terrainProvider, tool, onTool, seed, 
       overlay.current = null
     }
   }, [viewer])
-
-  // A right-click action opens a tool on a point.
-  useEffect(() => {
-    if (!seed) return
-    if (seed.tool === 'ruler') setRuler([seed.point])
-    if (seed.tool === 'range') setCenter(seed.point)
-    if (seed.tool === 'sight') setSight((s) => ({ ...s, a: seed.point, b: null }))
-  }, [seed])
 
   // Range rings start on the plan's start when nothing else is set.
   useEffect(() => {

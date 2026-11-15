@@ -1,35 +1,29 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { distance } from '../data/geo'
 import { slopeLevel } from '../data/route-profile'
-import { SITES } from '../data/sites'
 import { formatElevation, formatLatLon } from '../format'
-import { formatMeasurement } from './SciencePanel'
 import { MIL2525C_BY_ID, MIL2525C_SYMBOLS, MIL2525C_THEMES } from '../data/mil2525c'
 import { formatPressure, formatTemp } from '../data/weather'
 import { COARSE_DETAIL, detailLabel } from '../data/terrain-detail'
-import { formatDistance, formatSlope, rampColor } from './RouteProfile'
+import { formatDistance, formatSlope } from './RouteProfile'
 import './point-menu.css'
 
-// Readings count as local when their site is this close to the point.
-const NEAR = 25_000
 // Gap between the pointer and the menu.
 const GAP = 4
 
 /**
  * Right-click menu for one spot on the map, after Google Maps: coordinates,
- * elevation and slope, geologic unit, estimated weather, plan actions, map
- * symbols, and the layer values and nearby rover readings behind a fold.
+ * elevation and slope, estimated weather, plan actions and
+ * map symbols.
  * Opened on a placed marker, it edits that marker instead. Opens at
  * `probe.screen`, flipped to stay inside the map. Esc or a click outside
  * closes it.
  */
 export default function PointReadout({
-  probe, rasters, observations, limit, actions = [], weather, marker,
+  probe, limit, actions = [], weather, marker,
   onAddMarker, onUpdateMarker, onRemoveMarker, onClose,
 }) {
   const menu = useRef(null)
   const [place, setPlace] = useState(null)
-  const [more, setMore] = useState(false)
   const [picking, setPicking] = useState(false)
   const [theme, setTheme] = useState(MIL2525C_THEMES[0].id)
   const [copied, setCopied] = useState(false)
@@ -45,7 +39,7 @@ export default function PointReadout({
     const left = x + GAP + el.offsetWidth > box.width ? Math.max(GAP, x - GAP - el.offsetWidth) : x + GAP
     const top = y + GAP + el.offsetHeight > box.height ? Math.max(GAP, y - GAP - el.offsetHeight) : y + GAP
     setPlace({ left, top })
-  }, [probe.screen, probe.status, probe.geology, more, picking, theme])
+  }, [probe.screen, probe.status, picking, theme])
 
   useEffect(() => {
     const close = (event) => {
@@ -70,12 +64,6 @@ export default function PointReadout({
   const copy = () => {
     navigator.clipboard?.writeText(where.replace(/\s+/g, ' ')).then(() => setCopied(true), () => {})
   }
-
-  const nearby = SITES
-    .map((site) => ({ site, d: distance([site.lat, site.lon], probe.point) }))
-    .filter(({ d }) => d < NEAR)
-    .sort((a, b) => a.d - b.d)[0]
-  const readings = nearby ? observations.filter((record) => record.siteIds.includes(nearby.site.id)) : []
 
   return (
     <div
@@ -106,11 +94,6 @@ export default function PointReadout({
           </>
         )}
       </p>
-      {probe.geology && probe.geology !== 'none' && probe.geology !== 'error' && (
-        <p className="pointmenu__fact" title={`${probe.geology.source}. Mapped at 1:20M, so the boundary can be kilometers off.`}>
-          <span>{probe.geology.unit}</span> {probe.geology.description}
-        </p>
-      )}
       {weather?.report?.latest && (
         <p
           className="pointmenu__fact"
@@ -134,13 +117,13 @@ export default function PointReadout({
         </div>
       )}
 
-      {!marker && [actions.filter((a) => !a.group), actions.filter((a) => a.group === 'tools')].map((group, i) => group.length > 0 && (
-        <div key={i} className="pointmenu__group">
-          {group.map((action) => (
+      {!marker && actions.length > 0 && (
+        <div className="pointmenu__group">
+          {actions.map((action) => (
             <button key={action.label} type="button" role="menuitem" onClick={action.run}>{action.label}</button>
           ))}
         </div>
-      ))}
+      )}
 
       <div className="pointmenu__group">
         {!marker && (
@@ -176,45 +159,6 @@ export default function PointReadout({
         )}
       </div>
 
-      {probe.status === 'ready' && (
-        <div className="pointmenu__group">
-          <button type="button" role="menuitem" aria-expanded={more} onClick={() => setMore(!more)}>
-            {more ? 'Hide layers' : 'Layers here'}
-          </button>
-          {more && (
-            <>
-              <dl className="pointmenu__layers">
-                {rasters.map((layer) => {
-                  const value = probe.layers[layer.id]
-                  return (
-                    <div key={layer.id} title={`${layer.name}. ${layer.legend.low} to ${layer.legend.high}. Position on the legend, not calibrated.`}>
-                      <dt>{layer.short}</dt>
-                      <dd>
-                        {value === null || value === undefined ? '—' : (
-                          <>
-                            <span className="pointmenu__swatch" style={{ background: rampColor(layer.legend.colors, value) }} />
-                            {Math.round(value * 100)}
-                          </>
-                        )}
-                      </dd>
-                    </div>
-                  )
-                })}
-              </dl>
-              {readings.length > 0 && (
-                <dl className="pointmenu__layers">
-                  {readings.flatMap((record) => record.measurements.map((m, i) => (
-                    <div key={`${record.id}-${i}`} title={`${nearby.site.name}, ${formatDistance(nearby.d)} away. ${record.epoch.split(';')[0]}`}>
-                      <dt>{record.short}</dt>
-                      <dd>{formatMeasurement(m)}</dd>
-                    </div>
-                  )))}
-                </dl>
-              )}
-            </>
-          )}
-        </div>
-      )}
     </div>
   )
 }

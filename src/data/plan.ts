@@ -12,7 +12,15 @@ export type Plan = {
   // Where the start came from, like "Curiosity · sol 5073". Null once moved.
   startName?: string | null
   target: LatLon | null
+  // Every point between start and target in walking order: the user's stops
+  // and, once a route is picked, the turn points it routes between them.
   waypoints: LatLon[]
+  // Turn points from the picked route. They shape the path but get no handle
+  // or number. Stops the user places are never here.
+  generated?: LatLon[]
+  // The picked route strategy. It stays picked while stops change, and the
+  // new turn points replace the old ones once the route is found again.
+  route?: string | null
 }
 
 // SI units: degrees for slope, m/s for pace, seconds for time, meters for range.
@@ -46,8 +54,30 @@ export function planPath(plan: Plan): LatLon[] {
   return [plan.start, ...plan.waypoints, plan.target].filter((point): point is LatLon => point !== null)
 }
 
-// Puts the point into the leg where it adds the least walking.
-export function insertWaypoint(plan: Plan, point: LatLon): Plan {
+// True for a waypoint the route suggestion made rather than the user.
+export function isGenerated(plan: Plan, point: LatLon) {
+  return (plan.generated ?? []).some((p) => p[0] === point[0] && p[1] === point[1])
+}
+
+// Waypoints the user placed, in walking order. The route must visit each.
+export function userWaypoints(plan: Plan): LatLon[] {
+  return plan.waypoints.filter((point) => !isGenerated(plan, point))
+}
+
+// The plan with its turn points dropped, keeping the stops and the pick.
+export function stopsOnly(plan: Plan): Plan {
+  return plan.generated?.length ? { ...plan, waypoints: userWaypoints(plan), generated: [] } : plan
+}
+
+// Start, stops and target: the points the route has to pass, in order.
+export function stopPath(plan: Plan): LatLon[] {
+  return planPath(stopsOnly(plan))
+}
+
+// Puts the stop into the leg between stops where it adds the least walking.
+// The edits below act on stops only and drop the old turn points.
+export function insertWaypoint(input: Plan, point: LatLon): Plan {
+  const plan = stopsOnly(input)
   const path = planPath(plan)
   if (!plan.start || !plan.target) return { ...plan, waypoints: [...plan.waypoints, point] }
   let best = 0
@@ -64,8 +94,9 @@ export function insertWaypoint(plan: Plan, point: LatLon): Plan {
   return { ...plan, waypoints }
 }
 
-// Moves one vertex of planPath(plan): 0 is the start, the last is the target.
-export function moveVertex(plan: Plan, index: number, point: LatLon): Plan {
+// Moves one vertex of stopPath(plan): 0 is the start, the last is the target.
+export function moveVertex(input: Plan, index: number, point: LatLon): Plan {
+  const plan = stopsOnly(input)
   const count = planPath(plan).length
   if (index === 0 && plan.start) return { ...plan, start: point, startName: null }
   if (index === count - 1 && plan.target) return { ...plan, target: point }
@@ -74,7 +105,9 @@ export function moveVertex(plan: Plan, index: number, point: LatLon): Plan {
   return { ...plan, waypoints }
 }
 
-export function removeWaypoint(plan: Plan, index: number): Plan {
+// Removes one stop, counted among the stops only.
+export function removeWaypoint(input: Plan, index: number): Plan {
+  const plan = stopsOnly(input)
   return { ...plan, waypoints: plan.waypoints.filter((_, i) => i !== index) }
 }
 

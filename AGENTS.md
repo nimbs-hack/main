@@ -83,7 +83,7 @@ The map is the product. Everything else sits around it, and floating pieces neve
 - A new panel needs a free zone. If there isn't one, make it on demand: a menu or popover that opens from an action and closes itself.
 - Information about one spot on the map goes in the right-click menu at the cursor, not a pinned card. The menu flips to stay inside the map and closes on Esc, a click outside, or any camera move.
 - A left click on the ground does nothing unless a placement mode or a map tool is on. Only one of them takes clicks at a time, so turning one on turns the other off. Each says what the next click does, and Esc always ends it.
-- Map tools (ruler, range rings, line of sight) draw on their own layer, keep their points while you switch between them, and are also offered from the right-click menu for the clicked spot. A tool result that could become a plan gets a button that does it, like "Use as route".
+- Map tools (ruler, range rings, line of sight) draw on their own layer, and keep their points while you switch between them. They start from the camera rail, not the right-click menu. A tool result that could become a plan gets a button that does it, like "Use as route".
 - Check layout at 1440 px wide. A narrow preview pane switches to the stacked phone layout, which hides desktop problems.
 
 ### Following known tools
@@ -93,15 +93,15 @@ Copy patterns people already know instead of inventing new ones. Copy the behavi
 - Settings work like a 3D printer slicer (Orca, CrealityPrint). See the next section.
 - The status bar works like Google Earth's. Left side: tile state only while loading or failed, then a "Data attribution" button that opens the credits. Right side: scale bar, camera height, cursor coordinates and elevation. Never show "loaded" or other steady-state text.
 - The layer switcher works like Google Maps'. One tile opens a row of layer tiles with real thumbnails. Full controls (opacity, legends, sources) sit behind More.
-- Route alternatives work like Google Maps directions. Every option is drawn dashed in its own color. Hovering a row or a line highlights it and shows a tooltip with name, distance and max slope. Clicking either picks it and makes it the plan. Editing the route by hand clears the pick.
+- Route alternatives work like Google Maps directions. Every option is drawn dashed in its own color. Hovering a row or a line highlights it and shows a tooltip with name, distance and max slope. Clicking either picks it and makes it the plan. Waypoints the user places are stops: every suggestion is routed through them leg by leg, and adding, moving or removing one reroutes the picked strategy. Only stops get numbered handles. The turn points a route adds are never drawn.
 - Route lines use deploy-v1's styles, kept as constants in `src/components/plan-overlay.ts`. Candidates are dashed 6 5 at 2.5 px between two thin, continuous dark rails, so the line edge is outlined end to end and the gaps between dashes stay clear. Dashes are measured in meters along the route, not in screen pixels, so they stay on the same ground as the camera moves. Every line drawn over imagery needs a dark casing or halo, or it vanishes on ground of its own color. The plan, which is the selected route, is a solid red 3.5 px line on a dark 6.5 px halo, with any stretch over the slope limit in orange on top. Start and target are square A and B pins with red and green borders.
-- The right-click menu works like Google Maps'. Coordinates at the top copy on click. It also shows the geologic unit and the nearest rover's weather for the spot. Map markers are MIL-STD-2525C symbols from deploy-v1, added from this menu. Right-click a marker to rename, re-symbol or delete it. Symbols are drawn monochrome, as 2525C allows, so frame shape shows affiliation and red stays the selection color.
+- The right-click menu works like Google Maps'. Coordinates at the top copy on click. It also shows the nearest rover's weather for the spot. Its only actions are start, target, waypoint and Add symbol. Map markers are MIL-STD-2525C symbols from deploy-v1, added from this menu. Right-click a marker to rename, re-symbol or delete it. Symbols are drawn monochrome, as 2525C allows, so frame shape shows affiliation and red stays the selection color.
 
 ### Settings panels
 
 - An icon rail picks one tab. Only that tab's settings show. Never render all settings as one long scrolling page.
 - Inside a tab, group rows under small headers, the way a slicer has "Layer height" and "Line width".
-- Rows are a label on the left and a value box on the right with the unit inside the box, dim and mono. Editable boxes look different from read-only ones.
+- Rows are a label on the left and a value on the right, with the unit after it, dim and mono. Only editable values get a box, with the unit inside it. Read-only values are bare text on the same column, so a box always means you can type there.
 - Show the main rows by default and the rest behind an Advanced switch. Tell the user how many rows are hidden.
 - Search looks across every tab and shows which tab each match lives in.
 - Hidden tabs can hide problems. Put a dot on the rail icon of any tab with a value near or over a limit.

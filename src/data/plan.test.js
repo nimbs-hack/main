@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { distance, resample } from './geo'
 import {
   DEFAULT_LIMITS, PRESETS, assess, formatDuration, insertWaypoint, legStats, moveVertex,
-  planPath, presetFor, removeWaypoint, walkSpeed, walkTime,
+  planPath, presetFor, removeWaypoint, stopPath, userWaypoints, walkSpeed, walkTime,
 } from './plan'
 
 // Flat ground along the equator, with an optional slope between two distances.
@@ -107,4 +107,16 @@ test('outside reasons merge, no-go first, and set the verdict', async () => {
   expect(merged.verdict).toBe('no-go')
   expect(merged.reasons.map((r) => r.text)).toEqual(['storm', 'route'])
   expect(withReasons(base, [])).toBe(base)
+})
+
+test('edits act on stops and drop the turn points of a picked route', () => {
+  const turn = [0.002, 0.03]
+  const plan = { start: [0, 0], target: [0, 0.1], waypoints: [turn, [0, 0.05], [0.002, 0.07]], generated: [turn, [0.002, 0.07]], route: 'fast' }
+  expect(userWaypoints(plan)).toEqual([[0, 0.05]])
+  expect(stopPath(plan)).toEqual([[0, 0], [0, 0.05], [0, 0.1]])
+  const added = insertWaypoint(plan, [0.001, 0.08])
+  expect(added.waypoints).toEqual([[0, 0.05], [0.001, 0.08]])
+  expect(added.route).toBe('fast')
+  expect(moveVertex(plan, 1, [1, 1]).waypoints).toEqual([[1, 1]])
+  expect(removeWaypoint(plan, 0).waypoints).toEqual([])
 })

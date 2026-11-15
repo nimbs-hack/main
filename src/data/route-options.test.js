@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { DEFAULT_LIMITS } from './plan'
 import {
-  areaStats, buildGrid, findPath, gridSlopes, minRequiredSlope, overlapRatio, routeOptions, sameReason, simplify,
+  areaStats, buildGrid, findPath, gridSlopes, joinLegs, minRequiredSlope, overlapRatio, routeOptions, sameReason, simplify,
 } from './route-options'
 
 const start = [0, 0]
@@ -102,4 +102,26 @@ test('a finer grid keeps its proportions and puts the ends on nodes', () => {
   expect(grid.rows).toBe(2 * 56 + 1)
   expect(grid.points[grid.start]).toEqual(start)
   expect(grid.points[grid.target][1]).toBeCloseTo(0.05, 6)
+})
+
+test('legs join through the stop into one route per strategy', () => {
+  const stop = [0.01, 0.03]
+  const legs = [[start, stop], [stop, target]].map(([a, b]) => {
+    const grid = buildGrid(a, b)
+    return routeOptions(grid, field(grid), DEFAULT_LIMITS)
+  })
+  const joined = joinLegs(legs, [stop])
+  expect(joined.status).toBe('ok')
+  const fast = joined.options[0]
+  expect(fast.waypoints).toEqual([...legs[0].options[0].waypoints, stop, ...legs[1].options[0].waypoints])
+  expect(fast.generated).not.toContainEqual(stop)
+  expect(fast.distance).toBeCloseTo(legs[0].options[0].distance + legs[1].options[0].distance, 6)
+  expect(fast.line[0]).toEqual(legs[0].options[0].line[0])
+  expect(fast.line.at(-1)).toEqual(legs[1].options[0].line.at(-1))
+})
+
+test('a blocked leg blocks the joined route and asks for the larger limit', () => {
+  const ok = { status: 'ok', options: [] }
+  expect(joinLegs([ok, { status: 'blocked', options: [], needs: 22 }, { status: 'blocked', options: [], needs: 27 }], [[0, 1], [0, 2]]))
+    .toEqual({ status: 'blocked', options: [], needs: 27 })
 })

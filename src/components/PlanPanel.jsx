@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { distance } from '../data/geo'
-import { PRESETS, formatDuration, presetFor } from '../data/plan'
+import { PRESETS, formatDuration, isGenerated, presetFor, userWaypoints } from '../data/plan'
 import { slopeLevel } from '../data/route-profile'
 import { SITES } from '../data/sites'
 import { formatLatLon } from '../format'
@@ -83,7 +83,7 @@ function NumberField({ field, value, base, presetName, onChange, label }) {
   }
   const presetValue = modified ? `${spec.toView(base)} ${spec.unit}` : null
   return (
-    <span className={`plan__box plan__box--edit${modified ? ' is-modified' : ''}`} title={modified ? `${presetName}: ${presetValue}` : undefined}>
+    <label className={`plan__box plan__box--edit${modified ? ' is-modified' : ''}`} title={modified ? `${presetName}: ${presetValue}` : undefined}>
       {modified && (
         <button
           type="button"
@@ -109,7 +109,7 @@ function NumberField({ field, value, base, presetName, onChange, label }) {
         onBlur={() => setDraft(null)}
       />
       <span className="plan__unit">{spec.unit}</span>
-    </span>
+    </label>
   )
 }
 
@@ -293,6 +293,11 @@ function Trend({ history }) {
   )
 }
 
+// Index among the stops of plan.waypoints[i], which is a stop.
+function stopIndex(plan, i) {
+  return userWaypoints({ ...plan, waypoints: plan.waypoints.slice(0, i) }).length
+}
+
 export default function PlanPanel({
   plan, limits, assessment, status, placing, dose, weather, space, when, terrainDetail,
   onWhen, onPlacing, onSite, onRemoveWaypoint, onLimits, onRetry, onWalk, onClear,
@@ -339,7 +344,7 @@ export default function PlanPanel({
     route: [
       { label: 'Waypoints', group: 'Points', basic: true, node: (
         <span className="plan__box plan__box--action">
-          <output>{plan.waypoints.length}</output>
+          <output>{userWaypoints(plan).length}</output>
           <button type="button" aria-pressed={placing === 'waypoint'} disabled={!ready} onClick={() => onPlacing(placing === 'waypoint' ? null : 'waypoint')}>
             {placing === 'waypoint' ? 'Done' : 'Add'}
           </button>
@@ -355,8 +360,8 @@ export default function PlanPanel({
         node: (
           <span className={`plan__box plan__box--leg is-${slopeLevel(leg.maxSlope, limits.slope)}`}>
             <output>{formatDistance(leg.length)} · {formatSlope(leg.maxSlope)}</output>
-            {i < plan.waypoints.length && (
-              <button type="button" onClick={() => onRemoveWaypoint(i)} aria-label={`Remove waypoint ${i + 1}`} title={`Remove waypoint ${i + 1}`}>×</button>
+            {i < plan.waypoints.length && !isGenerated(plan, plan.waypoints[i]) && (
+              <button type="button" onClick={() => onRemoveWaypoint(stopIndex(plan, i))} aria-label={`Remove stop ${stopIndex(plan, i) + 1}`} title={`Remove stop ${stopIndex(plan, i) + 1}`}>×</button>
             )}
           </span>
         ),
@@ -520,7 +525,6 @@ export default function PlanPanel({
                 {rows[active].filter((row) => !row.basic).length} more in Advanced
               </button>
             )}
-            <p className="plan__note">Limits are planning assumptions. No Mars suit limits are published.</p>
           </div>
         </section>
 

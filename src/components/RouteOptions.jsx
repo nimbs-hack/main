@@ -4,9 +4,10 @@ import { formatDistance, formatSlope } from './RouteProfile'
 import './route-options.css'
 
 /**
- * Suggested routes between start and target, pinned to the top left of the
- * map. Hovering a row brightens its dashed line on the map. Picking one
- * turns its turn points into the plan's waypoints. Times are one way.
+ * Suggested routes from start through the user's stops to the target,
+ * pinned to the top left of the map. Hovering a row brightens its dashed
+ * line on the map. Picking one adds its turn points to the plan between the
+ * stops. Times are one way.
  */
 export default function RouteOptions({ status, thermalPending, options, chosen, hover, limit, note, needs, onHover, onChoose, onRaise, onRetry }) {
   if (status === 'loading') return <p className="routes routes--note" role="status">Finding routes…</p>

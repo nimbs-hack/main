@@ -33,13 +33,12 @@ import { SAMPLED_RASTERS, SCIENCE_LAYERS, SCIENCE_RASTERS } from '../data/scienc
 import { addScienceOverlay } from '../data/science-overlay'
 import { distance, resample } from '../data/geo'
 import { buildProfile, slopeLevel, summarize } from '../data/route-profile'
-import { DEFAULT_LIMITS, EMPTY_PLAN, assess, withReasons, insertWaypoint, moveVertex, planPath, removeWaypoint } from '../data/plan'
+import { DEFAULT_LIMITS, EMPTY_PLAN, assess, withReasons, insertWaypoint, isGenerated, moveVertex, planPath, removeWaypoint, stopPath, stopsOnly } from '../data/plan'
 import { addPlanOverlay } from './plan-overlay'
-import { areaStats, buildGrid, routeOptions, sameReason } from '../data/route-options'
+import { areaStats, buildGrid, joinLegs, routeOptions, sameReason } from '../data/route-options'
 import RouteOptions from './RouteOptions'
 import { formatDistance } from './RouteProfile'
 import { STATIONS, fetchWeather, formatPressure, formatTemp, nearestStation, pressureAt } from '../data/weather'
-import { fetchUnit } from '../data/geology'
 import { coverage, detailAt, detailLabel, detailMeters, levelAt, levelForSpacing, outline, slopeBaseline } from '../data/terrain-detail'
 import { checkSpaceWeather, fetchSpaceWeather } from '../data/space-weather'
 import { TERRAIN_API_PATH } from '../data/terrain-source'
@@ -74,6 +73,19 @@ const DEFAULT_OVERLAYS = Object.fromEntries(SCIENCE_RASTERS.map((layer) => [laye
 // A new start this far from the old target starts a new plan.
 const NEW_PLAN_DISTANCE = 20_000
 const PLAN_KEY = 'nimbs.eva-plan'
+
+// Every leg's samples in one field, for the note on why routes agree.
+function joinFields(legs) {
+  return {
+    elevation: legs.flatMap((leg) => leg.field.elevation),
+    thermal: legs.flatMap((leg) => leg.field.thermal),
+    slope: legs.flatMap((leg) => leg.field.slope),
+  }
+}
+
+function samePoints(a, b) {
+  return a.length === b.length && a.every((point, i) => point[0] === b[i][0] && point[1] === b[i][1])
+}
 
 function loadPlan() {
   try {
@@ -435,8 +447,6 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   const [routeHover, setRouteHover] = useState(null)
   // Tooltip for the suggested route line under the pointer.
   const [lineTip, setLineTip] = useState(null)
-  // The suggestion last applied, and the waypoints it set.
-  const [chosenRoute, setChosenRoute] = useState(null)
   const [layersOpen, setLayersOpen] = useState(false)
   // Station reports by id: a report, 'error', or missing while loading.
   const [weather, setWeather] = useState({})
@@ -459,7 +469,6 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   // Map tool in use: 'ruler', 'range', 'sight' or null. It takes map clicks
   // the way placement does, so turning one on turns the other off.
   const [tool, setToolState] = useState(null)
-  const [toolSeed, setToolSeed] = useState(null)
   const toolClickRef = useRef(null)
   const setPlacing = useCallback((mode) => {
     setPlacingState(mode)
@@ -750,49 +759,76 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     return { finest: Math.min(...details), coarsest: Math.max(...details), coarse }
   }, [profile.samples, routeAssessment])
 
-  // Sample the grid once per start and target. Limits only rerun the search.
-  const routeStart = plan.start
-  const routeTarget = plan.target
+  // Sample one grid per leg between stops: start, the user's waypoints, then
+  // the target. Limits only rerun the search.
+  const stopsKey = JSON.stringify(plan.start && plan.target ? stopPath(plan) : [])
   useEffect(() => {
-    if (!terrainProvider || !routeStart || !routeTarget) {
+    const stops = JSON.parse(stopsKey)
+    if (!terrainProvider || stops.length < 2) {
       setRouteField({ status: 'idle' })
       return
     }
     const controller = new AbortController()
     setRouteField({ status: 'loading' })
-    // On fine terrain the grid gets finer too, up to 160 cells between start
-    // and target, so routes can thread between scarps the terrain shows.
-    const length = distance(routeStart, routeTarget)
-    const finest = Math.max(9, ...[routeStart, routeTarget, resample([routeStart, routeTarget], 3)[1].point].map((point) => levelAt(terrainProvider, point) ?? 9))
-    const along = Math.min(160, Math.max(40, Math.round(length / Math.max(4 * detailMeters(finest), length / 160))))
-    const grid = buildGrid(routeStart, routeTarget, along)
-    const level = levelForSpacing(grid.cell, finest)
-    // Slope probes cost five samples a node. On a dense grid the search
-    // already reads slope between nodes, so skip them.
-    const probeSlopes = grid.points.length <= 6000
+    const legs = stops.slice(1).map(() => null)
+    let failed = false
+    const publish = () => {
+      if (controller.signal.aborted) return
+      if (failed) return setRouteField({ status: 'error' })
+      if (legs.some((leg) => !leg)) return
+      setRouteField({
+        status: 'ready',
+        key: stopsKey,
+        legs: [...legs],
+        thermalPending: legs.some((leg) => leg.thermalPending),
+        slopesPending: legs.some((leg) => leg.slopesPending),
+      })
+    }
     const night = SAMPLED_RASTERS.find((layer) => layer.id === 'themis-night')
-    loadRouteField(grid, {
-      elevations: () => sampleElevations(terrainProvider, grid.points, level),
-      surface: () => (probeSlopes ? sampleSurface(terrainProvider, grid.points, level) : Promise.resolve([])),
-      thermal: () => night ? sampleRaster(night, grid.points) : Promise.resolve(grid.points.map(() => null)),
-    }, (result) => {
-      const known = result.field.elevation.some((elevation) => elevation !== null)
-      setRouteField(known ? { status: 'ready', ...result } : { status: 'error' })
-    }, controller.signal).catch(() => {
-      if (!controller.signal.aborted) setRouteField({ status: 'error' })
+    stops.slice(1).forEach((target, i) => {
+      const start = stops[i]
+      // On fine terrain the grid gets finer too, up to 160 cells between the
+      // leg's ends, so routes can thread between scarps the terrain shows.
+      const length = distance(start, target)
+      const finest = Math.max(9, ...[start, target, resample([start, target], 3)[1].point].map((point) => levelAt(terrainProvider, point) ?? 9))
+      const along = Math.min(160, Math.max(40, Math.round(length / Math.max(4 * detailMeters(finest), length / 160))))
+      const grid = buildGrid(start, target, along)
+      const level = levelForSpacing(grid.cell, finest)
+      // Slope probes cost five samples a node. On a dense grid the search
+      // already reads slope between nodes, so skip them.
+      const probeSlopes = grid.points.length <= 6000
+      loadRouteField(grid, {
+        elevations: () => sampleElevations(terrainProvider, grid.points, level),
+        surface: () => (probeSlopes ? sampleSurface(terrainProvider, grid.points, level) : Promise.resolve([])),
+        thermal: () => night ? sampleRaster(night, grid.points) : Promise.resolve(grid.points.map(() => null)),
+      }, (result) => {
+        if (result.field.elevation.some((elevation) => elevation !== null)) legs[i] = result
+        else failed = true
+        publish()
+      }, controller.signal).catch(() => {
+        failed = true
+        publish()
+      })
     })
     return () => controller.abort()
-  }, [terrainProvider, routeStart, routeTarget, routeAttempt])
+  }, [terrainProvider, stopsKey, routeAttempt])
 
-  const routePlan = useMemo(
-    () => (routeField.status === 'ready' ? routeOptions(routeField.grid, routeField.field, limits, routeField.thermalPending) : null),
-    [routeField, limits],
-  )
+  const routePlan = useMemo(() => {
+    // Legs for older stops would join wrong, so wait for the new ones.
+    if (routeField.status !== 'ready' || routeField.key !== stopsKey) return null
+    const legs = routeField.legs.map((leg) => routeOptions(leg.grid, leg.field, limits, leg.thermalPending))
+    return joinLegs(legs, JSON.parse(stopsKey).slice(1, -1))
+  }, [routeField, limits, stopsKey])
   const options = routePlan?.options ?? []
   // Why every strategy found the same path, shown when they all agree.
   const allSame = options.length > 1 && options.slice(1).every((option) => option.sameAs)
-  const sameNote = allSame && !routeField.thermalPending && !routeField.slopesPending ? sameReason(areaStats(routeField.field)) ?? 'All four strategies agree here.' : null
-  const chosenId = chosenRoute && chosenRoute.waypoints === plan.waypoints ? chosenRoute.id : null
+  const sameNote = allSame && !routeField.thermalPending && !routeField.slopesPending ? sameReason(areaStats(joinFields(routeField.legs))) ?? 'All four strategies agree here.' : null
+  // The route on the map is the picked one once its waypoints match. Plans
+  // saved before picks were stored are matched by value alone.
+  const matches = (option) => samePoints(option.waypoints, plan.waypoints)
+  const chosenId = plan.route
+    ? (options.some((option) => option.id === plan.route && matches(option)) ? plan.route : null)
+    : options.find((option) => option.generated.length > 0 && matches(option))?.id ?? null
   onLineRef.current = (hit) => {
     if (hit?.pick) {
       const option = options.find((o) => o.id === hit.id)
@@ -804,9 +840,16 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     setRouteHover((current) => (hit ? hit.id : current === lineTip?.id ? null : current))
   }
   const chooseRoute = (option) => {
-    setPlan((current) => ({ ...current, waypoints: option.waypoints }))
-    setChosenRoute({ id: option.id, waypoints: option.waypoints })
+    setPlan((current) => ({ ...current, waypoints: option.waypoints, generated: option.generated, route: option.id }))
   }
+  // The picked route follows the stops and limits. When it is found again
+  // through new stops, or under new limits, its new turn points replace the
+  // old ones. A plan matched by value alone gets its pick stored.
+  const repick = options.find((option) => option.id === (plan.route ?? chosenId))
+  const stale = repick && (!plan.route || !matches(repick)) ? repick : null
+  useEffect(() => {
+    if (stale) chooseRoute(stale)
+  }, [stale])
 
   useEffect(() => {
     planOverlay.current?.setAlternatives(suit ? [] : options
@@ -814,12 +857,15 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       .map((option) => ({ id: option.id, points: option.line, color: cssValue(`--color-route-${option.id}`), focus: option.id === routeHover })))
   }, [viewer, options, chosenId, routeHover, suit])
 
-  // Handles and the route line on the map.
+  // Handles and the route line on the map. Turn points from a picked
+  // suggestion get no handle. The user's own waypoints are numbered 1, 2, …
   useEffect(() => {
+    let number = 0
     const vertices = planPath(plan).map((point, i, all) => {
       const kind = i === 0 && plan.start ? 'start' : i === all.length - 1 && plan.target ? 'target' : 'waypoint'
-      return { point, kind, label: kind === 'start' ? 'A' : kind === 'target' ? 'B' : String(i) }
-    })
+      if (kind === 'waypoint' && isGenerated(plan, point)) return null
+      return { point, kind, label: kind === 'start' ? 'A' : kind === 'target' ? 'B' : String(++number) }
+    }).filter(Boolean)
     const route = profile.status === 'ready'
       ? profile.samples.map((s) => ({ point: s.point, level: slopeLevel(s.slope, limits.slope) }))
       : null
@@ -830,7 +876,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     setPlan((current) => {
       const far = current.target && distance(current.target, point) > NEW_PLAN_DISTANCE
       // A new start elsewhere drops the route but keeps the planned time.
-      return far ? { ...EMPTY_PLAN, when: current.when, start: point, startName } : { ...current, start: point, startName }
+      return far ? { ...EMPTY_PLAN, when: current.when, start: point, startName } : { ...stopsOnly(current), start: point, startName }
     })
     setPlacing((current) => (current === 'start' ? null : current))
   }
@@ -841,7 +887,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       if (!plan.target || distance(plan.target, point) > NEW_PLAN_DISTANCE) setPlacing('target')
     },
     target: (point) => {
-      setPlan((current) => ({ ...current, target: point }))
+      setPlan((current) => ({ ...stopsOnly(current), target: point }))
       setPlacing(null)
     },
     waypoint: (point) => setPlan((current) => insertWaypoint(current, point)),
@@ -859,6 +905,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     setProbe({ ...opened, point: placed?.point ?? opened.point, markerId: placed?.id ?? null, status: 'loading' })
   }
   const closeProbe = useCallback(() => setProbe(null), [])
+  // Handles are the start, the stops and the target, as moveVertex counts them.
   onMoveVertexRef.current = (index, point) => setPlan((current) => moveVertex(current, index, point))
 
   // A site sets the start: the rover's last position, or the landing point.
@@ -879,15 +926,12 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [placing])
 
-  // Point readout: terrain plus every layer at one spot.
+  // Point readout: terrain at one spot.
   const probePoint = probe?.point
   useEffect(() => {
     if (!terrainProvider || !probePoint) return
     let cancelled = false
-    Promise.all([
-      sampleSurface(terrainProvider, [probePoint], 16),
-      ...SAMPLED_RASTERS.map((source) => sampleRaster(source, [probePoint])),
-    ]).then(([[surface], ...values]) => {
+    sampleSurface(terrainProvider, [probePoint], 16).then(([surface]) => {
       if (cancelled) return
       setProbe((current) => current?.point !== probePoint ? current : {
         ...current,
@@ -895,26 +939,12 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
         status: surface.elevation === null ? 'error' : 'ready',
         elevation: surface.elevation,
         slope: surface.slope,
-        layers: Object.fromEntries(SAMPLED_RASTERS.map((source, i) => [source.id, values[i][0]])),
       })
     }, () => {
       if (!cancelled) setProbe((current) => (current?.point === probePoint ? { ...current, status: 'error' } : current))
     })
     return () => { cancelled = true }
   }, [terrainProvider, probePoint])
-
-  // The geologic unit under the probe, fetched next to the terrain samples.
-  useEffect(() => {
-    if (!probePoint) return
-    const controller = new AbortController()
-    fetchUnit(probePoint, controller.signal).then(
-      (unit) => setProbe((current) => (current?.point === probePoint ? { ...current, geology: unit ?? 'none' } : current)),
-      (error) => {
-        if (error.name !== 'AbortError') setProbe((current) => (current?.point === probePoint ? { ...current, geology: 'error' } : current))
-      },
-    )
-    return () => controller.abort()
-  }, [probePoint])
 
   // Rover weather, from the Go server's cached copy of the NASA feeds.
   useEffect(() => {
@@ -1017,9 +1047,6 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     { label: 'Start here', run: () => actions.start(probePoint) },
     plan.start && { label: 'Target here', run: () => actions.target(probePoint) },
     plan.start && plan.target && { label: 'Add waypoint', run: () => actions.waypoint(probePoint) },
-    { group: 'tools', label: 'Measure from here', run: () => { setTool('ruler'); setToolSeed({ tool: 'ruler', point: probePoint }) } },
-    { group: 'tools', label: 'Range rings here', run: () => { setTool('range'); setToolSeed({ tool: 'range', point: probePoint }) } },
-    { group: 'tools', label: 'Line of sight from here', run: () => { setTool('sight'); setToolSeed({ tool: 'sight', point: probePoint }) } },
   ].filter(Boolean).map((action) => ({ ...action, run: () => { action.run(); setProbe(null) } })) : []
 
   // One marker: the suit position, else the profile hover, else the probe.
@@ -1062,7 +1089,9 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     measurement: RADIATION.measurements[0],
   }
 
-  const marks = assessment?.legs.map((leg) => leg.to)
+  // Profile marks at the user's waypoints and the target, not at turn points.
+  const markPath = planPath(plan)
+  const marks = assessment?.legs.filter((_, i) => !markPath[i + 1] || i + 1 === markPath.length - 1 || !isGenerated(plan, markPath[i + 1])).map((leg) => leg.to)
   const nextRelief = RELIEF_STEPS[(RELIEF_STEPS.indexOf(relief) + 1) % RELIEF_STEPS.length]
 
   return (
@@ -1151,7 +1180,6 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
             terrainProvider={terrainProvider}
             tool={suit ? null : tool}
             onTool={setTool}
-            seed={toolSeed}
             limits={limits}
             planStart={plan.start}
             clickRef={toolClickRef}
@@ -1212,8 +1240,6 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
           {probe && !suit && (
             <PointReadout
               probe={probe}
-              rasters={SAMPLED_RASTERS}
-              observations={OBSERVATIONS}
               limit={limits.slope}
               actions={probeActions}
               weather={probeWeather}
