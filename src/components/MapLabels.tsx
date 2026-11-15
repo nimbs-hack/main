@@ -1,0 +1,259 @@
+import { useEffect, useRef } from 'react'
+import { BoundingSphere, Cartesian2, Cartesian3, Cartographic, EllipsoidalOccluder, HeadingPitchRange, type Viewer } from 'cesium'
+import type { LatLon } from '../data/geo'
+import { DATUM_OFFSET } from '../data/terrain.js'
+import { symbolImage } from '../data/markers'
+import { clusterAnchors, leaderPath, placeMapLabels, type LabelAnchor, type Offset, type PlacedLabel, type Rect } from './map-label-layout'
+import './map-labels.css'
+
+export type MapLabel = {
+  id: string
+  point: LatLon
+  text: string
+  symbol?: string
+  selected?: boolean
+  onSelect?: (screen: { x: number; y: number }) => void
+  onContext?: (screen: { x: number; y: number }) => void
+}
+
+// Points closer than this on the ground cannot be split by zooming, so a
+// click on their cluster lists them instead.
+const COLOCATED_METERS = 30
+const SVG = 'http://www.w3.org/2000/svg'
+
+type Leader = { group: SVGGElement; paths: SVGPathElement[] }
+
+function leader(svg: SVGSVGElement): Leader {
+  const group = document.createElementNS(SVG, 'g') as SVGGElement
+  const paths = ['map-label__casing', 'map-label__leader'].map((name) => {
+    const path = document.createElementNS(SVG, 'path') as SVGPathElement
+    path.setAttribute('class', name)
+    group.appendChild(path)
+    return path
+  })
+  svg.appendChild(group)
+  return { group, paths }
+}
+
+function drawLeader(line: Leader, label: PlacedLabel) {
+  const [start, elbow, end] = leaderPath(label, label.box, label.side)
+  const d = `M${start.x},${start.y} L${elbow.x},${elbow.y} L${end.x},${end.y}`
+  line.paths.forEach((path) => path.setAttribute('d', d))
+  line.group.removeAttribute('display')
+}
+
+// Hovering or focusing a row lifts its leader above the others so it can be traced.
+function linkHover(button: HTMLButtonElement, line: Leader, svg: SVGSVGElement) {
+  const on = () => { line.group.classList.add('is-active'); svg.appendChild(line.group) }
+  const off = () => line.group.classList.remove('is-active')
+  button.addEventListener('pointerenter', on)
+  button.addEventListener('focus', on)
+  button.addEventListener('pointerleave', off)
+  button.addEventListener('blur', off)
+}
+
+function countText(rows: { item: MapLabel }[]) {
+  const symbols = rows.filter((row) => row.item.symbol).length
+  const sites = rows.length - symbols
+  return [sites && `${sites} ${sites === 1 ? 'site' : 'sites'}`, symbols && `${symbols} ${symbols === 1 ? 'symbol' : 'symbols'}`]
+    .filter(Boolean).join(' · ')
+}
+
+// Both maps use the same projected labels. Cesium keeps the ground pins;
+// HTML rows make the names readable, clickable and keyboard accessible.
+export default function MapLabels({ viewer, items }: { viewer: Viewer | null; items: MapLabel[] }) {
+  const root = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const element = root.current
+    if (!element || !viewer || viewer.isDestroyed()) return
+    const stage = element.parentElement!
+    const svg = document.createElementNS(SVG, 'svg') as SVGSVGElement
+    svg.setAttribute('aria-hidden', 'true')
+    element.appendChild(svg)
+    const tokens = getComputedStyle(document.documentElement)
+    const text = tokens.getPropertyValue('--color-text').trim()
+    const background = tokens.getPropertyValue('--color-bg').trim()
+    const rows = items.map((item) => {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = `map-label${item.selected ? ' is-selected' : ''}`
+      button.title = item.text
+      button.setAttribute('aria-label', item.text)
+      if (item.selected !== undefined) button.setAttribute('aria-pressed', String(item.selected))
+      if (item.symbol) {
+        const icon = document.createElement('img')
+        icon.src = symbolImage(item.symbol, text, background)
+        icon.alt = ''
+        button.appendChild(icon)
+      }
+      const name = document.createElement('span')
+      name.textContent = item.text
+      button.appendChild(name)
+      element.appendChild(button)
+      const line = leader(svg)
+      linkHover(button, line, svg)
+      const location = Cartographic.fromDegrees(item.point[1], item.point[0], DATUM_OFFSET)
+      const row = { item, button, line, location, terrainHeight: DATUM_OFFSET, width: Math.min(320, button.scrollWidth + 8), position: new Cartesian3(), screen: { x: 0, y: 0 } }
+      button.onclick = () => item.onSelect?.(row.screen)
+      button.oncontextmenu = (event) => {
+        if (!item.onContext) return
+        event.preventDefault()
+        item.onContext(row.screen)
+      }
+      return row
+    })
+    const byId = new Map(rows.map((row) => [row.item.id, row]))
+
+    // Cluster rows are made on demand and kept by their member list, so a
+    // cluster that survives a camera move keeps its element and focus.
+    type Cluster = { button: HTMLButtonElement; line: Leader; ring: SVGCircleElement }
+    const clusters = new Map<string, Cluster>()
+    const expanded = new Set<string>()
+    // Last frame's result, so labels and clusters hold still between frames.
+    let offsets = new Map<string, Offset>()
+    let memberOf = new Map<string, string>()
+    const openCluster = (members: string[]) => {
+      const points = members.map((id) => byId.get(id)!.position)
+      const sphere = BoundingSphere.fromPoints(points)
+      if (sphere.radius < COLOCATED_METERS) {
+        for (const id of members) expanded.add(id)
+        viewer.scene.requestRender()
+        return
+      }
+      viewer.camera.flyToBoundingSphere(sphere, {
+        offset: new HeadingPitchRange(viewer.camera.heading, viewer.camera.pitch, Math.max(sphere.radius * 3, 600)),
+      })
+    }
+    const cluster = (anchor: LabelAnchor): Cluster => {
+      const existing = clusters.get(anchor.id)
+      if (existing) return existing
+      const members = anchor.members!.map((id) => byId.get(id)!)
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'map-label map-label--cluster'
+      const summary = countText(members)
+      button.title = `${summary}. Click to zoom in.\n${members.map((row) => row.item.text).join('\n')}`
+      button.setAttribute('aria-label', `Zoom to ${summary}`)
+      const count = document.createElement('span')
+      count.textContent = summary
+      const plus = document.createElement('b')
+      plus.textContent = '+'
+      button.append(count, plus)
+      element.appendChild(button)
+      const line = leader(svg)
+      const ring = document.createElementNS(SVG, 'circle') as SVGCircleElement
+      ring.setAttribute('class', 'map-label__ring')
+      line.group.prepend(ring)
+      linkHover(button, line, svg)
+      button.onclick = () => openCluster(anchor.members!)
+      const made = { button, line, ring }
+      clusters.set(anchor.id, made)
+      return made
+    }
+    // Width only depends on the summary text, so measure each summary once.
+    const widths = new Map<string, number>()
+    const clusterWidth = (group: LabelAnchor[]) => {
+      const summary = countText(group.map((a) => byId.get(a.id)!))
+      let width = widths.get(summary)
+      if (width === undefined) {
+        const probe = document.createElement('button')
+        probe.className = 'map-label map-label--cluster'
+        const label = document.createElement('span')
+        label.textContent = summary
+        const plus = document.createElement('b')
+        plus.textContent = '+'
+        probe.append(label, plus)
+        element.appendChild(probe)
+        width = Math.min(320, probe.scrollWidth + 8)
+        probe.remove()
+        widths.set(summary, width)
+      }
+      return width
+    }
+
+    const occluder = new EllipsoidalOccluder(viewer.scene.ellipsoid, viewer.camera.positionWC)
+    const projected = new Cartesian2()
+    let heightsDirty = true
+    let lastHeights = -Infinity
+    const dirty = () => { heightsDirty = true; viewer.scene.requestRender() }
+    const removeTiles = viewer.scene.globe.tileLoadProgressEvent.addEventListener(dirty)
+    const removeMove = viewer.camera.moveEnd.addEventListener(dirty)
+    // A listed spot folds back into its cluster on the next camera move.
+    const removeMoveStart = viewer.camera.moveStart.addEventListener(() => expanded.clear())
+    const resize = new ResizeObserver(dirty)
+    resize.observe(stage)
+    const draw = () => {
+      const now = performance.now()
+      const width = stage.clientWidth
+      const height = stage.clientHeight
+      if (!width || !height) return
+      const stageBox = stage.getBoundingClientRect()
+      const obstacles: Rect[] = []
+      for (const node of stage.querySelectorAll('.nav, .routes, .profile, .readout, .switcher, .pointmenu, .tools')) {
+        const box = node.getBoundingClientRect()
+        if (box.width && box.height) obstacles.push({ x: box.left - stageBox.left, y: box.top - stageBox.top, width: box.width, height: box.height })
+      }
+      occluder.cameraPosition = viewer.camera.positionWC
+      const refresh = heightsDirty || now - lastHeights > 1000
+      if (refresh) { lastHeights = now; heightsDirty = false }
+      const anchors: LabelAnchor[] = []
+      for (const row of rows) {
+        if (refresh) row.terrainHeight = viewer.scene.globe.getHeight(row.location) ?? DATUM_OFFSET
+        const relative = viewer.scene.verticalExaggerationRelativeHeight
+        row.location.height = relative + (row.terrainHeight - relative) * viewer.scene.verticalExaggeration
+        viewer.scene.ellipsoid.cartographicToCartesian(row.location, row.position)
+        const at = occluder.isPointVisible(row.position) && viewer.scene.cartesianToCanvasCoordinates(row.position, projected)
+        if (!at || at.x < 0 || at.y < 0 || at.x > width || at.y > height) continue
+        row.screen = { x: at.x, y: at.y }
+        anchors.push({ id: row.item.id, x: at.x, y: at.y, width: row.width, selected: row.item.selected })
+      }
+      const grouped = clusterAnchors(anchors, clusterWidth, expanded, memberOf)
+      const placed = placeMapLabels(grouped, width, height, obstacles, offsets)
+      offsets = new Map(placed.map((label) => [label.id, label.offset]))
+      memberOf = new Map(grouped.flatMap((a) => (a.members ?? []).map((id) => [id, a.id] as const)))
+      const positions = new Map(placed.map((label) => [label.id, label]))
+      for (const row of rows) {
+        const label = positions.get(row.item.id)
+        row.button.hidden = !label
+        if (label) drawLeader(row.line, label)
+        else row.line.group.setAttribute('display', 'none')
+      }
+      const live = new Set<string>()
+      for (const label of placed) {
+        if (!label.members) continue
+        live.add(label.id)
+        const made = cluster(label)
+        made.button.hidden = false
+        made.button.style.transform = `translate(${label.box.x}px, ${label.box.y}px)`
+        made.button.style.width = `${label.box.width}px`
+        made.ring.setAttribute('cx', String(label.x))
+        made.ring.setAttribute('cy', String(label.y))
+        made.ring.setAttribute('r', String(label.radius ?? 0))
+        drawLeader(made.line, label)
+      }
+      for (const [id, made] of clusters) {
+        if (live.has(id)) continue
+        made.button.remove()
+        made.line.group.remove()
+        clusters.delete(id)
+      }
+      for (const label of placed) {
+        if (label.members) continue
+        const row = byId.get(label.id)!
+        row.button.style.transform = `translate(${label.box.x}px, ${label.box.y}px)`
+        row.button.style.width = `${label.box.width}px`
+      }
+    }
+    const removeRender = viewer.scene.postRender.addEventListener(draw)
+    viewer.scene.requestRender()
+    return () => {
+      resize.disconnect()
+      removeTiles()
+      removeMove()
+      removeMoveStart()
+      removeRender()
+      element.replaceChildren()
+    }
+  }, [viewer, items])
+  return <div className="map-labels" ref={root} aria-label="Map locations" />
+}

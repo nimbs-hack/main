@@ -18,7 +18,6 @@ import {
   ScreenSpaceEventType,
   Transforms,
 } from 'cesium'
-import { CTX_METERS_PER_PIXEL } from '../data/ctx'
 
 // Highest terrain in Trek's heights (Olympus Mons, about 29.4 km above the
 // sphere), with headroom. Cesium only checks for terrain collisions below
@@ -27,11 +26,9 @@ import { CTX_METERS_PER_PIXEL } from '../data/ctx'
 const COLLISION_CEILING = 45_000
 // Below this height Cesium pivots on the terrain instead of the bare sphere.
 const TERRAIN_PICK_CEILING = 200_000
-// Limit magnification to two screen pixels per source pixel. At 100 m above
-// the surface, CTX would fill the viewport with only a few dozen pixels.
-export function imageryZoomLimit(viewportHeight, verticalFov) {
-  return Math.max(40, CTX_METERS_PER_PIXEL * viewportHeight / (4 * Math.tan(verticalFov / 2)))
-}
+// Close inspection is useful for separating nearby plan points even when
+// imagery is coarse. Zoom does not increase the source's 5 m resolution.
+export const MIN_GROUND_CLEARANCE = 40
 // Steepest tilt, measured from straight down. 90° would be the horizon.
 const MAX_TILT = CesiumMath.toRadians(80)
 // Like Google Earth, allowed tilt shrinks with altitude so Mars stays under
@@ -59,12 +56,7 @@ export function setupControls(viewer) {
   const controls = scene.screenSpaceCameraController
   controls.minimumCollisionTerrainHeight = COLLISION_CEILING
   controls.minimumPickingTerrainHeight = TERRAIN_PICK_CEILING
-  const updateZoomLimit = () => {
-    controls.minimumZoomDistance = imageryZoomLimit(scene.canvas.clientHeight, viewer.camera.frustum.fovy)
-  }
-  updateZoomLimit()
-  const resizeObserver = new ResizeObserver(updateZoomLimit)
-  resizeObserver.observe(scene.canvas)
+  controls.minimumZoomDistance = MIN_GROUND_CLEARANCE
   controls.maximumZoomDistance = scene.ellipsoid.maximumRadius * 4
   const removeTiltLimit = scene.preUpdate.addEventListener(() => limitTilt(scene))
   // Free look turns the camera in place and loses the ground. Google's
@@ -83,11 +75,11 @@ export function setupControls(viewer) {
   const handler = viewer.screenSpaceEventHandler
   handler.removeInputAction(ScreenSpaceEventType.LEFT_DOUBLE_CLICK)
   handler.setInputAction(({ position }) => {
+    if (!controls.enableInputs) return
     const target = pickGround(viewer, position)
     if (target) moveToward(viewer, target, 0.5)
   }, ScreenSpaceEventType.LEFT_DOUBLE_CLICK)
   return () => {
-    resizeObserver.disconnect()
     removeTiltLimit()
   }
 }
@@ -103,6 +95,8 @@ const limitDirection = new Cartesian3()
 // looking past the limb.
 function limitTilt(scene) {
   const { camera, ellipsoid } = scene
+  // Ground-level navigation owns the camera while map inputs are suspended.
+  if (!scene.screenSpaceCameraController.enableInputs) return
   if (!Matrix4.equals(camera.transform, Matrix4.IDENTITY)) return
   const limit = tiltLimit(camera.positionCartographic.height)
   scene.screenSpaceCameraController.maximumTiltAngle = limit

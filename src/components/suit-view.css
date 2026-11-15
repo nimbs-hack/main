@@ -6,6 +6,9 @@
 .hud--suit .pointmenu,
 .hud--suit .profile { display: none !important; }
 
+/* The layer switcher stays, lifted clear of the controls along the bottom. */
+.hud--suit .switcher { bottom: calc(30px + var(--button-height) + var(--button-gap)); }
+
 .suit { position: absolute; inset: 30px; pointer-events: none; font-family: var(--font-mono); }
 .suit__block {
   position: absolute;
@@ -22,7 +25,7 @@
 .suit__block--slope.is-caution { border-color: var(--color-caution); }
 .suit__block--slope.is-hazard { border-color: var(--color-hazard); }
 .suit__block--env { right: 0; text-align: right; }
-.suit__label { color: var(--color-text-dim); font-size: var(--text-label); text-transform: uppercase; letter-spacing: var(--tracking-label); }
+.suit__label { color: var(--color-text-dim); font-size: var(--text-label); }
 .suit__block--env .suit__label:not(:first-child) { margin-top: var(--space-2); }
 .suit__value { font-size: 48px; line-height: 1.05; font-variant-numeric: tabular-nums; }
 .suit__value--small { font-size: var(--text-readout); }
@@ -52,6 +55,7 @@
   font: 700 var(--text-button) var(--font-mono);
 }
 .suit__controls button:hover { border-color: var(--color-text-muted); }
+.suit__controls .suit__play[aria-pressed='true'] { border-color: var(--color-text); }
 .suit__controls .suit__exit { background: var(--gradient-accent); border-color: transparent; clip-path: polygon(0 0, 100% 0, 100% calc(100% - var(--chamfer)), calc(100% - var(--chamfer)) 100%, 0 100%); }
 .suit__track {
   flex: 1;
@@ -66,6 +70,8 @@
 .suit__track input { width: 100%; height: 24px; margin: 0; accent-color: var(--color-accent); cursor: pointer; }
 
 @media (max-width: 700px) {
+  /* The controls wrap onto several rows here and leave the switcher no room. */
+  .hud--suit .switcher { display: none; }
   .suit { inset: 16px; }
   .suit__block { position: static; translate: none; text-align: left !important; }
   .suit { display: flex; flex-direction: column; gap: var(--space-2); }

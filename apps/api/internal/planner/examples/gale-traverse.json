@@ -1,0 +1,13 @@
+{
+  "name": "GALE-T1",
+  "type": "custom",
+  "marginPercent": 40,
+  "crew": [
+    { "name": "NAKAMURA", "sex": "female", "age": 35, "massKg": 58.2, "heightCm": 162, "role": "scientist" },
+    { "name": "OKAFOR", "sex": "male", "age": 44, "massKg": 91.3, "heightCm": 188, "role": "flight-engineer", "activity": "very-active" }
+  ],
+  "phases": [
+    { "kind": "rover", "days": 10, "evaHoursPerWeek": 28, "basePowerW": 1500 },
+    { "kind": "custom", "days": 2, "hygieneWaterKg": 0.2, "crewPowerW": 400 }
+  ]
+}

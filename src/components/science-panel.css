@@ -35,8 +35,6 @@
   border: 1px solid var(--color-line-strong);
   background: var(--color-surface);
   font-family: var(--font-mono) !important;
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
   pointer-events: auto;
 }
 .layers.is-open .layers__toggle { align-self: stretch; justify-content: space-between; border-bottom-color: var(--color-line); }
@@ -63,8 +61,6 @@
   border: 1px solid var(--color-line);
   background: var(--color-surface-raised);
   font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
 }
 .layers__bar button:hover { border-color: var(--color-line-strong); }
 
@@ -75,11 +71,9 @@
   align-items: baseline;
   padding: var(--space-3) var(--space-4) var(--space-2);
   font: 600 var(--text-label)/1.4 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
   color: var(--color-text);
 }
-.layers__group h2 span { color: var(--color-text-dim); font-weight: 400; letter-spacing: 0; text-transform: none; font-family: var(--font-sans); }
+.layers__group h2 span { color: var(--color-text-dim); font-weight: 400; text-transform: none; font-family: var(--font-sans); }
 
 .layers__list { list-style: none; }
 .layers__row { border-left: 2px solid transparent; }
@@ -126,7 +120,7 @@
 .layers__ramp { height: 6px; border: 1px solid var(--color-line-strong); }
 .layers__scale { display: flex; justify-content: space-between; gap: var(--space-3); margin-top: var(--space-1); color: var(--color-text-muted); font-family: var(--font-mono); }
 .layers__opacity { display: grid; grid-template-columns: auto minmax(0, 1fr) 4ch; align-items: center; gap: var(--space-3); }
-.layers__opacity label { color: var(--color-text-dim); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: var(--tracking-label); }
+.layers__opacity label { color: var(--color-text-dim); font-family: var(--font-mono); }
 .layers__opacity output { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
 .layers__opacity input { width: 100%; height: 32px; margin: 0; appearance: none; background: transparent; cursor: pointer; }
 .layers__opacity input::-webkit-slider-runnable-track { height: 3px; background: linear-gradient(to right, var(--color-accent) var(--fill), var(--color-line-strong) var(--fill)); }
@@ -140,11 +134,11 @@
 .layers__details p { margin-bottom: var(--space-2); line-height: 1.5; }
 .layers__details dl { display: grid; gap: var(--space-1); }
 .layers__details dl > div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: var(--space-2); }
-.layers__details dt { color: var(--color-text-dim); font-family: var(--font-mono); text-transform: uppercase; }
+.layers__details dt { color: var(--color-text-dim); font-family: var(--font-mono); }
 .layers__details dd { color: var(--color-text); overflow-wrap: anywhere; line-height: 1.45; }
 
 .layers__base { padding: var(--space-2) var(--space-4) var(--space-3); color: var(--color-text-muted); font-family: var(--font-mono); }
-.layers__base span { color: var(--color-text-dim); text-transform: uppercase; letter-spacing: var(--tracking-label); margin-right: var(--space-2); }
+.layers__base span { color: var(--color-text-dim); margin-right: var(--space-2); }
 
 .layers__site { padding: 0 var(--space-4) var(--space-3); }
 .layers__site + .layers__site { padding-top: var(--space-3); border-top: 1px solid var(--color-line); }
@@ -164,7 +158,7 @@
 .layers__site-name:hover span,
 .layers__site.is-current .layers__site-name span { color: var(--color-accent); }
 .layers__readings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
-.layers__readings dt { color: var(--color-text-dim); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; }
+.layers__readings dt { color: var(--color-text-dim); font-family: var(--font-mono); }
 .layers__readings dd { font: var(--text-body)/1.35 var(--font-mono); font-variant-numeric: tabular-nums; }
 .layers__readings dd.layers__when { margin-top: 2px; color: var(--color-text-dim); font: var(--text-label)/1.4 var(--font-mono); }
 .layers__readings dd.layers__when a { color: var(--color-text-dim); }

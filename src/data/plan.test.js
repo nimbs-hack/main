@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 import { distance, resample } from './geo'
 import {
-  DEFAULT_LIMITS, PRESETS, assess, formatDuration, insertWaypoint, legStats, moveVertex,
-  planPath, presetFor, removeWaypoint, stopPath, userWaypoints, walkSpeed, walkTime,
+  DEFAULT_LIMITS, PRESETS, SUIT, WALK_BACK_REFERENCE, assess, suitLoad, formatDuration, insertWaypoint, legStats, moveVertex,
+  planPath, presetFor, removeWaypoint, stepTime, stopPath, traverseTime, userWaypoints,
 } from './plan'
 
 // Flat ground along the equator, with an optional slope between two distances.
@@ -29,18 +29,28 @@ test('moving a vertex updates the start, a waypoint or the target', () => {
   expect(moveVertex(plan, 2, [1, 1]).target).toEqual([1, 1])
 })
 
-test('walk speed is the pace on flat ground and slower up steep grades', () => {
-  expect(walkSpeed(0, 1)).toBeCloseTo(1, 6)
-  expect(walkSpeed(0.3, 1)).toBeLessThan(0.4)
-  expect(walkSpeed(-0.05, 1)).toBeGreaterThan(1)
+test('a step costs its length at the flat speed, plus height at the climb or descent rate', () => {
+  const limits = { ...DEFAULT_LIMITS, pace: 1, climb: 0.1, descent: 0.25 }
+  expect(stepTime(100, 0, limits)).toBeCloseTo(100, 6)
+  expect(stepTime(100, 10, limits)).toBeCloseTo(100 + 10 / 0.1, 6)
+  expect(stepTime(100, -10, limits)).toBeCloseTo(100 + 10 / 0.25, 6)
 })
 
-test('climbing out takes longer than walking back down', () => {
+test('climbing out takes longer than coming back down', () => {
+  const limits = { ...DEFAULT_LIMITS, pace: 1 }
   const path = [[0, 0], [0, 0.03]]
   const route = samples(path, { rise: (d) => d * 0.1 })
-  expect(walkTime(route, 1)).toBeGreaterThan(walkTime(route, 1, true))
+  expect(traverseTime(route, limits)).toBeGreaterThan(traverseTime(route, limits, true))
   const flat = samples(path)
-  expect(walkTime(flat, 1)).toBeCloseTo(flat.at(-1).d, 3)
+  expect(traverseTime(flat, limits)).toBeCloseTo(flat.at(-1).d, 3)
+})
+
+test('with stops, legs run between the stops and the turns between them belong to a leg', () => {
+  const path = [[0, 0], [0, 0.01], [0, 0.02], [0, 0.03], [0, 0.04]]
+  const legs = legStats(samples(path), path, 20, [0, 2, 4])
+  expect(legs).toHaveLength(2)
+  expect(legs[0].length).toBeCloseTo(distance(path[0], path[2]), 0)
+  expect(legs[1].to).toBeCloseTo(distance(path[0], path[4]), 0)
 })
 
 test('legs split the slope stats at waypoints', () => {
@@ -72,7 +82,49 @@ test('steep legs, long walks and far targets are no-go', () => {
   const long = assess(samples(far), far, DEFAULT_LIMITS)
   expect(long.verdict).toBe('no-go')
   expect(long.reasons.map((r) => r.text).join(' ')).toMatch(/budget/)
-  expect(long.reasons.map((r) => r.text).join(' ')).toMatch(/walk-back limit/)
+  expect(long.reasons.map((r) => r.text).join(' ')).toMatch(/walk back, limit/)
+})
+
+test('walk-back follows the route, not the straight line home', () => {
+  // A dogleg: 2 km out along the equator, then 2 km north. The straight line
+  // from the start is 2.8 km, the walk back 4 km.
+  const path = [[0, 0], [0, 0.0337], [0.0337, 0.0337]]
+  const limits = { ...DEFAULT_LIMITS, range: 3000, eva: 24 * 3600 }
+  const result = assess(samples(path), path, limits)
+  expect(result.maxFromStart).toBeLessThan(3000)
+  expect(result.walkBack).toBeGreaterThan(3900)
+  expect(result.reasons.map((r) => r.text)).toContain('4.0 km walk back, limit 3.0 km')
+})
+
+test('no preset allows more than the 10 km NASA walk-back', () => {
+  for (const preset of PRESETS) expect(preset.limits.range).toBeLessThanOrEqual(WALK_BACK_REFERENCE)
+})
+
+test('suit load: flat ground is the base rate, climbing adds lifting work', () => {
+  const path = [[0, 0], [0, 0.01]]
+  const flat = samples(path)
+  const total = traverseTime(flat, DEFAULT_LIMITS) * 2
+  const level = suitLoad(flat, DEFAULT_LIMITS, total)
+  expect(level.averageW).toBeCloseTo(SUIT.baseW, 6)
+  expect(level.peakW).toBeCloseTo(SUIT.baseW, 6)
+  // 240 mL drinking plus 625 mL cooling water per hour.
+  expect(level.waterKg).toBeCloseTo(0.865 * total / 3600, 9)
+
+  // Height climbed on the way out is descended on the way back: lifted once.
+  const hill = samples(path, { rise: (d) => d / 10 })
+  const height = hill.at(-1).elevation
+  const climb = suitLoad(hill, DEFAULT_LIMITS, total)
+  expect(climb.energyJ - level.energyJ).toBeCloseTo((SUIT.massKg * SUIT.gravity * height) / SUIT.efficiency, 3)
+  expect(climb.peakW).toBeGreaterThan(SUIT.baseW)
+})
+
+test('a peak rate past the suit cooling range is a caution, never a no-go', () => {
+  const path = [[0, 0], [0, 0.01]]
+  const limits = { ...DEFAULT_LIMITS, climb: 2000 / 3600, slope: 35 }
+  const steep = assess(samples(path, { rise: (d) => d / 2, slope: () => 10 }), path, limits)
+  expect(steep.suit.peakW).toBeGreaterThan(SUIT.limitW)
+  expect(steep.reasons.some((r) => r.level === 'caution' && /suit cooling range/.test(r.text))).toBe(true)
+  expect(steep.reasons.some((r) => r.level === 'no-go' && /suit/.test(r.text))).toBe(false)
 })
 
 test('slopes near the limit and missing terrain are caution', () => {
@@ -82,7 +134,7 @@ test('slopes near the limit and missing terrain are caution', () => {
 })
 
 test('presets are recognized and durations read as hours and minutes', () => {
-  expect(presetFor(PRESETS[0].limits)?.id).toBe('conservative')
+  expect(presetFor(PRESETS.find((preset) => preset.id === 'rover').limits)?.id).toBe('rover')
   expect(presetFor({ ...DEFAULT_LIMITS, slope: 18 })).toBeNull()
   expect(formatDuration(45 * 60)).toBe('45 min')
   expect(formatDuration(3 * 3600)).toBe('3 h')

@@ -2,7 +2,8 @@ import type { LatLon } from './geo'
 import { MIL2525C_BY_ID } from './mil2525c'
 
 // Map markers placed by the planner, each a MIL-STD-2525C symbol at a point.
-// Planetocentric latitude, east longitude -180 to 180. Saved in the browser.
+// Planetocentric latitude, east longitude -180 to 180. Mission maps store
+// these in the mission file; standalone maps use browser storage.
 
 export type Marker = {
   id: string

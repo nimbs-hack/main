@@ -6,6 +6,7 @@ import {
   Cartographic,
   Color,
   DirectionalLight,
+  EasingFunction,
   GeographicTilingScheme,
   HeadingPitchRange,
   HeightReference,
@@ -25,6 +26,7 @@ import { SITES } from '../data/sites'
 import { DATUM_OFFSET, MARS_SPHERE, createTerrain } from '../data/terrain'
 import { FAST_VIEWER_OPTIONS, tuneViewer } from '../data/performance'
 import NavControls from './NavControls'
+import StreetView, { StreetViewButton } from './StreetView'
 import { pickGround, setupControls } from './camera'
 import { warmSiteImagery } from '../cache/map-cache'
 import { addCtxLayer } from '../data/ctx-layer.ts'
@@ -43,7 +45,7 @@ import { coverage, detailAt, detailLabel, detailMeters, levelAt, levelForSpacing
 import { checkSpaceWeather, fetchSpaceWeather } from '../data/space-weather'
 import { TERRAIN_API_PATH } from '../data/terrain-source'
 import { addToolOverlay } from './tool-overlay'
-import { addMarker as addMapMarker, loadMarkers, removeMarker, saveMarkers, symbolImage, updateMarker } from '../data/markers'
+import { addMarker as addMapMarker, loadMarkers, removeMarker, saveMarkers, updateMarker } from '../data/markers'
 import LayerSwitcher from './LayerSwitcher'
 import MapTools, { ToolButtons } from './MapTools'
 import { sampleRaster } from '../data/raster-sample'
@@ -52,8 +54,10 @@ import { loadRouteField } from '../data/route-field'
 import SciencePanel from './SciencePanel'
 import RouteProfile from './RouteProfile'
 import PointReadout from './PointReadout'
-import SuitView from './SuitView'
+import SuitView, { PLAY_TICK_MS } from './SuitView'
 import PlanPanel from './PlanPanel'
+import { loadEva, saveEva } from '../data/eva-storage'
+import MapLabels from './MapLabels'
 
 const MARS = MARS_SPHERE
 const ROVERS = SITES.filter((s) => s.traverse)
@@ -72,7 +76,7 @@ const DEFAULT_OVERLAYS = Object.fromEntries(SCIENCE_RASTERS.map((layer) => [laye
 }]))
 // A new start this far from the old target starts a new plan.
 const NEW_PLAN_DISTANCE = 20_000
-const PLAN_KEY = 'nimbs.eva-plan'
+const HOVER_MS = 50
 
 // Every leg's samples in one field, for the note on why routes agree.
 function joinFields(legs) {
@@ -87,29 +91,22 @@ function samePoints(a, b) {
   return a.length === b.length && a.every((point, i) => point[0] === b[i][0] && point[1] === b[i][1])
 }
 
-function loadPlan() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(PLAN_KEY) ?? 'null')
-    if (saved?.plan && Array.isArray(saved.plan.waypoints) && saved.limits) {
-      return { plan: saved.plan, limits: { ...DEFAULT_LIMITS, ...saved.limits } }
-    }
-  } catch {
-    // Private mode or bad JSON: start empty.
-  }
-  return { plan: EMPTY_PLAN, limits: DEFAULT_LIMITS }
-}
-
 // Opening view looks at Tharsis and Valles Marineris, where the relief is
 // easiest to see.
 const HOME = { lon: -85, lat: 0, height: 9_000_000 }
 const SITE_RANGE = 120_000
 const FLY_PITCH = CesiumMath.toRadians(-35)
 const RELIEF_STEPS = [1, 3]
+// The suit view looks down at the walker from behind at this angle, from at
+// least this far.
+const WALK_PITCH = CesiumMath.toRadians(-35)
+const WALK_RANGE = 900
+const WALK_HEADROOM = 1.15
 
 // Light comes from the top left of the screen, low over the horizon, the
 // convention for shaded relief maps. Low light makes slopes cast contrast.
 const LIGHT_ELEVATION = CesiumMath.toRadians(35)
-const LABEL_FONT = '500 11px "JetBrains Mono Variable", ui-monospace, monospace'
+const LABEL_FONT = '600 12px Inter, system-ui, sans-serif'
 
 function cssValue(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -168,7 +165,7 @@ const STATION_POSITIONS = Object.fromEntries(STATIONS.map(({ id, siteId }) => [i
 // The rovers report once a sol. Refetch hourly so a long session stays current.
 const WEATHER_REFRESH = 3_600_000
 
-// Map markers as billboards, one per marker, with the label under the symbol.
+// Ground anchors for the symbols drawn in the shared callout layer.
 function syncMarkers(viewer, entities, markers) {
   for (const entity of entities.values()) viewer.entities.remove(entity)
   entities.clear()
@@ -177,21 +174,11 @@ function syncMarkers(viewer, entities, markers) {
   for (const m of markers) {
     const entity = viewer.entities.add({
       position: Cartesian3.fromDegrees(m.point[1], m.point[0], 0, MARS),
-      billboard: {
-        image: symbolImage(m.symbol, text, bg),
-        heightReference: HeightReference.CLAMP_TO_GROUND,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      },
-      label: {
-        text: m.label,
-        font: LABEL_FONT,
-        fillColor: Color.fromCssColorString(text),
-        style: LabelStyle.FILL,
-        showBackground: true,
-        backgroundColor: Color.fromCssColorString(bg).withAlpha(0.82),
-        backgroundPadding: new Cartesian2(6, 3),
-        verticalOrigin: VerticalOrigin.TOP,
-        pixelOffset: new Cartesian2(0, 20),
+      point: {
+        pixelSize: 6,
+        color: Color.fromCssColorString(text),
+        outlineColor: Color.fromCssColorString(bg),
+        outlineWidth: 2,
         heightReference: HeightReference.CLAMP_TO_GROUND,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
       },
@@ -397,8 +384,44 @@ function squareMarkerImage() {
   return canvas
 }
 
+// The walker in the suit view: a standing figure, light on a dark outline so
+// it shows on any ground. Its feet are on the position.
+function walkerMarkerImage() {
+  const canvas = document.createElement('canvas')
+  canvas.width = 30
+  canvas.height = 40
+  const context = canvas.getContext('2d')
+  context.lineCap = 'round'
+  context.lineJoin = 'round'
+  const figure = () => {
+    context.beginPath()
+    context.arc(15, 8, 4.5, 0, Math.PI * 2)
+    context.moveTo(15, 13)
+    context.lineTo(15, 25)
+    context.moveTo(6, 18)
+    context.lineTo(24, 18)
+    context.moveTo(15, 25)
+    context.lineTo(8, 37)
+    context.moveTo(15, 25)
+    context.lineTo(22, 37)
+  }
+  figure()
+  context.strokeStyle = cssValue('--color-bg')
+  context.lineWidth = 8
+  context.stroke()
+  figure()
+  context.strokeStyle = cssValue('--color-accent')
+  context.lineWidth = 5
+  context.stroke()
+  figure()
+  context.strokeStyle = cssValue('--color-text')
+  context.lineWidth = 2.5
+  context.stroke()
+  return canvas
+}
+
 function addMarker(viewer) {
-  return viewer.entities.add({
+  const marker = viewer.entities.add({
     show: false,
     position: Cartesian3.ZERO,
     billboard: {
@@ -407,11 +430,15 @@ function addMarker(viewer) {
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
     },
   })
+  marker.looks = { dot: marker.billboard.image, walker: walkerMarkerImage() }
+  return marker
 }
 
-function placeMarker(viewer, marker, point) {
+function placeMarker(viewer, marker, point, walking = false) {
   if (!viewer || !marker) return
   marker.show = Boolean(point)
+  marker.billboard.image = walking ? marker.looks.walker : marker.looks.dot
+  marker.billboard.verticalOrigin = walking ? VerticalOrigin.BOTTOM : VerticalOrigin.CENTER
   if (point) {
     const location = Cartographic.fromDegrees(point[1], point[0], DATUM_OFFSET)
     location.height = viewer.scene.globe.getHeight(location) ?? exaggerate(viewer.scene, DATUM_OFFSET)
@@ -420,22 +447,54 @@ function placeMarker(viewer, marker, point) {
   viewer.scene.requestRender()
 }
 
-// Camera behind the walker, looking along the heading.
-function followWalker(viewer, point, heading) {
+// Camera behind the walker, looking along the heading, with the walker in
+// the middle of the view. During playback the move takes one playback step
+// at an even speed, so steps join into one walk.
+//
+// The camera aims at the ground under the walker. `elevation` is the sampled
+// height there, in meters above the areoid. Without it the aim falls back to
+// loaded terrain and then to the datum, which in a crater is kilometers above
+// the floor and leaves the walker below the bottom of the screen.
+function followWalker(viewer, point, heading, playing, elevation) {
   const location = Cartographic.fromDegrees(point[1], point[0], DATUM_OFFSET)
-  location.height = viewer.scene.globe.getHeight(location) ?? exaggerate(viewer.scene, DATUM_OFFSET)
+  location.height = elevation === null || elevation === undefined
+    ? viewer.scene.globe.getHeight(location) ?? exaggerate(viewer.scene, DATUM_OFFSET)
+    : exaggerate(viewer.scene, elevation + DATUM_OFFSET)
   const target = Cartographic.toCartesian(location, MARS)
+  // The camera may not come closer to the ground than the zoom limit, which
+  // keeps imagery from being magnified into a blur. Asked to, it is pushed
+  // back up after the move and the walker drops off the bottom of the
+  // screen. So stand far enough back to be above the limit, with headroom
+  // for ground that rises behind the walker.
+  const floor = viewer.scene.screenSpaceCameraController.minimumZoomDistance * WALK_HEADROOM
+  const range = Math.max(WALK_RANGE, floor / Math.sin(-WALK_PITCH))
   viewer.camera.flyToBoundingSphere(new BoundingSphere(target, 1), {
-    offset: new HeadingPitchRange(CesiumMath.toRadians(heading ?? 0), CesiumMath.toRadians(-22), 900),
-    duration: 0.6,
+    offset: new HeadingPitchRange(CesiumMath.toRadians(heading ?? 0), WALK_PITCH, range),
+    duration: playing ? PLAY_TICK_MS / 1000 : 0.6,
+    easingFunction: playing ? EasingFunction.LINEAR_NONE : undefined,
   })
 }
 
-export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onScienceSource, onViewer }) {
+/*
+ * `mission` ties the map to the mission being planned. It is optional:
+ *   { sites, taskCounts, selected, onSelect(index), onAddSite([lat, lon]),
+ *     onAddEva({ target, seconds, distance, maxSlope, verdict }) }
+ * Sites are { name, lat, lon } in planetocentric latitude and east longitude,
+ * -180 to 180. They are drawn as numbered markers, apart from the EVA route:
+ * one EVA walks to one site, and Add EVA to mission records it there.
+ * `mission.flag` puts a caution dot on the Sites tab.
+ * `missionPanel` renders the mission's sites and tasks as a tab of the plan
+ * panel and gets { placing, onPlacing, onRouteTo } to drive the map from it.
+ * While placing is 'site' every click adds a site, until Esc or onPlacing(null).
+ * onRouteTo([lat, lon]) makes that point the EVA target.
+ */
+export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onScienceSource, onViewer, mission = null, missionPanel = null }) {
   const container = useRef(null)
   const [viewer, setViewer] = useState(null)
   const labels = useRef(null)
   const [relief, setRelief] = useState(RELIEF_STEPS[0])
+  // False until the first tiles are on screen. Until then the map is black.
+  const [planetShown, setPlanetShown] = useState(false)
   const [imagerySource, setImagerySource] = useState('v01')
   const [overlays, setOverlays] = useState(DEFAULT_OVERLAYS)
   const [statuses, setStatuses] = useState({})
@@ -451,7 +510,12 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   // Station reports by id: a report, 'error', or missing while loading.
   const [weather, setWeather] = useState({})
   const [stationElevation, setStationElevation] = useState({})
-  const [markers, setMarkers] = useState(loadMarkers)
+  const [localMarkers, setLocalMarkers] = useState(loadMarkers)
+  const markers = mission ? mission.markers : localMarkers
+  const setMarkers = (change) => {
+    if (mission) mission.onMarkers(change(markers))
+    else setLocalMarkers(change)
+  }
   const [spaceWeather, setSpaceWeather] = useState({ status: 'loading', data: null })
   // Minute clock for time-relative checks such as CME arrivals.
   const [clock, setClock] = useState(() => Date.now())
@@ -461,7 +525,25 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   const [profileOpen, setProfileOpen] = useState(true)
   const [hoverIndex, setHoverIndex] = useState(null)
   const [suit, setSuit] = useState(null)
-  const [saved] = useState(loadPlan)
+  // null, 'pick' after a click on the rail button, or the drop point of a drag.
+  const [street, setStreet] = useState(null)
+  const streetButton = useRef(null)
+  const exitStreet = useCallback(() => setStreet(null), [])
+  const wasStreet = useRef(false)
+  const openStreet = (mode) => {
+    setPlacing(null)
+    setTool(null)
+    setSuit(null)
+    setProbe(null)
+    setLineTip(null)
+    setHoverIndex(null)
+    setStreet(mode)
+  }
+  useEffect(() => {
+    if (!street && wasStreet.current) streetButton.current?.focus()
+    wasStreet.current = street
+  }, [street])
+  const [saved] = useState(() => loadEva(mission?.id))
   const [plan, setPlan] = useState(saved.plan)
   const [limits, setLimits] = useState(saved.limits)
   // What the next map click does: 'start', 'target', 'waypoint' or null to probe.
@@ -478,8 +560,9 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     setToolState(id)
     if (id) setPlacingState(null)
   }, [])
-  // Where to fly after the site flight. A saved plan opens on its start.
-  const [focus, setFocus] = useState(() => (saved.plan.start ? { point: saved.plan.start } : null))
+  // Where to fly after the site flight. The map opens on the whole planet,
+  // also with a saved plan: Fit route goes to it.
+  const [focus, setFocus] = useState(null)
   const marker = useRef(null)
   const planOverlay = useRef(null)
   const [terrainProvider, setTerrainProvider] = useState(null)
@@ -495,6 +578,8 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   const onMoveVertexRef = useRef(null)
   const placingRef = useRef(placing)
   const toolRef = useRef(tool)
+  const missionRef = useRef(mission)
+  missionRef.current = mission
   onSiteRef.current = onSite
   onStatusRef.current = onStatus
   onImagerySourceRef.current = onImagerySource
@@ -538,6 +623,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
         onStatusRef.current('loading')
       } else {
         onStatusRef.current(failed ? 'error' : 'ready')
+        setPlanetShown(true)
       }
     })
 
@@ -562,7 +648,6 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
 
     let hovered = null
     const handler = new ScreenSpaceEventHandler(viewer.scene.canvas)
-    const siteAt = (position) => viewer.scene.pick(position)?.id?.siteId ?? null
     handler.setInputAction(({ position }) => {
       const index = planOverlay.current.handleAt(position)
       swallowClick = index !== null
@@ -588,7 +673,9 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       // Clicking a suggested route's line picks it, as on deploy-v1.
       const line = free ? planOverlay.current.alternativeAt(position) : null
       if (line) return onLineRef.current({ id: line, pick: true })
-      const id = free ? siteAt(position) : null
+      const picked = free ? viewer.scene.pick(position)?.id : null
+      if (picked?.missionIndex !== undefined) return missionRef.current?.onSelect(picked.missionIndex)
+      const id = picked?.siteId ?? null
       onMapClickRef.current({ siteId: id, point: id ? null : toLatLon(position) })
     }, ScreenSpaceEventType.LEFT_CLICK)
     // Right click opens the point menu. Right drag still tilts the camera:
@@ -602,6 +689,28 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     viewer.scene.canvas.addEventListener('contextmenu', noMenu)
     // Moving the map leaves the menu pointing at the wrong spot, so close it.
     const removeMoveClose = viewer.camera.moveStart.addEventListener(() => onContextRef.current(null))
+    // Hovering picks against the scene, which is a draw and a read back
+    // from the GPU. A mouse sends hundreds of moves a second, so only the
+    // latest one is looked at, every HOVER_MS.
+    let hoverAt = null
+    let hoverTimer
+    const hover = () => {
+      hoverTimer = undefined
+      if (drag || viewer.isDestroyed()) return
+      const endPosition = hoverAt
+      const overHandle = planOverlay.current.handleAt(endPosition) !== null
+      const free = !placingRef.current && !toolRef.current
+      const line = !overHandle && free ? planOverlay.current.alternativeAt(endPosition) : null
+      onLineRef.current(line ? { id: line, x: endPosition.x, y: endPosition.y } : null)
+      const under = overHandle || line ? null : viewer.scene.pick(endPosition)?.id
+      const id = under?.siteId ?? null
+      const overMission = free && under?.missionIndex !== undefined
+      setCursor(overHandle ? 'grab' : id || line || overMission ? 'pointer' : placingRef.current || toolRef.current ? 'crosshair' : '')
+      if (id === hovered) return
+      hovered = id
+      viewer.scene.requestRender()
+      for (const [siteId, label] of labels.current) label.show = siteId === id || label.pinned === true
+    }
     handler.setInputAction(({ endPosition }) => {
       if (drag) {
         const point = toLatLon(endPosition)
@@ -611,16 +720,8 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
         }
         return
       }
-      const overHandle = planOverlay.current.handleAt(endPosition) !== null
-      const free = !placingRef.current && !toolRef.current
-      const line = !overHandle && free ? planOverlay.current.alternativeAt(endPosition) : null
-      onLineRef.current(line ? { id: line, x: endPosition.x, y: endPosition.y } : null)
-      const id = overHandle || line ? null : siteAt(endPosition)
-      setCursor(overHandle ? 'grab' : id || line ? 'pointer' : placingRef.current || toolRef.current ? 'crosshair' : '')
-      if (id === hovered) return
-      hovered = id
-      viewer.scene.requestRender()
-      for (const [siteId, label] of labels.current) label.show = siteId === id || label.pinned === true
+      hoverAt = Cartesian2.clone(endPosition, hoverAt ?? new Cartesian2())
+      hoverTimer ??= setTimeout(hover, HOVER_MS)
     }, ScreenSpaceEventType.MOUSE_MOVE)
 
     // Lets the browser console poke at the scene while developing.
@@ -639,6 +740,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       stopRoutes()
       viewer.scene.canvas.removeEventListener('contextmenu', noMenu)
       removeMoveClose()
+      clearTimeout(hoverTimer)
       planOverlay.current.destroy()
       planOverlay.current = null
       handler.destroy()
@@ -672,6 +774,55 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     viewer.scene.requestRender()
   }, [viewer, relief])
 
+  // Mission ground pins. MapLabels places their names and task counts in
+  // shared screen-space rows, with leaders back to these coordinates.
+  const missionSites = mission?.sites
+  const missionCounts = mission?.taskCounts
+  const missionSelected = mission?.selected ?? -1
+  useEffect(() => {
+    if (!viewer || !missionSites) return
+    const text = cssColor('--color-text')
+    const panel = cssColor('--color-surface')
+    const accent = cssColor('--color-accent')
+    const added = missionSites.flatMap((entry, index) => {
+      if (Number.isNaN(entry.lat + entry.lon)) return []
+      const selected = index === missionSelected
+      const entity = viewer.entities.add({
+        position: Cartesian3.fromDegrees(entry.lon, entry.lat, 0, MARS),
+        point: {
+          pixelSize: selected ? 16 : 11,
+          color: selected ? accent : text,
+          outlineColor: selected ? text : panel,
+          outlineWidth: 2,
+          heightReference: HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: 0,
+        },
+      })
+      entity.missionIndex = index
+      return [entity]
+    })
+    viewer.scene.requestRender()
+    return () => {
+      if (viewer.isDestroyed()) return
+      for (const entity of added) viewer.entities.remove(entity)
+    }
+  }, [viewer, missionSites, missionSelected])
+
+  // Bring a mission site picked in the list into view. A site already on
+  // screen stays where it is, so adding one from the map does not move the map.
+  useEffect(() => {
+    const target = missionSites?.[missionSelected]
+    if (!viewer || !target || Number.isNaN(target.lat + target.lon)) return
+    const [ground] = surfacePoints(viewer, [[target.lat, target.lon]])
+    const at = viewer.scene.cartesianToCanvasCoordinates(ground)
+    const { clientWidth, clientHeight } = viewer.scene.canvas
+    // From orbit a point on the far side of Mars still projects onto the
+    // canvas, so only a close camera counts the site as in view.
+    const close = viewer.camera.positionCartographic.height < SITE_RANGE
+    if (close && at && at.x > 0 && at.y > 0 && at.x < clientWidth && at.y < clientHeight) return
+    flyToPoint(viewer, [target.lat, target.lon], 40_000)
+  }, [viewer, missionSelected])
+
   // The status bar reads the camera and cursor from the same viewer.
   useEffect(() => {
     onViewer?.(viewer)
@@ -683,14 +834,9 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     onScienceSource?.([...new Set(activeRasters.map((layer) => layer.credit))].join(' · '))
   }, [activeRasters, onScienceSource])
 
-  // The plan survives a reload. Storage can be missing, so failures are ignored.
   useEffect(() => {
-    try {
-      localStorage.setItem(PLAN_KEY, JSON.stringify({ plan, limits }))
-    } catch {
-      // Nothing to do without storage.
-    }
-  }, [plan, limits])
+    saveEva(mission?.id, { plan, limits })
+  }, [mission?.id, plan, limits])
 
   // Route from start through waypoints to target, once both ends exist.
   const routePath = useMemo(() => {
@@ -891,6 +1037,15 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       setPlacing(null)
     },
     waypoint: (point) => setPlan((current) => insertWaypoint(current, point)),
+    // Stays on, so several sites can be added in a row.
+    site: (point) => mission?.onAddSite(point),
+  }
+
+  // A mission site becomes the EVA target. Without a start yet, the next
+  // click places one.
+  const routeTo = (point) => {
+    actions.target(point)
+    if (!plan.start) setPlacing('start')
   }
 
   onMapClickRef.current = ({ siteId, point }) => {
@@ -1037,7 +1192,9 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   const highWeather = planWeather?.report?.latest && summary?.high != null ? weatherNear(plan.start, summary.high) : null
   const probeWeather = probe?.status === 'ready' ? weatherNear(probe.point, probe.elevation) : null
 
-  useEffect(() => saveMarkers(markers), [markers])
+  useEffect(() => {
+    if (!mission) saveMarkers(localMarkers)
+  }, [mission, localMarkers])
   useEffect(() => {
     if (viewer) syncMarkers(viewer, markerEntities.current, markers)
   }, [viewer, markers])
@@ -1052,9 +1209,10 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   // One marker: the suit position, else the profile hover, else the probe.
   const suitSample = suit && profile.samples ? profile.samples.reduce((best, s) => (Math.abs(s.d - suit.position) < Math.abs(best.d - suit.position) ? s : best)) : null
   const markerPoint = suitSample?.point ?? (hoverIndex !== null ? profile.samples?.[hoverIndex]?.point : null) ?? probePoint ?? null
+  const walking = Boolean(suitSample)
   useEffect(() => {
-    placeMarker(viewer, marker.current, markerPoint)
-  }, [viewer, markerPoint])
+    placeMarker(viewer, marker.current, markerPoint, walking)
+  }, [viewer, markerPoint, walking])
 
   // Changing the route ends the suit view.
   useEffect(() => {
@@ -1069,7 +1227,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     const ahead = samples.find((s) => s.d > suitPosition + 80) ?? samples.at(-1)
     const dLon = (ahead.point[1] - here.point[1]) * Math.cos(here.point[0] * Math.PI / 180)
     const heading = (Math.atan2(dLon, ahead.point[0] - here.point[0]) * 180) / Math.PI
-    followWalker(viewer, here.point, heading)
+    followWalker(viewer, here.point, heading, suit?.playing, here.elevation)
   }, [viewer, suitPosition, profile.samples])
 
   const walk = () => {
@@ -1092,38 +1250,76 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   // Profile marks at the user's waypoints and the target, not at turn points.
   const markPath = planPath(plan)
   const marks = assessment?.legs.filter((_, i) => !markPath[i + 1] || i + 1 === markPath.length - 1 || !isGenerated(plan, markPath[i + 1])).map((leg) => leg.to)
+  const mapLabels = useMemo(() => [
+    ...(missionSites ?? []).flatMap((entry, index) => Number.isFinite(entry.lat + entry.lon) ? [{
+      id: `site-${index}`,
+      point: [entry.lat, entry.lon],
+      text: `${index + 1} ${entry.name || 'Unnamed'} · ${missionCounts?.[index] ?? 0} ${(missionCounts?.[index] ?? 0) === 1 ? 'task' : 'tasks'}`,
+      selected: index === missionSelected,
+      onSelect: () => missionRef.current?.onSelect(index),
+    }] : []),
+    ...markers.map((entry) => ({
+      id: `symbol-${entry.id}`,
+      point: entry.point,
+      text: entry.label,
+      symbol: entry.symbol,
+      onSelect: (screen) => onContextRef.current?.({ point: entry.point, markerId: entry.id, screen }),
+      onContext: (screen) => onContextRef.current?.({ point: entry.point, markerId: entry.id, screen }),
+    })),
+  ], [missionSites, missionCounts, missionSelected, markers])
   const nextRelief = RELIEF_STEPS[(RELIEF_STEPS.indexOf(relief) + 1) % RELIEF_STEPS.length]
 
   return (
     <div className="workspace">
-      <PlanPanel
-        plan={plan}
-        limits={limits}
-        assessment={assessment}
-        status={profile.status}
-        placing={placing}
-        dose={dose}
-        weather={planWeather && { ...planWeather, atHigh: highWeather?.estimate ?? null }}
-        space={{ status: spaceWeather.status, data: spaceWeather.data, check: spaceCheck, start: evaStart, end: evaEnd, now: clock }}
-        when={plan.when ?? null}
-        onWhen={(when) => setPlan((current) => ({ ...current, when }))}
-        terrainDetail={terrainDetail}
-        onPlacing={setPlacing}
-        onSite={chooseSite}
-        onRemoveWaypoint={(index) => setPlan((current) => removeWaypoint(current, index))}
-        onLimits={setLimits}
-        onRetry={() => setProfileAttempt((attempt) => attempt + 1)}
-        onWalk={walk}
-        onClear={() => { setPlan(EMPTY_PLAN); setPlacing(null) }}
-      />
-      <main className={`stage${placing ? ' is-placing' : ''}`}>
+      <div style={{ display: 'contents' }} inert={!!street}>
+        <PlanPanel
+          plan={plan}
+          limits={limits}
+          assessment={assessment}
+          status={profile.status}
+          placing={placing}
+          dose={dose}
+          weather={planWeather && { ...planWeather, atHigh: highWeather?.estimate ?? null }}
+          space={{ status: spaceWeather.status, data: spaceWeather.data, check: spaceCheck, start: evaStart, end: evaEnd, now: clock }}
+          when={plan.when ?? null}
+          onWhen={(when) => setPlan((current) => ({ ...current, when }))}
+          terrainDetail={terrainDetail}
+          onPlacing={setPlacing}
+          onSite={chooseSite}
+          onRemoveWaypoint={(index) => setPlan((current) => removeWaypoint(current, index))}
+          onLimits={setLimits}
+          onRetry={() => setProfileAttempt((attempt) => attempt + 1)}
+          onWalk={walk}
+          onClear={() => { setPlan(EMPTY_PLAN); setPlacing(null) }}
+          onAddToMission={!mission ? undefined : assessment && plan.target ? () => mission.onAddEva({
+            target: plan.target,
+            seconds: assessment.total,
+            distance: assessment.distance,
+            maxSlope: assessment.maxSlope,
+            verdict: assessment.verdict,
+          }) : null}
+          missionSites={missionPanel?.({ placing, onPlacing: setPlacing, onRouteTo: routeTo })}
+          missionFlag={mission?.flag ?? null}
+          missionFocus={missionSelected}
+        />
+      </div>
+      <main className={`stage${street ? ' stage--street' : ''}${placing ? ' is-placing' : ''}`}>
         <div ref={container} className="stage__map" />
+        <MapLabels viewer={viewer} items={street ? [] : mapLabels} />
+        {street && viewer && <StreetView viewer={viewer} terrain={terrainProvider} relief={relief} drop={street === 'pick' ? null : street} onExit={exitStreet} />}
 
-        <div className={`hud${suit ? ' hud--suit' : ''}${routePath && profileOpen ? ' hud--profile' : ''}`}>
+        <div className={`hud${street ? ' hud--street' : ''}${suit ? ' hud--suit' : ''}${routePath && profileOpen ? ' hud--profile' : ''}`}>
           <span className="hud__corner hud__corner--tl" aria-hidden="true" />
           <span className="hud__corner hud__corner--tr" aria-hidden="true" />
           <span className="hud__corner hud__corner--bl" aria-hidden="true" />
           <span className="hud__corner hud__corner--br" aria-hidden="true" />
+
+          {!planetShown && (
+            <p className="stage__loading" role="status">
+              <span className="spinner spinner--large" aria-hidden="true" />
+              Loading Mars
+            </p>
+          )}
 
           {site && (
             <div className="readout readout--tr">
@@ -1142,12 +1338,12 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
               className="nav__text nav__section"
               onClick={() => setRelief(nextRelief)}
               aria-label={`Elevation scale ${relief}×. Switch to ${nextRelief}×`}
-              title={`Elevation scale ${relief}×. Switch to ${nextRelief}×`}
+              data-tip={`Elevation scale ${relief}×. Click for ${nextRelief}×`}
             >
               {relief}×
             </button>
             {routePath && (
-              <button type="button" aria-label="Fit route" title="Fit route" onClick={() => viewer && flyToPath(viewer, routePath, profile.samples)}>
+              <button type="button" aria-label="Fit route" data-tip="Fit route in view" onClick={() => viewer && flyToPath(viewer, routePath, profile.samples)}>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M8 16l3-7 5 6" />
                 </svg>
@@ -1156,7 +1352,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
             <button
               type="button"
               aria-label="Global view"
-              title="Global view"
+              data-tip="Whole planet"
               onClick={() => (site ? onSite(site.id) : viewer && flyHome(viewer))}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1166,12 +1362,20 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
               </svg>
             </button>
             {routePath && !profileOpen && (
-              <button type="button" aria-label="Route profile" title="Route profile" onClick={() => setProfileOpen(true)}>
+              <button type="button" aria-label="Route profile" data-tip="Route profile" onClick={() => setProfileOpen(true)}>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M4 4v16h16M7 15l4-7 4 5 5-7" />
                 </svg>
               </button>
             )}
+            <StreetViewButton
+              viewer={viewer}
+              buttonRef={streetButton}
+              title={terrainProvider ? 'Street view. Click, then pick a spot, or drag onto the map' : 'Street view. Waiting for terrain'}
+              disabled={!viewer || !terrainProvider}
+              onPick={() => openStreet('pick')}
+              onDrop={openStreet}
+            />
             <ToolButtons tool={tool} onTool={setTool} />
           </NavControls>
 
@@ -1197,6 +1401,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
               onRaise={(slope) => setLimits((current) => ({ ...current, slope }))}
               options={options}
               chosen={chosenId}
+              measured={chosenId && profile.status === 'ready' ? summary : null}
               hover={routeHover}
               limit={limits.slope}
               onHover={setRouteHover}
@@ -1278,7 +1483,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
               samples={profile.samples}
               routeName="EVA plan"
               position={suit.position}
-              onPosition={(position) => setSuit({ position })}
+              onPosition={(position, playing = false) => setSuit({ position, playing })}
               dose={dose}
               limit={limits.slope}
               marks={marks}

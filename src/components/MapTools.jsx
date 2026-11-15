@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Math as CesiumMath, ScreenSpaceEventHandler, ScreenSpaceEventType } from 'cesium'
 import { distance, resample } from '../data/geo'
-import { formatDuration, walkTime } from '../data/plan'
+import { formatDuration, traverseTime } from '../data/plan'
 import { slopeLevel } from '../data/route-profile'
 import { sampleSurface } from '../data/terrain-sample'
 import { flatReach, lastBearing, lineOfSight, pathLength, ring, terrainAlong } from '../data/tools'
@@ -15,16 +15,19 @@ export const TOOLS = [
   {
     id: 'ruler',
     name: 'Ruler',
+    tip: 'Ruler. Measure distance along points',
     icon: <path d="M3 17 17 3l4 4L7 21ZM7 13l2 2m1-5 2 2m1-5 2 2" />,
   },
   {
     id: 'range',
     name: 'Range rings',
+    tip: 'Range rings. Distance circles around a point',
     icon: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><path d="M12 12h.01" /></>,
   },
   {
     id: 'sight',
     name: 'Line of sight',
+    tip: 'Line of sight. Check if one point sees another',
     icon: <><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></>,
   },
 ]
@@ -38,7 +41,7 @@ export function ToolButtons({ tool, onTool }) {
       className={i === 0 ? 'nav__section' : undefined}
       aria-pressed={tool === t.id}
       aria-label={t.name}
-      title={t.name}
+      data-tip={t.tip}
       onClick={() => onTool(tool === t.id ? null : t.id)}
     >
       <svg viewBox="0 0 24 24" aria-hidden="true">{t.icon}</svg>
@@ -223,7 +226,7 @@ export default function MapTools({ viewer, terrainProvider, tool, onTool, limits
               <Row label="Max slope" className={rulerTerrain ? `is-${slopeLevel(rulerTerrain.maxSlope, limits.slope)}` : ''}>
                 {rulerTerrain ? formatSlope(rulerTerrain.maxSlope) : '…'}
               </Row>
-              <Row label="Walk one way">{rulerSamples ? formatDuration(walkTime(rulerSamples, limits.pace)) : '…'}</Row>
+              <Row label="Walk one way">{rulerSamples ? formatDuration(traverseTime(rulerSamples, limits)) : '…'}</Row>
               <Row label="Bearing">{heading === null ? '—' : `${String(Math.round(heading) % 360).padStart(3, '0')}°`}</Row>
             </dl>
           )}

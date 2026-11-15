@@ -14,7 +14,7 @@
   translate: 0 -50%;
   border: 1px solid var(--color-line-strong);
   background: var(--color-surface);
-  font-size: 13px;
+  font-size: var(--text-data);
   pointer-events: auto;
 }
 .tools p,
@@ -34,9 +34,7 @@
 .tools__head h2 {
   font-family: var(--font-mono);
   font-size: var(--text-label);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
+  font-weight: 600;
 }
 .tools__close {
   width: 36px;
@@ -49,7 +47,7 @@
 
 .tools__big {
   margin-top: var(--space-2) !important;
-  font: 24px/1.1 var(--font-mono);
+  font: var(--text-section)/1.1 var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 .tools__big.is-blocked { color: var(--color-text-muted); }
@@ -59,7 +57,7 @@
 .tools__row dt { color: var(--color-text-dim); }
 .tools__row .is-caution { color: var(--color-caution); }
 .tools__row .is-hazard { color: var(--color-hazard); }
-.tools__where { white-space: pre; font-size: 12px; }
+.tools__where { white-space: pre; font-size: var(--text-min); }
 
 .tools__hint { color: var(--color-text-muted); line-height: 1.4; }
 
@@ -71,8 +69,6 @@
   background: transparent;
   font-family: var(--font-mono) !important;
   font-size: var(--text-label) !important;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 .tools__actions button:hover:not(:disabled) { background: var(--color-surface-raised); }
 .tools__actions button:disabled { opacity: 0.4; cursor: default; }
@@ -88,7 +84,7 @@
   background: var(--color-bg);
   font-family: var(--font-mono);
 }
-.tools__field span:first-child { color: var(--color-text-dim); font-size: var(--text-label); text-transform: uppercase; }
+.tools__field span:first-child { color: var(--color-text-dim); font-size: var(--text-label); }
 .tools__field input {
   flex: 1;
   min-width: 0;

@@ -26,7 +26,8 @@ export default function NavControls({ viewer, children }) {
         className="nav__compass"
         onClick={() => viewer && resetNorth(viewer)}
         aria-label={north ? 'Facing north' : `Heading ${Math.round(heading)}°. Turn to face north`}
-        title="Face north"
+        data-tip={north ? 'Facing north' : 'Turn to face north'}
+        disabled={!viewer}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true" style={{ rotate: `${-heading}deg` }}>
           <path d="M12 3 16 12H8Z" className="nav__needle-n" />
@@ -38,13 +39,15 @@ export default function NavControls({ viewer, children }) {
         className="nav__text"
         onClick={() => viewer && toggleTilt(viewer)}
         aria-label={tilted ? 'Look straight down' : 'Tilt the view'}
+        disabled={!viewer}
+        data-tip={tilted ? 'Look straight down' : 'Tilt the view'}
       >
         {tilted ? '2D' : '3D'}
       </button>
-      <button type="button" onClick={() => viewer && zoomBy(viewer, 0.5)} aria-label="Zoom in">
+      <button type="button" disabled={!viewer} onClick={() => viewer && zoomBy(viewer, 0.5)} aria-label="Zoom in" data-tip="Zoom in">
         +
       </button>
-      <button type="button" onClick={() => viewer && zoomBy(viewer, 2)} aria-label="Zoom out">
+      <button type="button" disabled={!viewer} onClick={() => viewer && zoomBy(viewer, 2)} aria-label="Zoom out" data-tip="Zoom out">
         −
       </button>
       {children}

@@ -1,7 +1,9 @@
-import { Cartesian2, Cartesian3, Cartographic, EllipsoidalOccluder } from 'cesium'
+import { Cartesian3, Cartographic, EllipsoidalOccluder } from 'cesium'
 import type { Viewer } from 'cesium'
 import { DATUM_OFFSET } from '../data/terrain.js'
 import type { LatLon } from '../data/geo'
+import { segmentClipper, tracePieces } from './overlay-clip'
+import type { End } from './overlay-clip'
 
 // What a map tool draws. Lines can be dashed. Dots carry an optional label.
 export type ToolLine = { points: LatLon[], color: string, dash?: number[], width?: number }
@@ -10,9 +12,9 @@ export type ToolLine = { points: LatLon[], color: string, dash?: number[], width
 export type ToolDot = { point: LatLon, color: string, label?: string, hollow?: boolean, bare?: boolean, maxHeight?: number }
 export type ToolShapes = { lines: ToolLine[], dots: ToolDot[] }
 
-type Projected = { location: Cartographic, position: Cartesian3, screen: Cartesian2 | null }
+type Projected = End & { location: Cartographic }
 
-const LABEL_FONT = '500 11px "JetBrains Mono Variable", ui-monospace, monospace'
+const LABEL_FONT = '600 12px Inter, system-ui, sans-serif'
 // Tile changes refresh heights at most this often, as in plan-overlay.ts.
 const HEIGHTS_MS = 400
 
@@ -30,6 +32,7 @@ export function addToolOverlay(viewer: Viewer, background: string) {
   viewer.container.appendChild(canvas)
 
   const occluder = new EllipsoidalOccluder(scene.ellipsoid, viewer.camera.positionWC)
+  const clipper = segmentClipper(scene, occluder)
   let lines: (ToolLine & { projected: Projected[] })[] = []
   let dots: (ToolDot & Projected)[] = []
   // `heightsNow`: place every point this frame. `heightsStale`: tiles have
@@ -46,6 +49,8 @@ export function addToolOverlay(viewer: Viewer, background: string) {
     location: Cartographic.fromDegrees(lon, lat, DATUM_OFFSET),
     position: new Cartesian3(),
     screen: null,
+    depth: 0,
+    hidden: false,
   })
 
   const place = (p: Projected) => {
@@ -53,10 +58,7 @@ export function addToolOverlay(viewer: Viewer, background: string) {
       p.location.height = scene.globe.getHeight(p.location) ?? DATUM_OFFSET
       scene.ellipsoid.cartographicToCartesian(p.location, p.position)
     }
-    p.screen = occluder.isPointVisible(p.position)
-      ? scene.cartesianToCanvasCoordinates(p.position, p.screen ?? new Cartesian2()) ?? null
-      : null
-    return p.screen
+    return clipper.place(p)
   }
 
   const draw = () => {
@@ -70,6 +72,7 @@ export function addToolOverlay(viewer: Viewer, background: string) {
     context.setTransform(scale, 0, 0, scale, 0, 0)
     context.clearRect(0, 0, width, height)
     occluder.cameraPosition = viewer.camera.positionWC
+    clipper.frame()
     heightsNow ||= exaggeration !== scene.verticalExaggeration
     exaggeration = scene.verticalExaggeration
     const now = performance.now()
@@ -88,18 +91,8 @@ export function addToolOverlay(viewer: Viewer, background: string) {
     context.lineCap = 'round'
 
     for (const line of lines) {
-      context.beginPath()
-      let connected = false
-      for (const p of line.projected) {
-        const s = place(p)
-        if (!s) {
-          connected = false
-          continue
-        }
-        if (connected) context.lineTo(s.x, s.y)
-        else context.moveTo(s.x, s.y)
-        connected = true
-      }
+      for (const p of line.projected) place(p)
+      tracePieces(context, clipper.pieces(line.projected))
       const w = line.width ?? 2
       context.setLineDash(line.dash ?? [])
       context.strokeStyle = background

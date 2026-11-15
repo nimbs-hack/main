@@ -16,11 +16,15 @@ Judges will look for these things, so keep them in mind when deciding what to bu
 
 Product decisions (site, science objective, form factor, layer list) live in Notion, not here. See [Context](#context).
 
+The app is a mission planner laid out like a 3D printer slicer: stage tabs across the top, one per planning step. Home lists the mission files. A mission is made on four stages: Crew, Phases, Sites and Review. Its name, type and margin are edited in the top bar. Sites is the EVA map, with route planning, map tools and science layers. The mission's sites and tasks are the first tab of the map's plan panel. The EVA route stays separate from the site list: Route here makes a site the route's target, and Add EVA to mission records an assessed route as a site and a task, whose hours the planner then counts.
+
 ## Context
 
 Product context, research notes, decisions and task assignments live in Notion:
 
-- Notion workspace: `TODO: add link`
+- Notion workspace: [MarsMission Planner](https://app.notion.com/p/417268a7dcb58071b16fcd1393b6bbe4)
+
+The [product scenario](https://app.notion.com/p/417268a7dcb5812695dae148ed16b706) still leaves the first travel profile open between a rover and walking EVA. The astronaut framing above is the intended use case, not a settled implementation choice. Check that decision before adding mobility or resource calculations.
 
 If a Notion MCP server is connected, read the relevant pages before starting a feature. If it isn't, ask the human for the page rather than guessing at product decisions. If Notion and this file disagree, Notion wins for product questions and this file wins for code conventions. Point out the conflict so someone fixes it.
 
@@ -37,9 +41,10 @@ Commands:
 bun install
 bun run dev       # Vite starts a private Go API process
 bun run build     # Frontend in dist/, API binary in bin/mars-api
-bun run typecheck # Compile all Go packages
+bun run typecheck # tsc on the editor, then compile all Go packages
 bun run lint      # go vet and gofmt checks
 bun run test      # JavaScript tests and Go tests with the race detector
+bun run planner   # The planner's command line, for example: bun run planner demo
 ```
 
 Before you say a task is done, run typecheck, lint and tests. Report a failure as a failure, with the output. Don't say "should work".
@@ -47,10 +52,10 @@ Before you say a task is done, run typecheck, lint and tests. Report a failure a
 ## Repo layout
 
 ```
-src/            React frontend, map data and CSS tokens in src/styles.css
-apps/api/       Go server, tile proxy and disk cache
-scripts/        Tile download and precache scripts, Go process launcher
-docs/           Visual language and other team docs
+src/            Mission editor: React and TypeScript. Stage pages in src/steps, the map in src/components and src/data, tokens in src/tokens.css
+apps/api/       Go server: mission planner, hr-planner CLI, tile proxy and disk cache
+scripts/        Basemap tile download, Go process launcher, gofmt check
+docs/           Visual language, design notes for the editor
 data/           Local raw and processed data. Gitignored. Never commit large files.
 public/         Static assets and low-zoom imagery
 .agents/skills/ Agent skills shared by Claude Code and Codex
@@ -58,9 +63,32 @@ public/         Static assets and low-zoom imagery
 
 ## Design
 
-Read [docs/visual-language.md](docs/visual-language.md) before building UI. Tokens are in `src/styles.css`. Use them instead of hardcoded values. If one is missing, add it and mention it in the PR.
+Read [docs/visual-language.md](docs/visual-language.md) before building UI. Tokens are in `src/tokens.css`. Use them instead of hardcoded values. If one is missing, add it and mention it in the PR.
 
 Don't add labels, headers, badges or status indicators that carry no information. If the view is obviously the overview, it doesn't need an OVERVIEW title. The visual language doc has the full list of what to leave out.
+
+### Human interaction principles
+
+Use NASA's [Field Guide for Designing Human Interaction With Intelligent Systems](https://ntrs.nasa.gov/api/citations/19980210012/downloads/19980210012.pdf), TM-1998-208470, Thronesbery and Malin, July 1998. This is a design and evaluation method for flight-controller software, not a visual style specification or a certification standard. References below use the paper's printed page numbers, four fewer than the PDF page numbers.
+
+- Start with a user task and a measurable outcome. Identify the decision, the information needed, and what currently makes it difficult before choosing controls. Understand the task, establish useful support, then refine presentation. Sections 2.1 and 3.2-3.4, pp. 2, 6-9.
+- Name the human and software responsibilities. Show what the system is doing, what the user selected, and the effect of each action. Keep evidence available so the user can question a result. Sections 4.2, 4.4-4.5 and 7.2.2.3, pp. 13-16, 31.
+- Preserve user control. Provide a clear way to stop, reject, revise, or recover from automation where that automation exists. Recovery must preserve useful work. Sections 4.5 and 5.2.2, pp. 16, 19-20.
+- Design ordinary and failure scenarios together as the prototype matures. Cover an external data failure, a user mistake, and a software mistake separately before combining them. A warning must help the user decide what to do next. Sections 4.5 and 5.2, pp. 16, 19-21.
+- Work in small iterations that address the largest task risks first. Keep task descriptions only as detailed as the next design decision requires. Use inexpensive prototypes when the interaction is still uncertain. Sections 3.4, 4.10 and 6, pp. 8-9, 18, 22-24.
+- Evaluate task performance with users and domain experts. Check completion, mistakes, hesitation, interpretation, and recovery, not appearance preferences alone. Vary evaluation scenarios and include people outside the design team. Record observations and prioritize the next changes. Sections 2.3 and 7, pp. 3-4, 25-37. Automated tests do not replace this evaluation.
+
+### NASA-STD-3001
+
+[docs/nasa-std-3001.md](docs/nasa-std-3001.md) lists the requirements of NASA's human-system standard that apply to this app, where the code meets each one, and what still needs people. Keep it current when you touch alert colors, text size, EVA limits, suit load or radiation.
+
+Apply these principles to our map as follows. These are project rules derived from the guide and our product context, not verbatim NASA requirements:
+
+- Keep site selection, current view, data availability, and recovery controls discoverable. Selecting a site must not secretly act as a reset; use a separate global-view action.
+- Distinguish rover history from a proposed expedition. Show source, coverage or resolution limits, and the last recorded sol when known. Never imply that a snapshot is live telemetry.
+- Disclose automatic imagery fallback and visual terrain changes. Shading, smoothed terrain and exaggerated relief cannot establish safe slopes. Missing hazard data means unknown, not safe.
+- For future planning, show the outbound and return legs, constraints, assumptions, and reasons for recommendations or rejection together. Keep inputs editable and make outdated results clear after an input changes.
+- For each UI change, identify a normal scenario and a recovery scenario, check their observable outcomes, and report what still needs a human walkthrough. Keep this proportionate to the change.
 
 ## UI and UX rules
 
@@ -72,9 +100,10 @@ The map is the product. Everything else sits around it, and floating pieces neve
 
 | Zone | Owner |
 | --- | --- |
+| Top bar | Stage tabs, then the mission name, undo, redo and save |
 | Left sidebar, `--sidebar-width` | The plan panel. Settings live here, like a slicer's settings panel. |
 | Map top left | Suggested routes |
-| Map top right | Current site |
+| Map top right | Current site. With the route profile open it sits beside the camera rail, not under it. |
 | Map right edge, middle | The camera rail: camera controls, then view actions, then map tools, each section under a divider. A tool's readout opens just left of the rail. |
 | Map bottom left | Layer switcher |
 | Map bottom strip | Route profile |
@@ -85,6 +114,7 @@ The map is the product. Everything else sits around it, and floating pieces neve
 - A left click on the ground does nothing unless a placement mode or a map tool is on. Only one of them takes clicks at a time, so turning one on turns the other off. Each says what the next click does, and Esc always ends it.
 - Map tools (ruler, range rings, line of sight) draw on their own layer, and keep their points while you switch between them. They start from the camera rail, not the right-click menu. A tool result that could become a plan gets a button that does it, like "Use as route".
 - Check layout at 1440 px wide. A narrow preview pane switches to the stacked phone layout, which hides desktop problems.
+- Check each zone with its neighbors open. The route profile, the site readout and the camera rail only collided once all three showed at the same time.
 
 ### Following known tools
 
@@ -93,19 +123,36 @@ Copy patterns people already know instead of inventing new ones. Copy the behavi
 - Settings work like a 3D printer slicer (Orca, CrealityPrint). See the next section.
 - The status bar works like Google Earth's. Left side: tile state only while loading or failed, then a "Data attribution" button that opens the credits. Right side: scale bar, camera height, cursor coordinates and elevation. Never show "loaded" or other steady-state text.
 - The layer switcher works like Google Maps'. One tile opens a row of layer tiles with real thumbnails. Full controls (opacity, legends, sources) sit behind More.
-- Route alternatives work like Google Maps directions. Every option is drawn dashed in its own color. Hovering a row or a line highlights it and shows a tooltip with name, distance and max slope. Clicking either picks it and makes it the plan. Waypoints the user places are stops: every suggestion is routed through them leg by leg, and adding, moving or removing one reroutes the picked strategy. Only stops get numbered handles. The turn points a route adds are never drawn.
-- Route lines use deploy-v1's styles, kept as constants in `src/components/plan-overlay.ts`. Candidates are dashed 6 5 at 2.5 px between two thin, continuous dark rails, so the line edge is outlined end to end and the gaps between dashes stay clear. Dashes are measured in meters along the route, not in screen pixels, so they stay on the same ground as the camera moves. Every line drawn over imagery needs a dark casing or halo, or it vanishes on ground of its own color. The plan, which is the selected route, is a solid red 3.5 px line on a dark 6.5 px halo, with any stretch over the slope limit in orange on top. Start and target are square A and B pins with red and green borders.
-- The right-click menu works like Google Maps'. Coordinates at the top copy on click. It also shows the nearest rover's weather for the spot. Its only actions are start, target, waypoint and Add symbol. Map markers are MIL-STD-2525C symbols from deploy-v1, added from this menu. Right-click a marker to rename, re-symbol or delete it. Symbols are drawn monochrome, as 2525C allows, so frame shape shows affiliation and red stays the selection color.
+- Route alternatives work like Google Maps directions. Every option is drawn dashed in its own color. Hovering a row or a line highlights it and shows a tooltip with name, distance and max slope. Clicking either picks it and makes it the plan. The picked row then shows the plan's style, a solid accent swatch, and the plan's measured distance and slope, so the list never disagrees with the profile or the verdict. A key under the rows names the two solid lines that are not strategies: the plan and stretches over the slope limit. Waypoints the user places are stops: every suggestion is routed through them leg by leg, and adding, moving or removing one reroutes the picked strategy. Only stops get numbered handles. The turn points a route adds are never drawn.
+- Route lines use deploy-v1's styles, kept as constants in `src/components/plan-overlay.ts`. Candidates are dashed 6 5 at 2.5 px on a continuous dark band, so the line is outlined end to end and the gaps read as dark. Clear gaps showed grey ground and looked like a second, grey color. Dashes are measured in meters along the route, not in screen pixels, so they stay on the same ground as the camera moves. Every line drawn over imagery needs a dark casing or halo, or it vanishes on ground of its own color. The plan, which is the selected route, is a solid magenta 3.5 px line on a dark 6.5 px halo, with any stretch over the slope limit drawn on top in red, 6 px wide on a 9 px halo. Start and target are square A and B pins with magenta and green borders.
+- The right-click menu works like Google Maps'. Coordinates at the top copy on click. It also shows the nearest rover's weather for the spot. Its only actions are start, target, waypoint and Add symbol. Map markers are MIL-STD-2525C symbols from deploy-v1, added from this menu. Right-click a marker to rename, re-symbol or delete it. Symbols are drawn monochrome, as 2525C allows, so frame shape shows affiliation and color stays free for selection and alerts.
 
 ### Settings panels
 
-- An icon rail picks one tab. Only that tab's settings show. Never render all settings as one long scrolling page.
-- Inside a tab, group rows under small headers, the way a slicer has "Layer height" and "Line width".
-- Rows are a label on the left and a value on the right, with the unit after it, dim and mono. Only editable values get a box, with the unit inside it. Read-only values are bare text on the same column, so a box always means you can type there.
+- An icon rail picks one tab. Only that tab's settings show. Never render all settings as one long scrolling page. Each rail button has its name under the icon.
+- Inside a tab, group rows under small headers, the way a slicer has "Layer height" and "Line width". Three levels must look like three levels: the tab title at `--text-heading`, group headers smaller and muted, row labels in regular weight. Two bold lines of nearly the same size read as one.
+- Rows are a label on the left and a value on the right, with the unit after it, dim. Only editable values get a box, with the unit inside it. Read-only values are bare text on the same column, so a box always means you can type there.
 - Show the main rows by default and the rest behind an Advanced switch. Tell the user how many rows are hidden.
 - Search looks across every tab and shows which tab each match lives in.
 - Hidden tabs can hide problems. Put a dot on the rail icon of any tab with a value near or over a limit.
 - Presets stay selected while the user edits values. Mark each changed field with `--color-modified`, give it a reset button that shows the preset value, and offer one reset for all. Don't switch the preset to "Custom" and don't add "N changed" text to the dropdown.
+
+### Type and copy
+
+These came from a designer's review of the first build. Each one was called out as making the app look machine-made.
+
+- One typeface, Inter. No monospace anywhere. Numbers that change or line up in a column get `font-variant-numeric: tabular-nums` on the value. Don't set it on `body`: Inter's tabular figures also widen the hyphen in words like "Walk-back".
+- Sentence case everywhere. No `text-transform: uppercase` and no letter-spacing. Call signs and site names typed in capitals stay as typed. Ids from the planner ("mission-specialist") go through `words()` in `src/numbers.ts` before they reach the screen.
+- Sizes come from the scale in `src/tokens.css`: 12, 13, 15, 17, 22, 28, 40. No pixel sizes in component CSS. If two sizes differ by a pixel or two, use one.
+- Three weights: 400, 600 for small headers and names, 700 for titles.
+- Text greys must pass 4.5:1 on all three surfaces. `--color-text-dim` and `--color-text-muted` do. Don't lower text with `opacity`, except on disabled controls.
+- A value is `--color-text`. Only its label and unit are dim. Axis values and tick distances are values.
+- Cut text that repeats what the screen already shows. Out went the "Mission" label beside the mission name, the phase description under an open phase, and "Nothing to fix" on a clean review. An empty state for problems is no message at all.
+- Name an action by what it does. A button that flips between "Select" and "Deselect" looks the same in both states and reads as a status. Show the state as a state, a ticked box and a 2 px outline, and let the whole tile toggle it.
+- An icon alone needs a name. Rail tabs carry a text label. Other icon buttons get `data-tip`, which `src/components/Tips.tsx` shows at once on hover or keyboard focus. A native `title` is for a caveat on a value, where a one-second wait is fine. A chevron with no word beside it is not a label: the crew tile says "Details".
+- The typed value leads and its slider is a shortcut. Keep `--space-2` or more between a slider track and any link above it, so a drag doesn't land on the link.
+- Text and icons sit as far from the side of a box as from its top and bottom: `--space-3` in a 36 px control. This includes the chevron of a select and the unit in a number field. Style selects with `appearance: none`, since the native arrow hugs the edge.
+- Numbers side by side need a column each: fixed widths, right aligned, `--space-4` between.
 
 ### Color
 
@@ -113,14 +160,17 @@ Each color means one thing everywhere. If a color needs a legend to read, put th
 
 | Color | Meaning |
 | --- | --- |
-| `--color-accent` (red) | The primary action and the current selection. Never danger. |
+| `--color-accent` (magenta) | The primary action and the current selection. Never danger. Magenta is the active-route color on aircraft navigation displays. |
 | `--color-caution` (yellow) | Within 5° of the slope limit, or close to another limit |
-| `--color-hazard` (orange) | Over a limit. Any of it on the route makes the plan NO-GO. |
+| `--color-hazard` (red) | Over a limit. Any of it on the route makes the plan NO-GO. |
 | `--color-ok` (green) | GO, from real data only |
 | `--color-modified` (blue) | Changed from the selected preset |
 | `--color-route-*` | One per suggested route strategy, from deploy-v1. Detour and thermal look like caution and ok, so use them only for dashed candidate lines and their swatches, never on a number or a status. |
 
+- Red and yellow are the alert colors of NASA-STD-3001 Vol 2: red for the highest alert level [V2 10118], yellow for the second [V2 10119]. Use red for nothing else.
+- Color never carries an alert alone [V2 10045]. Over-limit values get a filled triangle, near-limit values an outline triangle, from the shared rule at the end of `src/styles.css`. Over-limit route stretches are wider, the profile hatches them, and the rail dot for a tab over a limit is a triangle.
 - Hazard colors go on the number, not on an outline around its box. Outlines added noise and nobody could say what they meant.
+- Every color on the map appears in a key beside it, in the same line style. A reviewer saw a solid red and a solid magenta line on the map and found neither in the route list.
 - New meanings get new tokens. Don't borrow a color that already means something else.
 
 ### Showing data
@@ -135,7 +185,9 @@ Each color means one thing everywhere. If a color needs a legend to read, put th
 - Dashes mean "not settled": candidate routes, legs while terrain loads, fine-terrain outlines, and the profile line where the terrain is coarse. Solid means measured and chosen. Don't use dashes for decoration.
 - Anything that changes with time is checked against the planned EVA window, from the Schedule start (UTC, empty means now) to the end of the route's time. A forecast says what it can't see: CME forecasts only cover CMEs already launched, so an EVA beyond their horizon is a caution, not a clear.
 - Don't invent numbers to fill a gap. When storm dose can't be estimated, the panel says the dose assumes a quiet sun.
-- Every failure says what to do next. Failed tiles and samples get Retry. A route blocked by the slope limit says which limit would work and has a button that applies it.
+- Every failure says what to do next. Failed tiles and samples get Retry. A route blocked by the slope limit says which limit would work and has a button that applies it. A failure also says what it costs in the user's words: "Map imagery missing in places", not "Some tiles failed".
+- No bare counters. "+4" next to the verdict meant nothing to a first-time reader. Write "4 more reasons" and make it open the list.
+- Two numbers for the same thing must agree, or one must say why it differs. A suggested route's slope comes from the search grid and the profile's from full terrain, so the tooltip says which is which.
 
 ### Comparing layouts
 
@@ -184,4 +236,4 @@ Skills live in `.agents/skills/`.
 
 ## Writing
 
-Apply `unslop` to all of it. In short: plain words, short sentences, sentence-case headings, no em dashes, no hype. UI copy is read by an astronaut in a suit, so labels are short and specific: "SLOPE 18°" beats "Moderate terrain difficulty".
+Apply `unslop` to all of it. In short: plain words, short sentences, sentence-case headings, no em dashes, no hype. UI copy is read by an astronaut in a suit, so labels are short and specific: "Slope 18°" beats "Moderate terrain difficulty".

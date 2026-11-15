@@ -1,4 +1,4 @@
-@import '../apps/web/src/styles/tokens.css';
+@import './tokens.css';
 
 :root {
   color-scheme: dark;
@@ -61,7 +61,6 @@ button {
 .topbar__title {
   font-size: var(--text-label);
   font-weight: 700;
-  letter-spacing: 0.18em;
 }
 
 .topbar__meta {
@@ -78,7 +77,7 @@ button {
 .topbar__item b {
   margin-left: 4px;
   color: var(--color-text);
-  font-weight: 500;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -217,14 +216,11 @@ button {
   color: var(--color-text-dim);
   font-size: var(--text-label);
   font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
 }
 
 .readout__value {
   font-size: var(--text-readout);
   font-family: var(--font-mono);
-  letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums;
   white-space: pre;
 }
@@ -277,7 +273,6 @@ button {
 .nav .nav__text {
   font-family: var(--font-mono);
   font-size: var(--text-label);
-  letter-spacing: var(--tracking-label);
 }
 
 .nav svg {
@@ -323,7 +318,6 @@ button {
   color: var(--color-text-muted);
   font-size: var(--text-button);
   font-weight: 700;
-  text-transform: uppercase;
   text-align: left;
   transition:
     background-color 0.15s,
@@ -369,8 +363,7 @@ button {
   flex-shrink: 0;
   border-left: 1px solid var(--color-line);
   color: var(--color-text-dim);
-  font-size: 14px;
-  letter-spacing: 0;
+  font-size: var(--text-data);
 }
 
 .nav-button[aria-pressed='true'] .nav-button__meta {
@@ -388,6 +381,7 @@ button {
 .statusbar {
   position: relative;
   z-index: 2000;
+  min-height: var(--statusbar-height);
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -401,6 +395,16 @@ button {
 
 .statusbar__state.is-error {
   color: var(--color-hazard);
+}
+
+.statusbar__retry {
+  margin-left: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .statusbar__attribution {
@@ -559,3 +563,27 @@ button {
     border-left: 1px solid var(--color-line);
   }
 }
+
+/* Names for icon-only buttons, from Tips.tsx. Left of the button by
+   default, as the camera rail sits on the right edge. */
+.tip {
+  position: fixed;
+  z-index: 50;
+  width: max-content;
+  max-width: 260px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-line-strong);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--text-data);
+  line-height: 1.35;
+  pointer-events: none;
+}
+.tip--left { translate: -100% -50%; }
+.tip--bottom { translate: -50% 0; }
+
+/* Alert values carry a shape as well as a color, since color alone may not
+   carry critical meaning (NASA-STD-3001 Vol 2, V2 10045). Filled triangle
+   for over a limit, outline for near one. */
+:is(.plan__box.is-hazard > output, .profile__stats dd.is-hazard, .routes span.is-hazard, .tools__row dd.is-hazard, .pointmenu__terrain span.is-hazard, .crew-needs span.is-hazard)::before { content: "▲\00a0"; }
+:is(.plan__box.is-caution > output, .profile__stats dd.is-caution, .routes span.is-caution, .tools__row dd.is-caution, .pointmenu__terrain span.is-caution, .crew-needs span.is-caution)::before { content: "△\00a0"; }

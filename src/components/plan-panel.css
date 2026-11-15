@@ -1,7 +1,7 @@
 /* Slicer settings panel. Icon rail, cards, category rows. */
 .plan {
   display: grid;
-  grid-template: minmax(0, 1fr) / 48px minmax(0, 1fr);
+  grid-template: minmax(0, 1fr) / 80px minmax(0, 1fr);
   min-height: 0;
   padding: 0;
   background: var(--color-surface);
@@ -32,15 +32,20 @@
   border-right: 1px solid var(--color-line);
   background: var(--color-bg);
 }
+/* Each tab says its name under its icon, so nobody has to hover to learn it. */
 .plan__rail button {
   display: grid;
   place-items: center;
-  height: 40px;
+  align-content: center;
+  gap: 2px;
+  height: 52px;
+  padding: 0;
   border: 1px solid transparent;
   background: transparent;
   color: var(--color-text-dim);
 }
 .plan__rail button:hover { color: var(--color-text); }
+.plan__rail-label { max-width: 100%; overflow: hidden; font-size: var(--text-min); line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .plan__rail button { position: relative; }
 .plan__rail button[aria-selected='true'] {
   border-color: var(--color-line-strong);
@@ -64,12 +69,13 @@
   border-bottom: 1px solid var(--color-line);
 }
 .plan__card--limits { flex: 1; min-height: 0; padding-bottom: 0; }
+.plan__card[hidden] { display: none; }
 .plan__card-head { display: flex; align-items: center; justify-content: space-between; }
 .plan__card-title {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 17px;
+  font-size: var(--text-heading);
   font-weight: 700;
 }
 
@@ -85,7 +91,17 @@
 .plan__select {
   min-width: 0;
   height: 36px;
-  padding: 0 var(--space-3);
+  padding: 0 var(--space-8) 0 var(--space-3);
+  appearance: none;
+  /* The chevron sits as far in from the right as the text does from the left. */
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--color-text-muted) 50%),
+    linear-gradient(135deg, var(--color-text-muted) 50%, transparent 50%);
+  background-position:
+    right 19px center,
+    right 14px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
   border: 1px solid var(--color-line-strong);
   border-radius: var(--radius);
   background: var(--color-bg);
@@ -100,7 +116,7 @@
   border-color: transparent;
   background: transparent;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--text-data);
   white-space: pre;
 }
 .plan__select--static.is-empty { color: var(--color-text-dim); }
@@ -121,7 +137,7 @@
   background: var(--color-accent-shade);
   color: var(--color-text);
 }
-.plan__placing { color: var(--color-text-muted); font-size: 13px; }
+.plan__placing { color: var(--color-text-muted); font-size: var(--text-data); }
 
 /* Advanced switch */
 .plan__switch {
@@ -173,7 +189,15 @@
   height: 6px;
   background: var(--color-caution);
 }
-.plan__flag.is-hazard { background: var(--color-hazard); }
+.plan__flag.is-hazard {
+  /* A triangle, so over-limit differs from near-limit by shape too. */
+  top: 4px;
+  right: 4px;
+  width: 9px;
+  height: 8px;
+  background: var(--color-hazard);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
 
 .plan__tab-title {
   display: flex;
@@ -183,9 +207,12 @@
   padding: 0;
   border: 0;
   background: transparent;
-  font-size: 17px;
+  font-size: var(--text-heading);
   font-weight: 700;
 }
+/* The tab's name leads. Groups under it are smaller and quieter, but still
+   above the row labels, and stand apart from the name. */
+.plan__scroll > .plan__tab-title { margin-bottom: var(--space-2) !important; }
 .plan__tab-title--link { width: 100%; margin-top: var(--space-4) !important; text-align: left; }
 .plan__tab-title--link:hover { color: var(--color-text-muted); }
 
@@ -197,8 +224,6 @@
   color: var(--color-text-muted);
   font-family: var(--font-mono);
   font-size: var(--text-label);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
   text-decoration: underline dotted var(--color-text-dim);
   text-underline-offset: 3px;
 }
@@ -221,8 +246,9 @@
   align-items: center;
   gap: var(--space-2);
   margin: 0 0 var(--space-1) 26px;
-  font-size: var(--text-body);
-  font-weight: 700;
+  color: var(--color-text-muted);
+  font-size: var(--text-data);
+  font-weight: 600;
 }
 .plan__cat-title::after {
   content: '';
@@ -290,14 +316,12 @@
   background: var(--color-surface-raised);
   color: var(--color-text);
   font-size: var(--text-label);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 .plan__box--action button[aria-pressed='true'] { border-color: var(--color-accent); background: var(--color-accent-shade); }
 .plan__box--action button:disabled { opacity: 0.4; cursor: default; }
-.plan__box--leg button { padding: 0 6px; letter-spacing: 0; color: var(--color-text-muted); }
+.plan__box--leg button { padding: 0 6px; color: var(--color-text-muted); }
 
-.plan__note { padding: var(--space-4) 0 0 26px; color: var(--color-text-dim); font-size: 13px; }
+.plan__note { padding: var(--space-4) 0 0 26px; color: var(--color-text-dim); font-size: var(--text-data); }
 
 /* Dock: verdict plus the two actions, like Slice plate and Send print. */
 .plan__dock {
@@ -319,9 +343,7 @@
 }
 .plan__verdict strong {
   flex: none;
-  font: 700 18px / 1.4 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font: 700 var(--text-heading) / 1.4 var(--font-mono);
 }
 .plan__verdict span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan__verdict.is-go { border-color: var(--color-ok); }
@@ -330,7 +352,15 @@
 .plan__verdict.is-caution strong { color: var(--color-caution); }
 .plan__verdict.is-no-go { border-color: var(--color-hazard); }
 .plan__verdict.is-no-go strong { color: var(--color-hazard); }
-.plan__more { flex: none; margin-left: auto; color: var(--color-text-dim); font-family: var(--font-mono); cursor: help; }
+.plan__verdict:has(.plan__reasons) { flex-wrap: wrap; }
+.plan__more { flex: none; margin-left: auto; padding: 0; border: 0; background: none; color: var(--color-text-muted); font-size: var(--text-data); text-decoration: underline dotted; text-underline-offset: 3px; }
+.plan__more:hover { color: var(--color-text); }
+/* The other reasons, worst first. A long list scrolls so the settings
+   above keep their room. Each carries the shape of its alert level. */
+.plan__reasons { flex-basis: 100%; display: grid; gap: var(--space-1); max-height: 124px; overflow-y: auto; padding: 0 0 var(--space-1) !important; list-style: none; color: var(--color-text-muted); font-size: var(--text-data); scrollbar-width: thin; scrollbar-color: var(--color-line-strong) transparent; }
+.plan__reasons li::before { display: inline-block; width: 1.4em; }
+.plan__reasons li.is-no-go::before { content: "▲"; color: var(--color-hazard); }
+.plan__reasons li.is-caution::before { content: "△"; color: var(--color-caution); }
 .plan__link {
   margin-left: auto;
   padding: 0 var(--space-2);
@@ -346,8 +376,8 @@
   color: var(--color-text-muted);
   font-size: var(--text-button) !important;
   font-weight: 700 !important;
-  text-transform: uppercase;
 }
+.plan__button--wide { grid-column: 1 / -1; }
 .plan__button:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-line-strong); }
 .plan__button:disabled { opacity: 0.4; cursor: default; }
 .plan__button--primary {
@@ -360,11 +390,14 @@
 
 @media (max-width: 900px) {
   .plan { grid-template-columns: 40px minmax(0, 1fr); }
+  /* No room for names in the narrow rail. The button's title still has it. */
+  .plan__rail-label { display: none; }
+  .plan__rail button { height: 40px; }
   .plan__row { grid-template-columns: minmax(0, 1fr) 130px; padding-left: 0; }
 }
 
 /* EVA start: a UTC date-time field with a reset to now. */
-.plan__box--when input { color-scheme: dark; font-size: 13px; }
+.plan__box--when input { color-scheme: dark; font-size: var(--text-data); }
 .plan__box--when button {
   flex: none;
   height: 22px;
@@ -375,8 +408,6 @@
   color: var(--color-text);
   font-family: var(--font-mono);
   font-size: var(--text-label);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 .plan__out { color: var(--color-text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan__out:hover { text-decoration: underline; }
@@ -397,7 +428,7 @@
   margin: var(--space-1) 0 0;
   color: var(--color-text-dim);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-min);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -416,7 +447,7 @@
   border: 0;
   background: transparent;
   color: var(--color-modified);
-  font-size: 14px;
+  font-size: var(--text-data);
   line-height: 1;
 }
 .plan__reset:hover { color: var(--color-text); }
@@ -428,8 +459,6 @@
   color: var(--color-modified);
   font-family: var(--font-mono);
   font-size: var(--text-label);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
 /* Leg rows carry distance, slope and a remove button. */

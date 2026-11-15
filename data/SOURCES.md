@@ -21,13 +21,24 @@ The Go proxy also rebuilds a truncated intermediate tile from its four children 
 
 - Source/service: https://astro.arcgis.com/arcgis/rest/services/OnMars/CTX/MapServer. This older Murray Lab CTX mosaic uses the same 512 px geographic grid, Mars radius and approximately 5 m/pixel level 12. It is not V01; its registration and brightness differ.
 - Mission/instrument and credit: MRO/CTX, NASA/JPL/MSSS/The Murray Lab, hosted by Esri. Retain attribution and consult the service's linked terms for reuse.
-- Fetch/cache implementation: the same proxy with `source=beta01`, separate from the default `source=v01`. Backup tiles use `data/cache/ctx-v01/beta01/`, capped at 512 entries, with a separate 32 MiB memory cache. The precache script fetches this version with `--backup`.
+- Fetch/cache implementation: the same proxy with `source=beta01`, separate from the default `source=v01`. Backup tiles use `data/cache/ctx-v01/beta01/`, capped at 512 entries, with a separate 32 MiB memory cache.
 - On a V01 tile failure, the client replaces the entire imagery layer with beta01. Switching individual tiles created visible joins between mosaics. The selection persists for the browser tab's session and appears in the footer. Failed backup tiles use Cesium's coarser imagery fallback and report a loading error.
-- Verification: the screenshot location at 11.250°N, 255.552°E rendered level-12 beta01 imagery. Backup tile `11/812/2926` also returned a truncated image, so this service is not a complete repair for the upstream data. The three-site backup precache run validated 990 of 1,018 imagery and terrain requests; 28 imagery requests failed validation.
+- Verification: the screenshot location at 11.250°N, 255.552°E rendered level-12 beta01 imagery. Backup tile `11/812/2926` also returned a truncated image, so this service is not a complete repair for the upstream data. A warm-up run over three landing sites validated 990 of 1,018 imagery and terrain requests; 28 imagery requests failed validation.
 
 The Vite dev and preview servers start a private Go API process and proxy requests to it. For a standalone build, run `bun run build` then `bun run start` from the repository root. A static-only host must route `/api/imagery/ctx-v01/*` and `/api/terrain/mars-v14/*` to the API; copying `dist/` alone does not provide the tile proxy.
 
-Viking stays below CTX and at the poles. CTX starts at terrain level 6. Missing imagery can fall back to Viking; CTX does not add elevation detail. Site prefetch requests one tile at a time after visible tiles settle and stops when the selected site changes.
+Viking stays below CTX and at the poles. CTX starts at terrain level 6. Missing imagery can fall back to Viking; CTX does not add elevation detail.
+
+## HiRISE orthomosaics at the rover sites
+
+- Mission and instrument: Mars Reconnaissance Orbiter, HiRISE. Mosaics published by NASA Mars Trek.
+- Layers: `curiosity_hirise_mosaic` (Gale), `JEZ_hirise_soc_006_orthoMosaic_25cm_Eqc_latTs0_lon0_first_dd` (Jezero), `spirit_hirise_mosaic` (Gusev), `opportunity_hirise_mosaic` (Meridiani). Footprints are in `src/data/imagery.js`.
+- Tile service: `https://trek.nasa.gov/tiles/Mars/EQ/{layer}/1.0.0/default/default028mm/{z}/{y}/{x}.png`, with each layer's `WMTSCapabilities.xml` beside it.
+- Resolution: 25 cm/pixel source. Trek serves 256 px tiles to level 16 at Gale (about 0.65 m/pixel) and level 17 elsewhere (about 0.33 m/pixel). The capabilities files, checked on 2026-11-15, list these as the deepest levels. `imagery.js` had listed 18 and 19, which return 404.
+- Coordinates: planetocentric latitude, east longitude -180..180, the same 2 by 1 geographic grid as Viking and CTX, rows increasing southward.
+- Terms/credit: NASA/JPL/University of Arizona, via NASA Mars Trek.
+- Fetch/cache implementation: `apps/api/internal/tiles/hirise.go`, which reuses the science tile handler. Requests go through `/api/imagery/hirise/{id}/{z}/{y}/{x}.png` and persist under `data/cache/hirise-v1/`.
+- Use: drawn above CTX only while street view is open, from terrain level 10. Outside the footprints, and where a mosaic has gaps, CTX shows through. Street view names the imagery source and terrain spacing at the camera.
 
 ## Mars Trek terrain
 
@@ -48,9 +59,11 @@ Rover paths use `src/components/route-overlay.ts` to project their coordinates o
 
 Run `bun run precache` to cache CTX V01 and terrain around Curiosity, Perseverance and Pathfinder. Run `bun run precache --backup` to also warm beta01. Pass site IDs to select others, for example `bun run precache spirit opportunity`. The script samples rover traverses, caches imagery through its native 5 m level and available terrain through level 14, and uses at most six concurrent requests. Existing tiles are validated and reused. It does not download the entire planet.
 
+## Camera and loading
+
 During camera movement, the globe temporarily uses a larger screen-space error tolerance to avoid loading fine tiles at every intermediate position. It returns to the original full-detail tolerance 150 ms after movement ends. Site framing uses loaded terrain, or an approximate datum height, so flights start without waiting for remote elevation sampling. That approximation changes only camera framing, not elevation readouts or terrain.
 
-The camera's minimum clearance depends on viewport height and field of view, allowing up to two screen pixels per CTX source pixel in a top-down view. This prevents extreme magnification of 5 m imagery at roughly 100 m altitude. Wheel, pinch, button, double-click and tilt controls share the limit. Ground-level detail requires a finer imagery source.
+The camera allows close inspection down to 40 m above displayed terrain, independent of viewport size. Wheel, pinch, button, double-click and tilt controls share this clearance limit. CTX remains 5 m/pixel when enlarged; closer zoom helps separate plan points but adds no terrain or imagery detail. Ground-level science and safe footing still require finer data.
 
 
 ## Historical science observations
@@ -246,6 +259,18 @@ Mars Trek's terrain tileset (`mars_v14`) only has deep levels where a high resol
 
 Where a fine model meets the global one, Trek left vertical walls (about 357 m around Curiosity). The renderer smooths them, but slopes sampled across a seam are not real. The coarse-terrain caution covers most of these crossings.
 
+## Mission dose rates
+
+The Go planner multiplies days by a dose rate per phase (`apps/api/internal/planner/rates.go`). All are dose equivalent per Earth day on a quiet sun. No data is fetched.
+
+| Phase | Rate | Source |
+| --- | --- | --- |
+| Transit | 1.84 mSv/day | Curiosity RAD in cruise, Zeitlin et al., Science 340, 1080 (2013) |
+| Mars surface | 0.67 mSv/day | Curiosity RAD at Gale, the same value as Curiosity RAD above |
+| Moon surface | 1.369 mSv/day | Chang'e 4 LND, Zhang et al., Science Advances 6, eaaz1334 (2020) |
+| Station | 0.5 mSv/day | Top of the 0.2 to 0.5 mSv/day ISS range, NASA NTRS 20250006168 |
+| Earth analog | 0.0066 mSv/day | 2.4 mSv/year world average background, UNSCEAR 2008 |
+
 ## Space weather
 
 `GET /api/spaceweather` (`apps/api/internal/env/spaceweather.go`) reads WSA-ENLIL model runs from [NASA DONKI](https://api.nasa.gov/) for the last 30 days and keeps arrivals forecast at Mars. Each CME keeps the arrival from its newest run. The server caches for an hour.
@@ -258,3 +283,13 @@ Where a fine model meets the global one, Trek left vertical walls (about 357 m a
 
 We do not estimate storm doses. The EVA dose stays the quiet-sun Curiosity RAD average, and the UI says so.
 
+
+## Yellowknife Bay example mission references
+
+The briefing in `apps/api/internal/planner/examples/yellowknife-science.json` records seven references and their limits. The packed `.mhr` preserves the same text. These are manually reviewed references, not new runtime layers; no image products are downloaded or bundled.
+
+- Curiosity / MAHLI: [View into John Klein Drill Hole in Martian Mudstone](https://science.nasa.gov/resource/view-into-john-klein-drill-hole-in-martian-mudstone/), published December 6, 2013, image acquired on sol 270, May 10, 2013. Ground truth for one drill target; no map resolution or coordinate error is supplied on the page. Credit NASA/JPL-Caltech/MSSS. Consult the source credit and NASA media-use guidance for reuse. No ingestion script; the briefing paraphrases the source and retains its URL.
+- Mars Odyssey / THEMIS: [Location of John Klein Drill Site](https://science.nasa.gov/resource/location-of-john-klein-drill-site/), March 12, 2013. Thermal inertia combined with topographic context; the page gives no numeric spatial resolution. Credit NASA/JPL-Caltech/ASU. Consult the source credit and NASA media-use guidance for reuse. No ingestion script; this is an external context map, not a sampled hazard raster.
+- Curiosity traverse: selected existing coordinates from `src/data/traverses/curiosity.json`, path indices 0, 6, 15, 28 and 30. The snapshot describes NASA's rover location feed but carries no per-point sols or position errors. The example calls these candidate stations and a fictional base; it does not identify exact drill holes or claim a current rover location. No new download or ingestion is performed.
+
+CTX, Mars Trek terrain and historical RAD context use the entries above. Life-support assumptions refer to NASA-STD-3001 Volume 2 Revision F and BVAD through the planner's existing resource model. None of these references establishes the proposed EVA's current safety.

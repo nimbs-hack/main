@@ -58,6 +58,12 @@ func validateSciencePNG(data []byte) error {
 // 2^z rows. Cached bytes are PNG, including the JPEG MOLA color source.
 // Flush must run after the server stops accepting requests.
 func RegisterScience(mux *http.ServeMux, cacheDir string, client *http.Client) func() {
+	return registerTrekTiles(mux, sciencePath, scienceSources, cacheDir, client)
+}
+
+// registerTrekTiles serves an allowlist of Trek EQ layers under path, with a
+// disk cache. Science layers and the HiRISE mosaics share it.
+func registerTrekTiles(mux *http.ServeMux, path string, sources map[string]scienceSource, cacheDir string, client *http.Client) func() {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -68,10 +74,10 @@ func RegisterScience(mux *http.ServeMux, cacheDir string, client *http.Client) f
 		return fmt.Errorf("science upstream redirect refused")
 	}
 	cache := NewCache(cacheDir, 2048, 32*1024*1024, validateSciencePNG)
-	mux.HandleFunc("GET "+sciencePath+"/{id}/{z}/{y}/{file}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+path+"/{id}/{z}/{y}/{file}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		id := r.PathValue("id")
-		source, ok := scienceSources[id]
+		source, ok := sources[id]
 		if !ok {
 			http.Error(w, "Unknown science layer", http.StatusNotFound)
 			return

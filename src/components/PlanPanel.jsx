@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { distance } from '../data/geo'
-import { PRESETS, formatDuration, isGenerated, presetFor, userWaypoints } from '../data/plan'
+import { DEFAULT_PRESET, PRESETS, SUIT, WALK_BACK_REFERENCE, formatDuration, isGenerated, presetFor, userWaypoints } from '../data/plan'
 import { slopeLevel } from '../data/route-profile'
 import { SITES } from '../data/sites'
 import { formatLatLon } from '../format'
@@ -35,6 +35,11 @@ import './plan-panel.css'
  *   onWhen(iso | null)
  *   onPlacing(mode), onSite(id), onRemoveWaypoint(index), onLimits(limits),
  *   onRetry(), onWalk(), onClear()
+ *   onAddToMission  adds this EVA to the mission. Null while there is no
+ *                   assessed route, undefined when no mission is open.
+ *   missionSites    content of an extra rail tab, the mission's sites and
+ *                   tasks. missionFlag puts a dot on its icon, and the tab
+ *                   opens when missionFocus, the selected site, changes.
  */
 
 const ICONS = {
@@ -42,8 +47,10 @@ const ICONS = {
   terrain: <path d="M3 19 9 9l4 6 3-4 5 8Z" />,
   time: <><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" /></>,
   range: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /></>,
+  suit: <path d="M3 12h4l2-5 4 10 2-5h6" />,
   dose: <><circle cx="12" cy="12" r="1.5" /><path d="M12 4a8 8 0 0 1 7 4l-5 3M5 8a8 8 0 0 1 7-4M5 8l5 3M12 20a8 8 0 0 1-7-4l5-3M19 16a8 8 0 0 1-7 4v-6" /></>,
   site: <path d="M12 21s-6-6-6-11a6 6 0 0 1 12 0c0 5-6 11-6 11ZM12 12a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />,
+  mission: <path d="M6 21V4m0 1h11l-2.5 4L17 13H6" />,
   limits: <path d="M5 4v16M12 4v16M19 4v16M3 8h4M10 15h4M17 10h4" />,
   pick: <path d="M12 3v4M12 17v4M3 12h4M17 12h4M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z" />,
   search: <><circle cx="11" cy="11" r="6" /><path d="m20 20-4.5-4.5" /></>,
@@ -62,7 +69,9 @@ const FIELDS = {
   pace: { unit: 'km/h', step: 0.1, min: 1, max: 6, toView: (v) => +(v * 3.6).toFixed(1), fromView: (v) => v / 3.6 },
   eva: { unit: 'h', step: 0.5, min: 0.5, max: 10, toView: (v) => +(v / 3600).toFixed(2), fromView: (v) => v * 3600 },
   work: { unit: 'min', step: 5, min: 0, max: 240, toView: (v) => Math.round(v / 60), fromView: (v) => v * 60 },
-  range: { unit: 'km', step: 0.25, min: 0.25, max: 20, toView: (v) => +(v / 1000).toFixed(2), fromView: (v) => v * 1000 },
+  range: { unit: 'km', step: 0.25, min: 0.25, max: WALK_BACK_REFERENCE / 1000, toView: (v) => +(v / 1000).toFixed(2), fromView: (v) => v * 1000 },
+  climb: { unit: 'm/h', step: 10, min: 50, max: 3000, toView: (v) => Math.round(v * 3600), fromView: (v) => v / 3600 },
+  descent: { unit: 'm/h', step: 10, min: 50, max: 3000, toView: (v) => Math.round(v * 3600), fromView: (v) => v / 3600 },
 }
 
 // Same value within float noise from unit conversion.
@@ -237,9 +246,9 @@ const BASE_KEY = 'nimbs.plan-b.preset'
 
 function loadBase() {
   try {
-    return localStorage.getItem(BASE_KEY) ?? 'nominal'
+    return localStorage.getItem(BASE_KEY) ?? DEFAULT_PRESET
   } catch {
-    return 'nominal'
+    return DEFAULT_PRESET
   }
 }
 
@@ -256,9 +265,11 @@ const CATS = [
   { id: 'terrain', icon: 'terrain', title: 'Terrain' },
   { id: 'time', icon: 'time', title: 'Time' },
   { id: 'range', icon: 'range', title: 'Walk-back' },
+  { id: 'suit', icon: 'suit', title: 'Suit load' },
   { id: 'dose', icon: 'dose', title: 'Radiation' },
   { id: 'weather', icon: 'weather', title: 'Weather' },
 ]
+const MISSION_CAT = { id: 'mission', icon: 'mission', title: 'Sites' }
 
 // A reading older than this is flagged on the rail. The rovers report about
 // once a sol, so a month without one means the feed stopped.
@@ -300,17 +311,25 @@ function stopIndex(plan, i) {
 
 export default function PlanPanel({
   plan, limits, assessment, status, placing, dose, weather, space, when, terrainDetail,
-  onWhen, onPlacing, onSite, onRemoveWaypoint, onLimits, onRetry, onWalk, onClear,
+  onWhen, onPlacing, onSite, onRemoveWaypoint, onLimits, onRetry, onWalk, onClear, onAddToMission,
+  missionSites, missionFlag = null, missionFocus = -1,
 }) {
   const searchId = useId()
   const [advanced, setAdvanced] = useState(false)
   const [searching, setSearching] = useState(false)
   const [query, setQuery] = useState('')
   const [active, setActive] = useState('route')
+  // The verdict shows its first reason. The rest open under it on request.
+  const [allReasons, setAllReasons] = useState(false)
+  const cats = missionSites ? [MISSION_CAT, ...CATS] : CATS
+  // Picking a mission site, on the map or by adding one, opens its tab.
+  useEffect(() => {
+    if (missionSites && missionFocus >= 0) setActive('mission')
+  }, [missionFocus])
   const rail = useRef(null)
   // The preset stays chosen while you edit. Edits show as changes from it.
   const [baseId, setBaseId] = useState(() => presetFor(limits)?.id ?? loadBase())
-  const base = PRESETS.find((p) => p.id === baseId) ?? PRESETS[1]
+  const base = PRESETS.find((p) => p.id === baseId) ?? PRESETS.find((p) => p.id === DEFAULT_PRESET)
   const changes = Object.keys(base.limits).filter((key) => !same(limits[key], base.limits[key]))
   // Follow preset matches when limits change from the map controls.
   const exact = presetFor(limits)?.id
@@ -330,8 +349,8 @@ export default function PlanPanel({
     const step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0
     if (!step) return
     event.preventDefault()
-    const index = (CATS.findIndex((cat) => cat.id === active) + step + CATS.length) % CATS.length
-    setActive(CATS[index].id)
+    const index = (cats.findIndex((cat) => cat.id === active) + step + cats.length) % cats.length
+    setActive(cats[index].id)
     rail.current?.querySelectorAll('button')[index]?.focus()
   }
 
@@ -350,8 +369,8 @@ export default function PlanPanel({
           </button>
         </span>
       ) },
-      { label: 'Distance one way', group: 'Points', basic: true, node: <Value unit={a && a.distance >= 1000 ? 'km' : 'm'}>{a ? (a.distance >= 1000 ? (a.distance / 1000).toFixed(2) : Math.round(a.distance)) : pending}</Value> },
-      { label: 'Straight line', group: 'Points', basic: false, node: <Value unit={ready && distance(plan.start, plan.target) >= 1000 ? 'km' : 'm'}>{!ready ? '—' : distance(plan.start, plan.target) >= 1000 ? (distance(plan.start, plan.target) / 1000).toFixed(2) : Math.round(distance(plan.start, plan.target))}</Value> },
+      { label: 'Distance one way', group: 'Points', basic: true, node: <Value unit={a ? (a.distance >= 1000 ? 'km' : 'm') : undefined}>{a ? (a.distance >= 1000 ? (a.distance / 1000).toFixed(2) : Math.round(a.distance)) : pending}</Value> },
+      { label: 'Straight line', group: 'Points', basic: false, node: <Value unit={ready ? (distance(plan.start, plan.target) >= 1000 ? 'km' : 'm') : undefined}>{!ready ? '—' : distance(plan.start, plan.target) >= 1000 ? (distance(plan.start, plan.target) / 1000).toFixed(2) : Math.round(distance(plan.start, plan.target))}</Value> },
       ...(a ? a.legs.map((leg, i) => ({
         label: `Leg ${leg.index}`,
         group: 'Legs',
@@ -390,17 +409,27 @@ export default function PlanPanel({
           {when ? <button type="button" onClick={() => onWhen(null)} title="Start now">Now</button> : <span className="plan__unit">UTC</span>}
         </span>
       ) },
-      { label: 'EVA end', group: 'Schedule', basic: true, hint: 'Start plus the route time, or the whole budget before there is a route.', node: <Value>{space ? formatWhen(new Date(space.end).toISOString()) : '—'}</Value> },
+      { label: 'EVA end', group: 'Schedule', basic: true, wide: true, hint: 'Start plus the route time, or the whole budget before there is a route.', node: <Value unit={space ? 'UTC' : undefined}>{space ? formatWhen(new Date(space.end).toISOString()).replace(' UTC', '') : '—'}</Value> },
       { label: 'EVA budget', group: 'Budget', basic: true, node: field('eva', 'EVA budget') },
       { label: 'Time at target', group: 'Budget', basic: true, node: field('work', 'Time at target') },
-      { label: 'Flat pace', group: 'Budget', basic: false, hint: "Tobler's hiking function, scaled to this pace", node: field('pace', 'Flat pace') },
+      { label: 'Flat speed', group: 'Speed', basic: true, hint: 'Over level ground', node: field('pace', 'Flat speed') },
+      { label: 'Climb rate', group: 'Speed', basic: false, hint: 'Height gained per hour, added to the time for the distance', node: field('climb', 'Climb rate') },
+      { label: 'Descent rate', group: 'Speed', basic: false, hint: 'Height lost per hour, added to the time for the distance', node: field('descent', 'Descent rate') },
       { label: 'Walk out', group: 'This route', basic: false, node: <Value unit="min">{a ? minutes(a.timeOut) : pending}</Value> },
       { label: 'Walk back', group: 'This route', basic: false, node: <Value unit="min">{a ? minutes(a.timeBack) : pending}</Value> },
       { label: 'EVA total', group: 'This route', basic: true, node: <Value level={a && a.total > limits.eva ? 'hazard' : null}>{a ? formatDuration(a.total) : pending}</Value> },
     ],
     range: [
-      { label: 'Walk-back limit', group: 'Limit', basic: true, node: field('range', 'Walk-back limit') },
-      { label: 'Max from start', group: 'This route', basic: true, node: <Value unit="km" level={a && a.maxFromStart > limits.range ? 'hazard' : null}>{a ? (a.maxFromStart / 1000).toFixed(2) : pending}</Value> },
+      { label: 'Walk-back limit', group: 'Limit', basic: true, hint: `NASA sizes suit water for a ${WALK_BACK_REFERENCE / 1000} km walk back after a rover failure (NASA-STD-3001 Vol 2, V2 11030), so the limit stops there.`, node: field('range', 'Walk-back limit') },
+      { label: 'Walk back', group: 'This route', basic: true, hint: 'Along the route from the target, the farthest point', node: <Value unit="km" level={a && a.walkBack > limits.range ? 'hazard' : null}>{a ? (a.walkBack / 1000).toFixed(2) : pending}</Value> },
+      { label: 'Max from start', group: 'This route', basic: false, hint: 'Straight line', node: <Value unit="km">{a ? (a.maxFromStart / 1000).toFixed(2) : pending}</Value> },
+    ],
+    suit: [
+      { label: 'Peak rate', group: 'Metabolic, estimated', basic: true, hint: `Apollo EVA average of ${Math.round(SUIT.baseW)} W plus lifting ${SUIT.massKg} kg of crew and suit up each climb. Estimated, not measured. Over ${Math.round(SUIT.limitW)} W is past what NASA sizes suit cooling for.`, node: <Value unit="W" level={a && a.suit.peakW > SUIT.limitW ? 'caution' : null}>{a ? Math.round(a.suit.peakW) : pending}</Value> },
+      { label: 'Average rate', group: 'Metabolic, estimated', basic: true, node: <Value unit="W">{a ? Math.round(a.suit.averageW) : pending}</Value> },
+      { label: 'Energy', group: 'Metabolic, estimated', basic: false, hint: 'Replace with food after the EVA (NASA-STD-3001 V2 7004)', node: <Value unit="kcal">{a ? Math.round(a.suit.energyJ / 4184) : pending}</Value> },
+      { label: 'Oxygen', group: 'Consumables', basic: true, hint: 'Breathed, from the energy estimate, plus suit loss. BVAD Tables 3-33 and 4-75.', node: <Value unit="kg">{a ? a.suit.oxygenKg.toFixed(2) : pending}</Value> },
+      { label: 'Water', group: 'Consumables', basic: true, hint: `Drinking ${SUIT.drinkKgPerHour * 1000} mL/h (V2 11030) plus suit cooling ${SUIT.coolingKgPerHour * 1000} mL/h (BVAD Table 4-75)`, node: <Value unit="L">{a ? a.suit.waterKg.toFixed(1) : pending}</Value> },
     ],
     weather: weatherRows(weather),
     dose: [
@@ -408,6 +437,8 @@ export default function PlanPanel({
       { label: 'Dose rate', group: 'Reference', basic: false, hint: dose ? `${dose.site} RAD mean, ${dose.when}` : undefined, node: <Value unit="mSv/day">{dose ? (dose.measurement.value * 1000).toFixed(2) : '—'}</Value> },
       { label: 'EVA dose', group: 'This route', basic: true, hint: dose ? `${dose.site} RAD mean, ${dose.when}. Assumes a quiet sun; a solar particle event can raise it many times over.` : undefined, node: <Value unit="mSv">{a?.dose != null ? (a.dose * 1000).toFixed(3) : pending}</Value> },
     ],
+    // The mission tab holds a list, not setting rows.
+    mission: [],
   }
 
   const visible = (row) => (query ? match(row.label) : advanced || row.basic)
@@ -419,24 +450,27 @@ export default function PlanPanel({
     route: null,
     terrain: !a ? null : sum('over') > 0 ? 'hazard' : sum('caution') > 0 || sum('unknown') > 0 || sum('coarse') > 0 ? 'caution' : null,
     time: !a ? null : a.total > limits.eva ? 'hazard' : a.total > limits.eva * 0.85 ? 'caution' : null,
-    range: a && a.maxFromStart > limits.range ? 'hazard' : null,
+    range: a && a.walkBack > limits.range ? 'hazard' : null,
+    suit: a && a.suit.peakW > SUIT.limitW ? 'caution' : null,
     dose: space?.check?.reasons.some((r) => r.level === 'no-go') ? 'hazard' : space?.check?.reasons.length ? 'caution' : null,
     weather: weatherAge !== null && weatherAge > STALE_DAYS ? 'caution' : null,
+    mission: missionFlag,
   }
 
   // One tab, or every tab's matches while searching.
   const tabs = query ? CATS : CATS.filter((cat) => cat.id === active)
+  const showMission = active === 'mission' && !query
   const panel = tabs.map((cat) => {
     const shown = rows[cat.id].filter(visible)
     const groups = [...new Set(shown.map((row) => row.group))]
     return { cat, groups: groups.map((group) => ({ group, rows: shown.filter((row) => row.group === group) })) }
   }).filter((tab) => tab.groups.length)
-  const current = CATS.find((cat) => cat.id === active)
+  const current = cats.find((cat) => cat.id === active)
 
   return (
     <aside className="plan" aria-label="EVA plan">
       <div className="plan__rail" role="tablist" aria-label="Settings" aria-orientation="vertical" ref={rail} onKeyDown={onRailKey}>
-        {CATS.map((cat) => (
+        {cats.map((cat) => (
           <button
             key={cat.id}
             type="button"
@@ -450,6 +484,7 @@ export default function PlanPanel({
             title={cat.title}
           >
             <Icon name={cat.icon} />
+            <span className="plan__rail-label" aria-hidden="true">{cat.title}</span>
             {flags[cat.id] && <span className={`plan__flag is-${flags[cat.id]}`} aria-hidden="true" />}
           </button>
         ))}
@@ -458,7 +493,15 @@ export default function PlanPanel({
       <div className="plan__main">
         <SiteCard plan={plan} placing={placing} onPlacing={onPlacing} onSite={onSite} />
 
-        <section className="plan__card plan__card--limits" aria-label="Limits">
+        {showMission && (
+          <section className="plan__card plan__card--limits" aria-label="Mission sites">
+            <div className="plan__scroll" id="plan-panel" role="tabpanel" aria-labelledby="plan-tab-mission">
+              <h3 className="plan__tab-title"><Icon name="mission" />Sites</h3>
+              {missionSites}
+            </div>
+          </section>
+        )}
+        <section className="plan__card plan__card--limits" aria-label="Limits" hidden={showMission}>
           <div className="plan__card-head">
             <h2 className="plan__card-title"><Icon name="limits" />Limits</h2>
             <label className="plan__switch">
@@ -498,14 +541,14 @@ export default function PlanPanel({
             <input id={searchId} className="plan__search" type="search" placeholder="Find a setting" value={query} autoFocus onChange={(event) => setQuery(event.target.value)} />
           )}
 
-          <div className="plan__scroll" id="plan-panel" role="tabpanel" aria-labelledby={query ? undefined : `plan-tab-${active}`} aria-label={query ? 'Search results' : undefined}>
+          <div className="plan__scroll" id={showMission ? undefined : 'plan-panel'} role="tabpanel" aria-labelledby={query ? undefined : `plan-tab-${active}`} aria-label={query ? 'Search results' : undefined}>
             {!query && (
               <h3 className="plan__tab-title"><Icon name={current.icon} />{current.title}</h3>
             )}
             {panel.map(({ cat, groups }) => (
               <div key={cat.id}>
                 {query && (
-                  <button type="button" className="plan__tab-title plan__tab-title--link" onClick={() => { setActive(cat.id); setQuery('') }}>
+                  <button   type="button" className="plan__tab-title plan__tab-title--link" onClick={() => { setActive(cat.id); setQuery('') }}>
                     <Icon name={cat.icon} />{cat.title}
                   </button>
                 )}
@@ -538,7 +581,16 @@ export default function PlanPanel({
             <div className={`plan__verdict is-${a.verdict}`} role="status">
               <strong>{a.verdict === 'no-go' ? 'No-go' : a.verdict === 'go' ? 'Go' : 'Caution'}</strong>
               <span>{a.reasons[0]?.text ?? `${formatDuration(a.total)} of ${formatDuration(limits.eva)}`}</span>
-              {a.reasons.length > 1 && <span className="plan__more" title={a.reasons.slice(1).map((r) => r.text).join('\n')}>+{a.reasons.length - 1}</span>}
+              {a.reasons.length > 1 && (
+                <button type="button" className="plan__more" aria-expanded={allReasons} onClick={() => setAllReasons(!allReasons)}>
+                  {allReasons ? 'Fewer' : `${a.reasons.length - 1} more ${a.reasons.length === 2 ? 'reason' : 'reasons'}`}
+                </button>
+              )}
+              {allReasons && a.reasons.length > 1 && (
+                <ul className="plan__reasons">
+                  {a.reasons.slice(1).map((r) => <li key={r.text} className={`is-${r.level}`}>{r.text}</li>)}
+                </ul>
+              )}
             </div>
           ) : (
             <div className="plan__verdict">
@@ -548,6 +600,17 @@ export default function PlanPanel({
           <div className="plan__actions">
             <button type="button" className="plan__button" onClick={onClear} disabled={!plan.start}>Clear</button>
             <button type="button" className="plan__button plan__button--primary" onClick={onWalk} disabled={!a}>Walk it</button>
+            {onAddToMission !== undefined && (
+              <button
+                type="button"
+                className="plan__button plan__button--wide"
+                onClick={onAddToMission ?? undefined}
+                disabled={!onAddToMission}
+                title="Adds a site at the target with one EVA task as long as this EVA"
+              >
+                Add EVA to mission
+              </button>
+            )}
           </div>
         </footer>
       </div>

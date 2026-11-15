@@ -3,11 +3,14 @@ import type { LatLon } from './geo'
 import { slopeLevel } from './route-profile'
 import { COARSE_DETAIL, detailLabel } from './terrain-detail'
 import type { ProfileSample } from './route-profile'
+import { SLOPE_BASELINE } from './terrain-sample'
 
 // An EVA plan: walk from start through the waypoints to the target, work
 // there, then walk the same path back. Coordinates are planetocentric
 // latitude and east longitude, -180 to 180, as in src/data/geo.ts.
 export type Plan = {
+  // Optional UTC start from the Schedule tab.
+  when?: string | null
   start: LatLon | null
   // Where the start came from, like "Curiosity · sol 5073". Null once moved.
   startName?: string | null
@@ -23,10 +26,14 @@ export type Plan = {
   route?: string | null
 }
 
-// SI units: degrees for slope, m/s for pace, seconds for time, meters for range.
+// SI units: degrees for slope, m/s for the three speeds, seconds for time,
+// meters for range. `pace` is speed over flat ground. `climb` and `descent`
+// are vertical rates, meters of height per second.
 export type Limits = {
   slope: number
   pace: number
+  climb: number
+  descent: number
   eva: number
   work: number
   range: number
@@ -34,16 +41,34 @@ export type Limits = {
 
 export const EMPTY_PLAN: Plan = { start: null, target: null, waypoints: [] }
 
+const perHour = (meters: number) => meters / 3600
+
+// NASA-STD-3001 Vol 2 [V2 11030] rationale: suit water sized for "a 10-km
+// walk-back in case of rover failure", from the Apollo Medical Summit. No
+// preset may allow more.
+export const WALK_BACK_REFERENCE = 10_000
+
 // Planning assumptions, not suit certifications. No Mars suit limits are
-// published. Slope limits follow lunar traverse studies. Pace is flat-ground
-// walking speed in a pressurized suit. Range is the walk-back radius.
+// published.
+//
+// Human and Rover are the two traverse presets of the algorithms branch
+// (TRAVERSE_PRESETS in packages/shared/src/types.ts): slope limit, flat,
+// climb and descent speed, and longest EVA. Their work time and walk-back
+// range are ASSUMED here, since that branch has neither.
+//
+// The other three came with the route planner. Their slope limits follow
+// lunar traverse studies, and they use the algorithms branch's default
+// climb and descent rates.
 export const PRESETS: { id: string, name: string, limits: Limits }[] = [
-  { id: 'conservative', name: 'Conservative', limits: { slope: 15, pace: 0.7, eva: 3 * 3600, work: 45 * 60, range: 1500 } },
-  { id: 'nominal', name: 'Nominal', limits: { slope: 20, pace: 0.85, eva: 4 * 3600, work: 60 * 60, range: 3000 } },
-  { id: 'extended', name: 'Extended', limits: { slope: 25, pace: 1, eva: 6 * 3600, work: 90 * 60, range: 5000 } },
+  { id: 'human', name: 'Human, EVA suit', limits: { slope: 7, pace: perHour(2500), climb: perHour(350), descent: perHour(800), eva: 4 * 3600, work: 60 * 60, range: 3000 } },
+  { id: 'rover', name: 'Rover, pressurized', limits: { slope: 15, pace: perHour(5000), climb: perHour(700), descent: perHour(1200), eva: 8 * 3600, work: 60 * 60, range: WALK_BACK_REFERENCE } },
+  { id: 'conservative', name: 'Conservative', limits: { slope: 15, pace: 0.7, climb: perHour(350), descent: perHour(800), eva: 3 * 3600, work: 45 * 60, range: 1500 } },
+  { id: 'nominal', name: 'Nominal', limits: { slope: 20, pace: 0.85, climb: perHour(350), descent: perHour(800), eva: 4 * 3600, work: 60 * 60, range: 3000 } },
+  { id: 'extended', name: 'Extended', limits: { slope: 25, pace: 1, climb: perHour(350), descent: perHour(800), eva: 6 * 3600, work: 90 * 60, range: 5000 } },
 ]
 
-export const DEFAULT_LIMITS = PRESETS[1].limits
+export const DEFAULT_PRESET = 'nominal'
+export const DEFAULT_LIMITS = PRESETS.find((preset) => preset.id === DEFAULT_PRESET)!.limits
 
 export function presetFor(limits: Limits) {
   return PRESETS.find((preset) => (Object.keys(limits) as (keyof Limits)[]).every((key) => preset.limits[key] === limits[key])) ?? null
@@ -111,15 +136,17 @@ export function removeWaypoint(input: Plan, index: number): Plan {
   return { ...plan, waypoints: plan.waypoints.filter((_, i) => i !== index) }
 }
 
-// Walking speed on a grade (rise over run, signed), scaled from Tobler's
-// hiking function so `pace` is the flat-ground speed. Downhill at about 3%
-// is fastest. Earth gait in a suit, so treat it as an estimate.
-export function walkSpeed(grade: number, pace: number) {
-  return pace * Math.exp(-3.5 * Math.abs(grade + 0.05)) / Math.exp(-3.5 * 0.05)
+// Seconds to cover `run` meters of ground while going up or down by `rise`
+// meters. The model of the algorithms branch (evaluateEvaWeather in
+// apps/api/src/weather/generator.ts): the distance at the flat speed, plus
+// the height gained at the climb rate, plus the height lost at the descent
+// rate.
+export function stepTime(run: number, rise: number, limits: Limits) {
+  return run / limits.pace + Math.max(0, rise) / limits.climb + Math.max(0, -rise) / limits.descent
 }
 
-// Seconds to walk the samples in order, or in reverse for the way back.
-export function walkTime(samples: ProfileSample[], pace: number, reverse = false) {
+// Seconds to travel the samples in order, or in reverse for the way back.
+export function traverseTime(samples: ProfileSample[], limits: Limits, reverse = false) {
   let total = 0
   for (let i = 1; i < samples.length; i++) {
     const a = samples[i - 1]
@@ -127,7 +154,7 @@ export function walkTime(samples: ProfileSample[], pace: number, reverse = false
     const run = b.d - a.d
     if (run <= 0) continue
     const rise = a.elevation !== null && b.elevation !== null ? b.elevation - a.elevation : 0
-    total += run / walkSpeed((reverse ? -rise : rise) / run, pace)
+    total += stepTime(run, reverse ? -rise : rise, limits)
   }
   return total
 }
@@ -148,11 +175,14 @@ export type Leg = {
 }
 
 // Per-leg slope stats. Leg i runs from vertex i to vertex i + 1 of the path.
-export function legStats(samples: ProfileSample[], path: LatLon[], limit: number): Leg[] {
-  const along = cumulative(path)
+// With `stops`, the positions in `path` where legs end, a leg runs from one
+// stop to the next and the vertices between them are only turns in it.
+export function legStats(samples: ProfileSample[], path: LatLon[], limit: number, stops?: number[]): Leg[] {
+  const every = cumulative(path)
+  const along = stops ? stops.map((index) => every[index]) : every
   const total = samples.at(-1)?.d ?? 0
   // Samples come from a resampled path. Scale vertex distances to match.
-  const scale = along.at(-1) ? total / along.at(-1)! : 1
+  const scale = every.at(-1) ? total / every.at(-1)! : 1
   const legs: Leg[] = along.slice(0, -1).map((from, i) => ({
     index: i + 1,
     from: from * scale,
@@ -197,7 +227,11 @@ export type Assessment = {
   total: number
   maxSlope: number | null
   maxFromStart: number
+  // Meters walked home from the farthest point, along the route, not in a
+  // straight line. The walk-back limit applies to this.
+  walkBack: number
   dose: number | null
+  suit: SuitLoad
 }
 
 export function formatDuration(seconds: number) {
@@ -205,6 +239,80 @@ export function formatDuration(seconds: number) {
   if (minutes < 60) return `${minutes} min`
   const m = minutes % 60
   return `${Math.floor(minutes / 60)} h${m ? ` ${String(m).padStart(2, '0')} min` : ''}`
+}
+
+// ESTIMATED suit load, from [V2 11037] and [V2 11038] of NASA-STD-3001 Vol 2:
+// the system has to work out and show the suited crew's metabolic rate. We
+// have no suit telemetry, so this is a planning model, not a measurement.
+//
+// Rate = a flat walking rate plus the work of lifting crew and suit up the
+// climbs. The flat rate is the Apollo lunar EVA average, 234 kcal/h (Waligora
+// and Horrigan, NASA TN D-7883, via NASA TM 1991). Lifting work follows Mars
+// gravity and a muscle efficiency of 25%. Mass is ASSUMED: 80 kg crew plus
+// 90 kg suit and pack, about an Apollo A7LB with its PLSS.
+export const SUIT = {
+  baseW: (234 * 4184) / 3600,
+  massKg: 170,
+  gravity: 3.711,
+  efficiency: 0.25,
+  // Top of the nominal suited range NASA-STD-3001 sizes heat rejection for,
+  // 2220 kJ/h ([V2 11011] rationale).
+  limitW: 2_220_000 / 3600,
+  // BVAD (NASA/TP-2015-218570) Table 3-33 ratio of oxygen to food energy,
+  // and Table 4-75 suit oxygen loss and cooling water per EVA hour.
+  oxygenKgPerJ: 0.816 / 12.59e6,
+  suitOxygenKgPerHour: 0.092,
+  coolingKgPerHour: 0.625,
+  // [V2 11030]: 240 mL of drinking water per EVA hour.
+  drinkKgPerHour: 0.24,
+}
+
+export type SuitLoad = {
+  // Watts. Average over the whole EVA, and the highest over one step.
+  averageW: number
+  peakW: number
+  // Leg with the highest rate, counted on the way out.
+  peakLeg: number | null
+  energyJ: number
+  oxygenKg: number
+  waterKg: number
+}
+
+// Rate while climbing `rise` meters during `seconds`.
+function stepRate(rise: number, seconds: number) {
+  if (seconds <= 0) return SUIT.baseW
+  return SUIT.baseW + (SUIT.massKg * SUIT.gravity * Math.max(0, rise)) / (SUIT.efficiency * seconds)
+}
+
+export function suitLoad(samples: ProfileSample[], limits: Limits, total: number, legs: Leg[] = []): SuitLoad {
+  let climbed = 0
+  let peakW = total > 0 ? SUIT.baseW : 0
+  let peakAt = -1
+  for (let i = 1; i < samples.length; i++) {
+    const a = samples[i - 1]
+    const b = samples[i]
+    const run = b.d - a.d
+    if (run <= 0 || a.elevation === null || b.elevation === null) continue
+    const rise = b.elevation - a.elevation
+    // Both directions: what is a descent out is a climb back.
+    climbed += Math.abs(rise)
+    const rate = stepRate(Math.abs(rise), stepTime(run, Math.abs(rise), limits))
+    if (rate > peakW) {
+      peakW = rate
+      peakAt = b.d
+    }
+  }
+  const energyJ = SUIT.baseW * total + (SUIT.massKg * SUIT.gravity * climbed) / SUIT.efficiency
+  const hours = total / 3600
+  const peakLeg = peakAt < 0 ? null : legs.find((leg) => peakAt > leg.from && peakAt <= leg.to)?.index ?? null
+  return {
+    averageW: total > 0 ? energyJ / total : 0,
+    peakW,
+    peakLeg,
+    energyJ,
+    oxygenKg: energyJ * SUIT.oxygenKgPerJ + SUIT.suitOxygenKgPerHour * hours,
+    waterKg: (SUIT.drinkKgPerHour + SUIT.coolingKgPerHour) * hours,
+  }
 }
 
 function meters(value: number) {
@@ -215,13 +323,16 @@ function meters(value: number) {
  * Go or no-go for walking the samples out and back. `doseRate` is in Sv/day
  * and is optional, since only one site has a measured value.
  */
-export function assess(samples: ProfileSample[], path: LatLon[], limits: Limits, doseRate: number | null = null): Assessment {
-  const legs = legStats(samples, path, limits.slope)
-  const timeOut = walkTime(samples, limits.pace)
-  const timeBack = walkTime(samples, limits.pace, true)
+export function assess(samples: ProfileSample[], path: LatLon[], limits: Limits, doseRate: number | null = null, stops?: number[]): Assessment {
+  const legs = legStats(samples, path, limits.slope, stops)
+  const timeOut = traverseTime(samples, limits)
+  const timeBack = traverseTime(samples, limits, true)
   const total = timeOut + limits.work + timeBack
   const start = samples[0]?.point
   const maxFromStart = start ? Math.max(0, ...samples.map((s) => distance(start, s.point))) : 0
+  // The route comes back the way it went, so the farthest walk home is the
+  // whole route from the target.
+  const walkBack = samples.at(-1)?.d ?? 0
   const slopes = legs.map((leg) => leg.maxSlope).filter((s): s is number => s !== null)
   const reasons: Reason[] = []
 
@@ -231,8 +342,14 @@ export function assess(samples: ProfileSample[], path: LatLon[], limits: Limits,
   if (total > limits.eva) {
     reasons.push({ level: 'no-go', text: `EVA ${formatDuration(total)}, budget ${formatDuration(limits.eva)}` })
   }
-  if (maxFromStart > limits.range) {
-    reasons.push({ level: 'no-go', text: `${meters(maxFromStart)} from start, walk-back limit ${meters(limits.range)}` })
+  if (walkBack > limits.range) {
+    reasons.push({ level: 'no-go', text: `${meters(walkBack)} walk back, limit ${meters(limits.range)}` })
+  }
+  // Each sample measures slope over a short baseline. Farther apart than
+  // that, the ground between two samples is not measured at all.
+  const spacing = samples.length > 1 ? samples[1].d - samples[0].d : 0
+  if (spacing > 2 * SLOPE_BASELINE) {
+    reasons.push({ level: 'caution', text: `Slope checked every ${meters(spacing)}. Ground between is unknown` })
   }
   for (const leg of legs) {
     if (leg.over === 0 && leg.caution > 0) reasons.push({ level: 'caution', text: `Leg ${leg.index}: ${meters(leg.caution)} within 5° of limit` })
@@ -243,6 +360,13 @@ export function assess(samples: ProfileSample[], path: LatLon[], limits: Limits,
   }
   if (total <= limits.eva && total > limits.eva * 0.85) {
     reasons.push({ level: 'caution', text: `EVA uses ${Math.round((total / limits.eva) * 100)}% of the time budget` })
+  }
+
+  // An estimate, so it cautions and never blocks on its own.
+  const suit = suitLoad(samples, limits, total, legs)
+  if (suit.peakW > SUIT.limitW) {
+    const where = suit.peakLeg ? `Leg ${suit.peakLeg}: ` : ''
+    reasons.push({ level: 'caution', text: `${where}est. ${Math.round(suit.peakW)} W, over the ${Math.round(SUIT.limitW)} W suit cooling range` })
   }
 
   const verdict: Verdict = reasons.some((r) => r.level === 'no-go') ? 'no-go' : reasons.length ? 'caution' : 'go'
@@ -256,7 +380,9 @@ export function assess(samples: ProfileSample[], path: LatLon[], limits: Limits,
     total,
     maxSlope: slopes.length ? Math.max(...slopes) : null,
     maxFromStart,
+    walkBack,
     dose: doseRate === null ? null : doseRate * (total / 86400),
+    suit,
   }
 }
 

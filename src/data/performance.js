@@ -49,10 +49,13 @@ export function tuneViewer(viewer) {
   scene.fog.enabled = true
   scene.fog.renderable = false
   scene.globe.tileCacheSize = TILE_CACHE
-  // Load the tiles next to the ones on screen as well, at the same detail,
-  // after the visible ones. Panning then moves onto ground that is already
-  // loaded, not onto a blur that sharpens.
-  scene.globe.preloadSiblings = true
+  // Don't load the tiles next to the ones on screen. The browser has six
+  // connections to our server, and those extra tiles queued ahead of the
+  // ones in view: in a benchmark at Jezero, pans settled in 964 ms with this
+  // on and 512 ms with it off, and flights got faster too. The Go server
+  // already fetches each tile's neighbours ahead (tiles/readahead.go), so a
+  // pan still lands on tiles that come straight from its cache.
+  scene.globe.preloadSiblings = false
   // Coarser parents first, so a zoom shows something at once and sharpens.
   scene.globe.preloadAncestors = true
 

@@ -30,8 +30,6 @@
   background: rgb(5 7 9 / 0.72);
   font-family: var(--font-mono);
   font-size: var(--text-label);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
 .switcher__row {
@@ -53,7 +51,7 @@
   border: 0;
   background: transparent;
   color: var(--color-text-dim) !important;
-  font-size: 12px !important;
+  font-size: var(--text-min) !important;
 }
 .switcher__tile:hover { color: var(--color-text-muted) !important; }
 .switcher__tile[aria-pressed='true'] { color: var(--color-text) !important; }

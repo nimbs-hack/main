@@ -1,0 +1,74 @@
+{
+  "note": "Fictional sample crew. No real people.",
+  "astronauts": [
+    {
+      "name": "VEGA",
+      "sex": "female",
+      "age": 41,
+      "massKg": 63.5,
+      "heightCm": 168,
+      "role": "commander"
+    },
+    {
+      "name": "ORLOV",
+      "sex": "male",
+      "age": 38,
+      "massKg": 84,
+      "heightCm": 183,
+      "role": "pilot"
+    },
+    {
+      "name": "NAKAMURA",
+      "sex": "female",
+      "age": 35,
+      "massKg": 58.2,
+      "heightCm": 162,
+      "role": "scientist",
+      "evaShare": 1.5
+    },
+    {
+      "name": "OKAFOR",
+      "sex": "male",
+      "age": 44,
+      "massKg": 91.3,
+      "heightCm": 188,
+      "role": "flight-engineer",
+      "activity": "very-active",
+      "evaShare": 1.5
+    },
+    {
+      "name": "LINDQVIST",
+      "sex": "male",
+      "age": 52,
+      "massKg": 77,
+      "heightCm": 179,
+      "role": "physician",
+      "evaShare": 0
+    },
+    {
+      "name": "REYES",
+      "sex": "female",
+      "age": 33,
+      "massKg": 70.4,
+      "heightCm": 174,
+      "role": "mission-specialist"
+    },
+    {
+      "name": "HADDAD",
+      "sex": "male",
+      "age": 36,
+      "massKg": 80.5,
+      "heightCm": 176,
+      "role": "payload-specialist",
+      "activity": "low"
+    },
+    {
+      "name": "KOWALSKI",
+      "sex": "female",
+      "age": 47,
+      "massKg": 66,
+      "heightCm": 171,
+      "role": "flight-engineer"
+    }
+  ]
+}

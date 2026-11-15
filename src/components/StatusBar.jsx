@@ -84,8 +84,14 @@ function Cursor({ viewer }) {
   useEffect(() => {
     if (!viewer) return
     const handler = new ScreenSpaceEventHandler(viewer.scene.canvas)
-    handler.setInputAction(({ endPosition }) => {
-      const hit = pickGround(viewer, endPosition)
+    // Finding the ground under the pointer is a ray cast against terrain.
+    // Do it once a frame for the latest position, not once per mouse event.
+    let latest = null
+    let frame = 0
+    const read = () => {
+      frame = 0
+      if (viewer.isDestroyed()) return
+      const hit = pickGround(viewer, latest)
       if (!hit) return setCursor(null)
       const c = MARS_SPHERE.cartesianToCartographic(hit)
       setCursor({
@@ -93,12 +99,20 @@ function Cursor({ viewer }) {
         lon: CesiumMath.toDegrees(c.longitude),
         elevation: unexaggerate(viewer.scene, c.height) - DATUM_OFFSET,
       })
+    }
+    handler.setInputAction(({ endPosition }) => {
+      latest = Cartesian2.clone(endPosition, latest ?? new Cartesian2())
+      frame ||= requestAnimationFrame(read)
     }, ScreenSpaceEventType.MOUSE_MOVE)
     const leave = () => setCursor(null)
-    viewer.scene.canvas.addEventListener('pointerleave', leave)
+    // Kept in a variable: by the time this cleans up, the viewer may be
+    // destroyed and viewer.scene gone.
+    const { canvas } = viewer.scene
+    canvas.addEventListener('pointerleave', leave)
     return () => {
+      cancelAnimationFrame(frame)
       handler.destroy()
-      viewer.scene.canvas.removeEventListener('pointerleave', leave)
+      canvas.removeEventListener('pointerleave', leave)
     }
   }, [viewer])
 
@@ -142,17 +156,29 @@ function Attribution({ credits }) {
   )
 }
 
-const STATUS_TEXT = { loading: 'Loading tiles', error: 'Some tiles failed' }
+// A failure says what it costs the user: blank or blurry patches on the map
+// are missing imagery, not what the ground looks like.
+const STATUS_TEXT = { loading: 'Loading imagery', error: 'Map imagery missing in places' }
+const STATUS_HINT = { error: 'Some image tiles did not load. Blank or blurry patches show missing data, not the ground. Retry loads them again.' }
 
 /**
  * Bottom bar laid out like Google Earth's. Left: tile state, shown only
  * while it matters, and the data credits behind one button. Right: scale,
- * camera height and the point under the cursor.
+ * camera height and the point under the cursor. `onRetry`, when given,
+ * puts a Retry button next to a failure.
+ *
+ * @param {{ viewer: any, status: string, credits: string[], onRetry?: (() => void) | null }} props
  */
-export default function StatusBar({ viewer, status, credits }) {
+export default function StatusBar({ viewer, status, credits, onRetry }) {
   return (
     <footer className="statusbar">
-      {STATUS_TEXT[status] && <span role="status" className={`statusbar__state is-${status}`}>{STATUS_TEXT[status]}</span>}
+      {STATUS_TEXT[status] && (
+        <span role="status" className={`statusbar__state is-${status}`} title={STATUS_HINT[status]}>
+          {status === 'loading' && <span className="spinner" aria-hidden="true" />}
+          {STATUS_TEXT[status]}
+          {status === 'error' && onRetry && <button type="button" className="statusbar__retry" onClick={onRetry}>Retry</button>}
+        </span>
+      )}
       <Attribution credits={credits} />
       <span className="statusbar__readouts">
         <ScaleBar viewer={viewer} />

@@ -1,6 +1,6 @@
-import { bearing, distance, offset } from './geo'
+import { MARS_RADIUS, distance } from './geo'
 import type { LatLon } from './geo'
-import { walkSpeed } from './plan'
+import { stepTime } from './plan'
 import type { Limits } from './plan'
 
 // Route alternatives between a start and a target. A grid is laid along the
@@ -35,8 +35,24 @@ export type Grid = {
   target: number
 }
 
-// Nodes on a grid aligned with the start-to-target line. Offsets are flat
-// east and north meters, fine for routes of a few tens of kilometers.
+type Vector = [number, number, number]
+// Radians in a degree.
+const DEGREE = Math.PI / 180
+const toVector = ([lat, lon]: LatLon): Vector => [
+  Math.cos(lat * DEGREE) * Math.cos(lon * DEGREE),
+  Math.cos(lat * DEGREE) * Math.sin(lon * DEGREE),
+  Math.sin(lat * DEGREE),
+]
+const cross = (a: Vector, b: Vector): Vector => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+const size = (a: Vector) => Math.hypot(a[0], a[1], a[2])
+// `a` times `ka` plus `b` times `kb`.
+const mix = (a: Vector, ka: number, b: Vector, kb: number): Vector => [a[0] * ka + b[0] * kb, a[1] * ka + b[1] * kb, a[2] * ka + b[2] * kb]
+
+// Nodes on a grid aligned with the start-to-target line, laid out on the
+// sphere so a leg of any length ends on its target. Columns are steps along
+// the great circle through both points. Rows are steps to either side of it.
+// Rows off the middle are a little shorter than `cell`, by 6% at the edge of
+// a leg a quarter of the way around the planet.
 // `along` is the number of cells between start and target. More cells follow
 // fine terrain more closely; margin and corridor width keep their proportion.
 export function buildGrid(start: LatLon, target: LatLon, along = ALONG): Grid {
@@ -45,18 +61,30 @@ export function buildGrid(start: LatLon, target: LatLon, along = ALONG): Grid {
   const halfWidth = Math.round(steps * HALF_SHARE)
   const length = Math.max(1, distance(start, target))
   const cell = length / steps
-  const heading = bearing(start, target) * Math.PI / 180
+  const from = toVector(start)
+  // The pole of that great circle, to the left of the way to the target.
+  // Two points in one place, or opposite each other, have none: head north.
+  let pole = cross(from, toVector(target))
+  if (size(pole) < 1e-9) pole = cross(from, [0, 0, 1])
+  if (size(pole) < 1e-9) pole = [0, 1, 0]
+  pole = mix(pole, 1 / size(pole), pole, 0)
+  const ahead = cross(pole, from)
   const cols = steps + 2 * margin + 1
   const rows = 2 * halfWidth + 1
   const points: LatLon[] = []
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const u = (c - margin) * cell
-      const v = (r - halfWidth) * cell
-      points.push(offset(start, u * Math.cos(heading) - v * Math.sin(heading), u * Math.sin(heading) + v * Math.cos(heading)))
+      const u = ((c - margin) * cell) / MARS_RADIUS
+      const v = ((r - halfWidth) * cell) / MARS_RADIUS
+      const onLine = mix(from, Math.cos(u), ahead, Math.sin(u))
+      const [x, y, z] = mix(onLine, Math.cos(v), pole, -Math.sin(v))
+      points.push([Math.asin(Math.max(-1, Math.min(1, z))) / DEGREE, Math.atan2(y, x) / DEGREE])
     }
   }
   const startIndex = halfWidth * cols + margin
+  // The two ends are nodes, so a path joins them without a last short hop.
+  points[startIndex] = start
+  points[startIndex + steps] = target
   return { cols, rows, cell, points, start: startIndex, target: startIndex + steps }
 }
 
@@ -203,6 +231,12 @@ type SearchOptions = { risk?: number[] | null, penalty?: Uint8Array }
  * A* from start to target. Steps steeper than the limit are impassable.
  * Every step costs at least its length, so the straight-line heuristic in
  * meters never overestimates.
+ *
+ * On deploy-v1 the grid is a 20 m elevation model, so the slope of a step
+ * is the slope of the ground. Here a cell can be 200 m, and a step between
+ * two nodes averages out a scarp that lies between them. So a node whose
+ * own measured slope is over the limit is impassable too. The start and the
+ * target are exempt: they are where the route has to go.
  */
 export function findPath(grid: Grid, field: Field, strategy: Strategy, limit: number, options: SearchOptions = {}) {
   const { cols, rows, cell } = grid
@@ -239,6 +273,7 @@ export function findPath(grid: Grid, field: Field, strategy: Strategy, limit: nu
       const v = nr * cols + nc
       const ev = elevation[v]
       if (closed[v] || ev === null) continue
+      if (v !== grid.target && (field.slope[v] ?? 0) > limit) continue
       const run = Math.hypot(dr, dc) * cell
       const dh = ev - eu
       if (Math.abs(dh) > run * tanMax + 1e-9) continue
@@ -289,7 +324,9 @@ export function minRequiredSlope(grid: Grid, field: Field) {
       const v = nr * cols + nc
       const ev = field.elevation[v]
       if (visited[v] || ev === null) continue
-      const slope = Math.max(best[u], edgeSlope(ev - field.elevation[u]!, Math.hypot(dr, dc) * cell))
+      // The ground at the node counts as well as the step to it, as in findPath.
+      const ground = v === grid.target ? 0 : field.slope[v] ?? 0
+      const slope = Math.max(best[u], ground, edgeSlope(ev - field.elevation[u]!, Math.hypot(dr, dc) * cell))
       if (slope < best[v]) {
         best[v] = slope
         heap.push(v, slope)
@@ -395,7 +432,7 @@ function summarize(grid: Grid, field: Field, nodes: number[], limits: Limits, st
     const run = distance(grid.points[a], grid.points[b])
     const rise = (field.elevation[b] ?? 0) - (field.elevation[a] ?? 0)
     length += run
-    time += run / walkSpeed(rise / run, limits.pace)
+    time += stepTime(run, rise, limits)
     maxSlope = Math.max(maxSlope ?? 0, edgeSlope(rise, run))
   }
   return {

@@ -66,16 +66,19 @@ function Chart({ samples, bottom, top, limit }) {
     const b = samples[i]
     if (a.elevation === null || b.elevation === null) continue
     const level = slopeLevel(b.slope, limit)
-    bands.push(
-      <polygon
-        key={i}
-        className={`profile__band is-${level}`}
-        points={`${x(a.d)},${HEIGHT} ${x(a.d)},${y(a.elevation)} ${x(b.d)},${y(b.elevation)} ${x(b.d)},${HEIGHT}`}
-      />,
-    )
+    const points = `${x(a.d)},${HEIGHT} ${x(a.d)},${y(a.elevation)} ${x(b.d)},${y(b.elevation)} ${x(b.d)},${HEIGHT}`
+    bands.push(<polygon key={i} className={`profile__band is-${level}`} points={points} />)
+    // Hatched as well as red, so over-limit ground does not rest on color
+    // alone (NASA-STD-3001 Vol 2, V2 10045).
+    if (level === 'hazard') bands.push(<polygon key={`h${i}`} className="profile__hatch" points={points} />)
   }
   return (
     <svg className="profile__svg" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="none" aria-hidden="true">
+      <defs>
+        <pattern id="profile-hatch" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+          <line x1="0" y1="0" x2="0" y2="6" />
+        </pattern>
+      </defs>
       {bands}
       {runs.map((run, i) => (
         <polyline key={i} className={`profile__line${run.coarse ? ' is-coarse' : ''}`} points={run.points.join(' ')} vectorEffect="non-scaling-stroke" />
@@ -144,7 +147,7 @@ export default function RouteProfile({
         )}
         {ready && (
           <dl className="profile__stats">
-            <div><dt>Dist</dt><dd>{formatDistance(summary.distance)}</dd></div>
+            <div><dt>Distance</dt><dd>{formatDistance(summary.distance)}</dd></div>
             <div><dt>Climb</dt><dd>↑ {Math.round(summary.climb)} m</dd></div>
             <div><dt>Descent</dt><dd>↓ {Math.round(summary.descent)} m</dd></div>
             <div><dt>Max slope</dt><dd className={`is-${slopeLevel(summary.maxSlope, limit)}`}>{formatSlope(summary.maxSlope)}</dd></div>

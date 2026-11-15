@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import fileSymbols from '../../apps/api/internal/planner/marker-symbols.json'
 import { MIL2525C_SYMBOLS, MIL2525C_THEMES } from './mil2525c'
 import { addMarker, loadMarkers, removeMarker, saveMarkers, symbolImage, updateMarker } from './markers'
 
@@ -6,6 +7,10 @@ function memory() {
   const data = {}
   return { getItem: (k) => data[k] ?? null, setItem: (k, v) => { data[k] = v } }
 }
+
+test('mission files accept exactly the map symbol catalog', () => {
+  expect(fileSymbols.toSorted()).toEqual(MIL2525C_SYMBOLS.map((symbol) => symbol.id).toSorted())
+})
 
 test('every symbol has a 15-character SIDC and a known theme', () => {
   const themes = new Set(MIL2525C_THEMES.map((t) => t.id))

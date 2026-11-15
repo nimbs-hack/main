@@ -8,8 +8,13 @@ import './route-options.css'
  * pinned to the top left of the map. Hovering a row brightens its dashed
  * line on the map. Picking one adds its turn points to the plan between the
  * stops. Times are one way.
+ *
+ * A suggestion's slope comes from the search grid. Once a route is picked it
+ * is the plan, and `measured` holds the plan's distance and steepest slope
+ * on the full terrain. The picked row shows those, so it never disagrees
+ * with the profile and the verdict.
  */
-export default function RouteOptions({ status, thermalPending, options, chosen, hover, limit, note, needs, onHover, onChoose, onRaise, onRetry }) {
+export default function RouteOptions({ status, thermalPending, options, chosen, measured, hover, limit, note, needs, onHover, onChoose, onRaise, onRetry }) {
   if (status === 'loading') return <p className="routes routes--note" role="status">Finding routes…</p>
   if (status === 'error') {
     return (
@@ -31,12 +36,16 @@ export default function RouteOptions({ status, thermalPending, options, chosen, 
   const shown = note ? options.slice(0, 1) : options
   return (
     <ul className="routes" aria-label="Suggested routes" onPointerLeave={() => onHover(null)}>
-      {shown.map((option) => (
+      {shown.map((option) => {
+        const picked = option.id === chosen
+        const distance = picked && measured ? measured.distance : option.distance
+        const maxSlope = picked && measured ? measured.maxSlope : option.maxSlope
+        return (
         <li key={option.id}>
           <button
             type="button"
-            aria-pressed={option.id === chosen}
-            title={`${option.note}. Times are one way.`}
+            aria-pressed={picked}
+            title={`${option.note}. Times are one way. ${picked ? 'Slope measured along the plan.' : 'Slope estimated on the search grid. Pick the route to measure it on full terrain.'}`}
             onPointerEnter={() => onHover(option.id)}
             onFocus={() => onHover(option.id)}
             onBlur={() => onHover(null)}
@@ -49,14 +58,20 @@ export default function RouteOptions({ status, thermalPending, options, chosen, 
               <span className="routes__same">Same as {option.sameAs}</span>
             ) : (
               <>
-                <span>{formatDistance(option.distance)}</span>
+                <span>{formatDistance(distance)}</span>
                 <span>{formatDuration(option.time)}</span>
-                <span className={`is-${slopeLevel(option.maxSlope, limit)}`}>{formatSlope(option.maxSlope)}</span>
+                <span className={`is-${slopeLevel(maxSlope, limit)}`}>{formatSlope(maxSlope)}</span>
               </>
             )}
           </button>
         </li>
-      ))}
+        )
+      })}
+      {/* The two solid lines on the map are not strategies, so they are named here. */}
+      <li className="routes__key">
+        <span><i className="routes__solid" aria-hidden="true" />Plan</span>
+        <span><i className="routes__solid routes__solid--hazard" aria-hidden="true" />Over {limit}°</span>
+      </li>
       {thermalPending && <li className="routes__why" role="status">Loading night IR for Thermal and Detour…</li>}
       {note && <li className="routes__why">{note}</li>}
     </ul>
