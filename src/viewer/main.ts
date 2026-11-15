@@ -22,7 +22,7 @@ import { type MapStatus, createMap } from './map'
 import { SUIT } from '../data/suit'
 import { WALK_SPEED, advanceSimulation, simulatedPositions, type CrewPosition } from './live'
 import { type SiteRoute, routeLine } from './route'
-import { planStops } from '../data/stops'
+import { planStops, taskStop } from '../data/stops'
 import { type Level, type SuitReading, readSuitSensors, readingLevels, worstLevel } from './sensors'
 
 interface Doc {
@@ -427,7 +427,7 @@ function sitesTab({ planned: { mission } }: Doc): Child {
     renderPanel()
   }
   return [
-    stops.length > 1 &&
+    stops.length > 0 &&
       section(
         mission.route?.length ? 'Plan' : 'Plan, sites in list order',
         h(
@@ -440,6 +440,11 @@ function sitesTab({ planned: { mission } }: Doc): Child {
               h('button', { type: 'button', class: 'site__name', onclick: () => pick(site) }, `${i + 1} ${name(site)}`),
               h('span', { class: 'stop__role' }, role(i)),
               leg(i),
+              h(
+                'div',
+                { class: 'stop__tasks' },
+                mission.tasks.map((task) => taskStop(task, stops) === i && taskCard(mission, task)),
+              ),
             ),
           ),
         ),
@@ -459,8 +464,9 @@ function sitesTab({ planned: { mission } }: Doc): Child {
             h('button', { type: 'button', class: 'site__name', 'aria-pressed': i === selected ? 'true' : 'false', onclick: () => pick(i) }, site.name),
           ),
           h('p', { class: 'site__place' }, formatLatLon(site.lat, site.lon)),
-          site.info && h('p', { class: 'site__info' }, site.info),
-          mission.tasks.map((task) => task.site === i && taskCard(mission, task)),
+          site.description && h('p', { class: 'site__info' }, site.description),
+          // Work at a site the plan does not visit still shows, here.
+          mission.tasks.map((task) => task.site === i && taskStop(task, stops) < 0 && taskCard(mission, task)),
         ),
       ),
       row(

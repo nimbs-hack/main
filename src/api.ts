@@ -33,8 +33,9 @@ export interface Site {
   name: string
   lat: number
   lon: number
-  // What the site is and why the crew goes there. Up to 500 bytes of UTF-8.
-  info?: string
+  // A short description: what is there and why the crew goes. Up to 500
+  // bytes of UTF-8.
+  description?: string
 }
 
 // `site`, `phase` and `crew` are positions in the mission's lists, from zero.
@@ -48,6 +49,8 @@ export interface Task {
   eva: boolean
   hours: number
   note: string
+  // The plan stop it is done at. Missing means the site's first visit.
+  stop?: number
 }
 
 export interface Mission {

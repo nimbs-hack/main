@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import type { Astronaut, Catalog, Mission, Phase, Site, Task } from './api'
-import { withoutRepeats } from './data/stops'
+import { planStops } from './data/stops'
 
 // What the editor holds. Same shape as a Mission, but a field may be out of
 // range or empty while someone is typing in it.
@@ -226,6 +226,31 @@ const retarget = (draft: Draft, change: (task: Task) => Task | null): Task[] =>
     return next ? [next] : []
   })
 
+// Keeps the plan stops `keep` allows. A stop that now visits the same site as
+// the one before it merges into it. `to[i]` is where old stop i went, -1 when
+// it is gone. `site` renumbers sites, after one is removed.
+function restop(draft: Draft, keep: (stop: number) => boolean, site: (index: number) => number = (i) => i) {
+  const route: number[] = []
+  const to: number[] = []
+  ;(draft.route ?? []).forEach((at, i) => {
+    to[i] = -1
+    if (!keep(i)) return
+    if (route.at(-1) !== site(at)) route.push(site(at))
+    to[i] = route.length - 1
+  })
+  return { route, to }
+}
+
+// The task with its stop moved as `to` says. A task whose stop is gone keeps
+// its site and goes to the site's first visit.
+function followStop(task: Task, to: number[]): Task {
+  if (task.stop === undefined) return task
+  const stop = to[task.stop] ?? -1
+  if (stop >= 0) return { ...task, stop }
+  const { stop: _gone, ...rest } = task
+  return rest
+}
+
 // Edits. Each returns a new draft and leaves the old one alone. Presets and
 // templates come from the planner's catalog.
 export function createEdits(catalog: Catalog) {
@@ -354,32 +379,43 @@ export function createEdits(catalog: Catalog) {
       sites: replaceAt(draft.sites, index, { ...draft.sites[index]!, ...patch }),
     }),
     // A site takes its tasks and its plan stops with it.
-    removeSite: (draft: Draft, index: number): Draft => ({
-      ...draft,
-      sites: draft.sites.filter((_, i) => i !== index),
-      tasks: retarget(draft, (task) => {
-        if (task.site === index) return null
-        return task.site > index ? { ...task, site: task.site - 1 } : task
-      }),
-      route: withoutRepeats((draft.route ?? []).filter((site) => site !== index).map((site) => (site > index ? site - 1 : site))),
-    }),
+    removeSite: (draft: Draft, index: number): Draft => {
+      const { route, to } = restop(draft, (stop) => draft.route![stop] !== index, (site) => (site > index ? site - 1 : site))
+      return {
+        ...draft,
+        sites: draft.sites.filter((_, i) => i !== index),
+        tasks: retarget(draft, (task) => {
+          if (task.site === index) return null
+          return followStop(task.site > index ? { ...task, site: task.site - 1 } : task, to)
+        }),
+        route,
+      }
+    },
 
-    // The plan. A stop is a site; the same site cannot follow itself.
+    // The plan. A stop is a site; the same site cannot follow itself. A task
+    // set at a stop moves with it.
     addStop: (draft: Draft, site: number): Draft => {
       const route = draft.route ?? []
-      return route.at(-1) === site ? draft : { ...draft, route: [...route, site] }
+      if (route.at(-1) === site) return draft
+      return { ...draft, route: [...route, site] }
     },
-    // Unchanged when the move would put a site after itself.
+    // Unchanged when the move would put a site right after itself.
     moveStop: (draft: Draft, index: number, to: number): Draft => {
-      const route = [...(draft.route ?? [])]
+      const route = draft.route ?? []
       if (to < 0 || to >= route.length || to === index) return draft
-      route.splice(to, 0, ...route.splice(index, 1))
-      return withoutRepeats(route).length === route.length ? { ...draft, route } : draft
+      const order = route.map((_, i) => i)
+      order.splice(to, 0, ...order.splice(index, 1))
+      const moved = order.map((i) => route[i]!)
+      if (moved.some((site, i) => i > 0 && site === moved[i - 1])) return draft
+      const where: number[] = []
+      order.forEach((old, now) => (where[old] = now))
+      return { ...draft, route: moved, tasks: draft.tasks.map((task) => followStop(task, where)) }
     },
-    removeStop: (draft: Draft, index: number): Draft => ({
-      ...draft,
-      route: withoutRepeats((draft.route ?? []).filter((_, i) => i !== index)),
-    }),
+    // The stop's own tasks go with it.
+    removeStop: (draft: Draft, index: number): Draft => {
+      const { route, to } = restop(draft, (stop) => stop !== index)
+      return { ...draft, route, tasks: retarget(draft, (task) => (task.stop === index ? null : followStop(task, to))) }
+    },
 
     // An EVA planned on the map: a site at its target, unless one is already
     // there, and one EVA task as long as the walk out, the work and the walk back.
@@ -400,23 +436,34 @@ export function createEdits(catalog: Catalog) {
               },
             ]
       const outside = draft.phases.findIndex((phase) => phase.evaHoursPerWeek > 0)
+      const site = existing >= 0 ? existing : draft.sites.length
+      // The EVA ends at the plan's last visit to its site.
+      const route = draft.route?.length ? draft.route : planStops(draft)
+      const stop = route.lastIndexOf(site)
       const task: Task = {
-        site: existing >= 0 ? existing : draft.sites.length,
+        site,
         phase: Math.max(outside, 0),
         crew: [],
         kind: catalog.taskKinds[0]!,
         eva: true,
         hours,
         note,
+        ...(stop >= 0 ? { stop } : {}),
       }
-      return { ...draft, sites, tasks: [...draft.tasks, task] }
+      return { ...draft, sites, tasks: [...draft.tasks, task], ...(stop >= 0 ? { route } : {}) }
     },
 
     // New tasks start in the first phase that has EVA hours to spend.
-    addTask: (draft: Draft, site: number): Draft => {
+    // A task at a plan stop. A mission without a plan gets one: its sites in
+    // list order, as the route already visits them.
+    addTask: (draft: Draft, stop: number): Draft => {
+      const route = draft.route?.length ? draft.route : planStops(draft)
+      const site = route[stop]
+      if (site === undefined) return draft
       const outside = draft.phases.findIndex((phase) => phase.evaHoursPerWeek > 0)
       const task: Task = {
         site,
+        stop,
         phase: Math.max(outside, 0),
         crew: [],
         kind: catalog.taskKinds[0]!,
@@ -424,7 +471,7 @@ export function createEdits(catalog: Catalog) {
         hours: 2,
         note: '',
       }
-      return { ...draft, tasks: [...draft.tasks, task] }
+      return { ...draft, route, tasks: [...draft.tasks, task] }
     },
     updateTask: (draft: Draft, index: number, patch: Partial<Task>): Draft => ({
       ...draft,

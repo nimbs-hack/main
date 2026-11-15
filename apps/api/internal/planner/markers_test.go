@@ -112,25 +112,25 @@ func TestVersionFourRejectsDamagedOrOversizedExtras(t *testing.T) {
 	}
 }
 
-func TestSiteInfoSurvivesARoundTripAndOnlyItRaisesTheVersion(t *testing.T) {
+func TestSiteDescriptionsSurvivesARoundTripAndOnlyItRaisesTheVersion(t *testing.T) {
 	mission := bare(t)
-	mission.Sites = []Site{{Name: "A", Lat: 1, Lon: 2}, {Name: "B", Lat: 3, Lon: 4, Info: "Boxwork ridges.\nSample the light-toned veins."}}
+	mission.Sites = []Site{{Name: "A", Lat: 1, Lon: 2}, {Name: "B", Lat: 3, Lon: 4, Description: "Boxwork ridges.\nSample the light-toned veins."}}
 	file := encode(t, mission)
 	decoded, err := DecodeMission(file)
 	if err != nil || file[6]>>4 != 4 || !reflect.DeepEqual(decoded.Sites, mission.Sites) {
 		t.Fatalf("version %d, sites %+v, %v", file[6]>>4, decoded.Sites, err)
 	}
-	mission.Sites[1].Info = ""
+	mission.Sites[1].Description = ""
 	if file := encode(t, mission); file[6]>>4 != 3 {
-		t.Errorf("sites without info wrote version %d, want 3", file[6]>>4)
+		t.Errorf("sites without descriptions wrote version %d, want 3", file[6]>>4)
 	}
 }
 
-func TestSiteInfoOverTheLimitIsRefused(t *testing.T) {
-	source := map[string]any{"name": "A", "lat": 1.0, "lon": 2.0, "info": strings.Repeat("x", MaxSiteInfo+1)}
+func TestSiteDescriptionsOverTheLimitIsRefused(t *testing.T) {
+	source := map[string]any{"name": "A", "lat": 1.0, "lon": 2.0, "description": strings.Repeat("x", MaxSiteDescription+1)}
 	c := &checker{}
 	c.site(source, "site 1")
-	if c.err == nil || !strings.Contains(c.err.Error(), "site 1 info") {
+	if c.err == nil || !strings.Contains(c.err.Error(), "site 1 description") {
 		t.Errorf("err = %v", c.err)
 	}
 }
@@ -174,6 +174,34 @@ func TestAPlanStopMustBeASiteAndDifferFromTheOneBefore(t *testing.T) {
 			t.Errorf("%v: route %v, %v", test.route, got.Route, err)
 		case test.want != "" && (err == nil || !strings.Contains(err.Error(), test.want)):
 			t.Errorf("%v: err = %v, want %q", test.route, err, test.want)
+		}
+	}
+}
+
+func TestATaskKeepsItsPlanStop(t *testing.T) {
+	mission := bare(t)
+	mission.Sites = []Site{{Name: "A", Lat: 1, Lon: 2}, {Name: "B", Lat: 3, Lon: 4}}
+	mission.Route = []int{0, 1, 0}
+	third := 2
+	mission.Tasks = []Task{
+		{Site: 0, Phase: 0, Crew: []int{0}, Kind: "sample", EVA: true, Hours: 1, Stop: &third},
+		{Site: 1, Phase: 0, Crew: []int{}, Kind: "survey", EVA: true, Hours: 2},
+	}
+	decoded, err := DecodeMission(encode(t, mission))
+	if err != nil || !reflect.DeepEqual(decoded.Tasks, mission.Tasks) {
+		t.Fatalf("tasks %+v, %v", decoded.Tasks, err)
+	}
+}
+
+func TestATaskStopMustBeAVisitToItsSite(t *testing.T) {
+	mission := bare(t)
+	mission.Sites = []Site{{Name: "A", Lat: 1, Lon: 2}, {Name: "B", Lat: 3, Lon: 4}}
+	mission.Route = []int{0, 1, 0}
+	for stop, want := range map[int]string{1: "task 1 is at A, but plan stop 2 is B", 3: "task 1 stop must point at one of 3 plan stops"} {
+		at := stop
+		mission.Tasks = []Task{{Site: 0, Phase: 0, Crew: []int{}, Kind: "sample", EVA: true, Hours: 1, Stop: &at}}
+		if _, err := Normalize(mission); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("stop %d: err = %v, want %q", stop, err, want)
 		}
 	}
 }

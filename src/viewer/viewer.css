@@ -533,6 +533,14 @@ button:disabled {
   font-size: var(--text-label);
 }
 
+.stop__tasks {
+  grid-column: 1 / -1;
+}
+
+.stop__tasks:empty {
+  display: none;
+}
+
 .stop .site__note {
   grid-column: 1 / -1;
   margin-top: 0;

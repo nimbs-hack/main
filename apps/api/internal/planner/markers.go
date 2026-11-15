@@ -21,23 +21,45 @@ type Marker struct {
 type missionExtras struct {
 	Markers  []Marker `json:"markers,omitempty"`
 	Briefing string   `json:"briefing,omitempty"`
-	// One entry for each site, in site order, when any site has info.
-	SiteInfo []string `json:"siteInfo,omitempty"`
-	Route    []int    `json:"route,omitempty"`
+	// One entry for each site, in site order, when any site has a description.
+	SiteDescriptions []string `json:"siteDescriptions,omitempty"`
+	Route            []int    `json:"route,omitempty"`
+	// One entry for each task, in task order: its plan stop, or -1 for none.
+	// Written only when some task has a stop.
+	TaskStops []int `json:"taskStops,omitempty"`
 }
 
-// siteInfo is the sites' info in site order, or nil when no site has any.
-func siteInfo(sites []Site) []string {
-	info := make([]string, len(sites))
+// taskStops is each task's plan stop in task order, -1 for none, or nil when
+// no task has one.
+func taskStops(tasks []Task) []int {
+	stops := make([]int, len(tasks))
 	has := false
-	for i, site := range sites {
-		info[i] = site.Info
-		has = has || site.Info != ""
+	for i, task := range tasks {
+		stops[i] = -1
+		if task.Stop != nil {
+			stops[i] = *task.Stop
+			has = true
+		}
 	}
 	if !has {
 		return nil
 	}
-	return info
+	return stops
+}
+
+// siteDescriptions is the sites' descriptions in site order, or nil when no
+// site has one.
+func siteDescriptions(sites []Site) []string {
+	descriptions := make([]string, len(sites))
+	has := false
+	for i, site := range sites {
+		descriptions[i] = site.Description
+		has = has || site.Description != ""
+	}
+	if !has {
+		return nil
+	}
+	return descriptions
 }
 
 // The frontend catalog test checks this list against the rendered symbols.

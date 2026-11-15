@@ -192,12 +192,12 @@ type Site struct {
 	Lat  float64 `json:"lat"`
 	Lon  float64 `json:"lon"`
 	// What the site is and why the crew goes there. Readable UTF-8, up to
-	// MaxSiteInfo bytes, kept with the symbols and briefing in the file.
-	Info string `json:"info,omitempty"`
+	// MaxSiteDescription bytes, kept with the symbols and briefing in the file.
+	Description string `json:"description,omitempty"`
 }
 
-// MaxSiteInfo is the longest site info in bytes.
-const MaxSiteInfo = 500
+// MaxSiteDescription is the longest site description in bytes.
+const MaxSiteDescription = 500
 
 // Task is a piece of work at a site. Site, Phase and Crew are positions in
 // the mission's lists, counted from zero.
@@ -214,6 +214,11 @@ type Task struct {
 	Hours float64 `json:"hours"`
 	// Printable ASCII, up to 31 characters. May be empty.
 	Note string `json:"note"`
+	// The plan stop the task is done at, from zero. It must be a visit to the
+	// task's site. Nil when the plan sets none, which means the site's first
+	// visit. A mission without a plan visits its sites in list order, so
+	// there stop i is site i.
+	Stop *int `json:"stop,omitempty"`
 }
 
 type Mission struct {
@@ -389,10 +394,10 @@ func (c *checker) phase(value any, where string) Phase {
 func (c *checker) site(value any, where string) Site {
 	input := c.record(value, where)
 	return Site{
-		Name: c.text(input["name"], where+" name", 1),
-		Lat:  c.measure(input["lat"], where+" lat", -90, 90, 1, 1e6),
-		Lon:  c.measure(input["lon"], where+" lon", -180, 180, 1, 1e6),
-		Info: c.extraText(or(input["info"], ""), where+" info", 0, MaxSiteInfo, true),
+		Name:        c.text(input["name"], where+" name", 1),
+		Lat:         c.measure(input["lat"], where+" lat", -90, 90, 1, 1e6),
+		Lon:         c.measure(input["lon"], where+" lon", -180, 180, 1, 1e6),
+		Description: c.extraText(or(input["description"], ""), where+" description", 0, MaxSiteDescription, true),
 	}
 }
 
@@ -411,6 +416,14 @@ func (c *checker) task(value any, where string, crew, sites []string, phases int
 	task.EVA = eva
 	task.Hours = c.measure(input["hours"], where+" hours", 0.5, 127.5, 1, 2)
 	task.Note = c.text(or(input["note"], ""), where+" note", 0)
+	if raw, set := input["stop"]; set && raw != nil {
+		stop, ok := raw.(float64)
+		if !ok || stop != math.Trunc(stop) || stop < 0 || stop >= maxCount {
+			c.failf("%s stop must be a plan position from 0 to %d; got %s", where, maxCount-1, given(raw))
+		}
+		at := int(stop)
+		task.Stop = &at
+	}
 	return task
 }
 
@@ -544,6 +557,25 @@ func parseMission(raw, rawRoster any) (Mission, error) {
 	}
 	if len(route) == 0 {
 		route = nil
+	}
+	// A task's stop has to be a visit to its site.
+	visits := route
+	if visits == nil {
+		visits = make([]int, len(sites))
+		for i := range visits {
+			visits[i] = i
+		}
+	}
+	for i, task := range tasks {
+		if task.Stop == nil || c.err != nil {
+			continue
+		}
+		switch stop := *task.Stop; {
+		case stop >= len(visits):
+			c.failf("task %d stop must point at one of %d plan stops; got %d", i+1, len(visits), stop)
+		case visits[stop] != task.Site:
+			c.failf("task %d is at %s, but plan stop %d is %s", i+1, siteNames[task.Site], stop+1, siteNames[visits[stop]])
+		}
 	}
 
 	markers, briefing := c.missionExtras(source)

@@ -710,7 +710,7 @@ function Editor({ catalog, planned: opening, library: kept, fileId: openingId }:
               onAddStop={(site) => commit((d) => edits.addStop(d, site))}
               onMoveStop={(i, to) => commit((d) => edits.moveStop(d, i, to))}
               onRemoveStop={(i) => commit((d) => edits.removeStop(d, i))}
-              onAddTask={(site) => commit((d) => edits.addTask(d, site))}
+              onAddTask={(stop) => commit((d) => edits.addTask(d, stop))}
               onUpdateTask={(i, patch, field) => commit((d) => edits.updateTask(d, i, patch), `task ${i} ${field}`)}
               onRemoveTask={(i) => commit((d) => edits.removeTask(d, i))}
             />

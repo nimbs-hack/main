@@ -107,7 +107,8 @@ export function SitesPage({
   onAddStop: (site: number) => void
   onMoveStop: (index: number, to: number) => void
   onRemoveStop: (index: number) => void
-  onAddTask: (site: number) => void
+  // A task at a plan stop.
+  onAddTask: (stop: number) => void
   onUpdateTask: (index: number, patch: Partial<Task>, field: string) => void
   onRemoveTask: (index: number) => void
 }) {
@@ -160,24 +161,29 @@ export function SitesPage({
         missionPanel={({ placing, onPlacing }: MapHooks) => (
           <div className="sites" onBlur={onSettle}>
             <SitesStep
-              catalog={catalog}
               draft={draft}
-              plan={plan}
               selection={selection}
               onSelect={onSelect}
               placing={placing === 'site'}
               onPlacing={(on) => onPlacing(on ? 'site' : null)}
               onUpdateSite={onUpdateSite}
               onRemoveSite={onRemoveSite}
-              onAddTask={onAddTask}
-              onUpdateTask={onUpdateTask}
-              onRemoveTask={onRemoveTask}
             />
           </div>
         )}
         missionPlan={
           <div className="sites" onBlur={onSettle}>
-            <PlanStep draft={draft} onAdd={onAddStop} onMove={onMoveStop} onRemove={onRemoveStop} />
+            <PlanStep
+              catalog={catalog}
+              draft={draft}
+              plan={plan}
+              onAdd={onAddStop}
+              onMove={onMoveStop}
+              onRemove={onRemoveStop}
+              onAddTask={onAddTask}
+              onUpdateTask={onUpdateTask}
+              onRemoveTask={onRemoveTask}
+            />
           </div>
         }
       />

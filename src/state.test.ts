@@ -60,3 +60,28 @@ test('the plan visits sites in its own order, may come back, and never repeats a
   expect(gone.route).toEqual([0, 1, 0])
   expect(gone.tasks.map((t) => t.site)).toEqual([1])
 })
+
+test('a task belongs to its plan stop and follows it', async () => {
+  const { createEdits } = await import('./state')
+  const edits = createEdits({ taskKinds: ['sample'] } as unknown as Parameters<typeof createEdits>[0])
+  type D = Parameters<typeof edits.addTask>[0]
+  const site = (name: string) => ({ name, lat: 0, lon: 0 })
+  const base = { sites: [site('A'), site('B'), site('C')], tasks: [], phases: [{ evaHoursPerWeek: 10 }] } as unknown as D
+  // Without a plan, adding a task at the second stop makes the list order the plan.
+  const listed = edits.addTask(base, 1)
+  expect(listed.route).toEqual([0, 1, 2])
+  expect(listed.tasks[0]).toMatchObject({ site: 1, stop: 1 })
+  // A, B, A, C, A with a task at each visit to A.
+  let draft = { ...base, route: [0, 1, 0, 2, 0] } as D
+  for (const stop of [0, 2, 4]) draft = edits.addTask(draft, stop)
+  expect(draft.tasks.map((t) => t.stop)).toEqual([0, 2, 4])
+  // Moving C before B carries the stops' order, and no site follows itself.
+  const moved = edits.moveStop({ ...draft, route: [0, 1, 2, 0] } as D, 2, 1)
+  expect(moved.route).toEqual([0, 2, 1, 0])
+  // Removing the B stop merges the two A visits around it, with their tasks.
+  const merged = edits.removeStop(draft, 1)
+  expect(merged.route).toEqual([0, 2, 0])
+  expect(merged.tasks.map((t) => t.stop)).toEqual([0, 0, 2])
+  // Removing a stop takes its own tasks.
+  expect(edits.removeStop(draft, 4).tasks.map((t) => t.stop)).toEqual([0, 2])
+})
