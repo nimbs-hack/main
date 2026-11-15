@@ -89,39 +89,64 @@ Mission sites are points with a label: number, name, task count. The selected on
 
 ## Mission viewer
 
-`/viewer.html` reads a mission file on a device that cannot carry the editor. It loads neither React nor the map library. Its script and style are about 22 kB over the wire, plus the font. The editor with its map is about 1.3 MB. In development it is at the address Vite prints, with `/viewer.html` added. It needs the API server, which does the planning and serves the tiles.
+`/viewer.html` reads a mission file on a device that cannot carry the editor. It loads neither React nor the map library: about 29 kB of script and style gzipped, plus the font, against about 1.3 MB for the editor. In development, add `/viewer.html` to the address Vite prints. The page needs the API server, which plans the mission and serves the tiles.
 
-**Open** reads a `.mhr` or JSON file. So does Ctrl+O, and so does dropping a file on the page. With nothing open, the page also offers the example mission. The planner checks the file. A damaged file is refused with the reason, and the mission on screen is left alone. The last file opened is kept in the browser and opens again on the next visit, with any edits it had.
+Before a file opens, the page shows Mars as a globe that turns once every two minutes, drawn from the Viking color mosaic tiles in `public/tiles`. **Open a mission file** and **Try an example** sit under it. No terrain loads until a mission opens. With reduced motion on, the globe stands still.
+
+Once a file opens, the page is the map. A mission with no sites or symbols has no ground to show, so the globe stays, with a line saying so and a button to the mission details. **Mission** slides out the sidebar. **Close**, Escape, or a tap outside the sidebar on a phone closes it. Nothing in the sidebar can be changed until you press **Edit**. **Done**, or closing the sidebar, ends editing and keeps the changes. Save and undo only show while editing.
+
+**Open file**, Ctrl+O or dropping a file on the page reads a `.mhr` or JSON file. The planner checks it. If the file is damaged, the page gives the reason and keeps the mission on screen. The browser keeps the last file opened and opens it again on the next visit, unsaved edits included.
 
 | Tab | What it shows | What you can change |
 | --- | --- | --- |
-| Overview | Cautions, supplies with the margin, loads on the vehicle, file size | Name, margin |
+| Live view | Each crew member's suit sensors and position | Who you are. Not saved to the file |
+| Mission | Cautions, supplies with the margin, vehicle loads on demand | Name, margin |
 | Sites | Each site with its coordinates, the distance from the site before it and its tasks. Then the mission's symbols | A task's hours, crew and note |
 | Crew | Each person's radiation dose against the career limit, mission totals and daily needs | Nothing |
 | Phases | Supplies by phase | Days in a phase |
 | Briefing | The briefing text | The text |
 
-A change is sent when you leave the field or press Enter, and the planner answers as it does for the editor. If it refuses the change, the page says why, offers **Undo the edit**, and greys the numbers, which are then from before the change. **Undo** and Ctrl+Z step back one edit at a time. **Save file** downloads the `.mhr`. A name beside the mission says when edits are not saved to a file yet. Opening another file over unsaved edits offers the way back to them.
+The page sends a change to the planner when you leave the field or press Enter. If the planner refuses it, the page says why, offers **Undo the edit**, and greys the numbers, since they are from before the change. **Undo** and Ctrl+Z step back one edit at a time. **Save file** downloads the `.mhr`. "Unsaved" under the mission name means the edits are not in a file yet. Opening another file over unsaved edits offers a way back to them.
 
 The viewer does not add or remove crew, phases, sites or tasks, and does not move a site. The editor does that.
+
+### Live view
+
+Crew positions and suit readings are both simulated. Nothing here is telemetry, and none of it goes into the mission file. **Data sources**, at the bottom of the tab, says so.
+
+The crew walks as one group along the dashed line from site to site, out to the last site and back, at 1.2 m/s. They walk two abreast, 6 m apart, with 8 m between rows. With only one site, each person circles it instead. When markers would overlap on screen, the map draws one group marker instead, such as "You and 5 others". Zoom in, or click the group, to see each person. **You are** picks which crew member is you, the first by default.
+
+Each crew member is a row showing heart rate and oxygen time left. Open the row, or click the person on the map, for their suit readings:
+
+| Group | Readings | Caution, then over the limit |
+| --- | --- | --- |
+| Life signs | Heart rate, breathing, blood oxygen, core temperature | Blood oxygen under 94%, under 90% |
+| Oxygen | Breathed, suit leak, left in tank, time left at the current use and leak, suit pressure | Leak over 80% of the plan's 92 g/h suit loss allowance (BVAD), over all of it. Time left under 1 h, under 30 min |
+| Energy | Metabolic rate, energy used since the EVA started | Over 80% of the 617 W suited limit (NASA-STD-3001), over all of it |
+
+`src/viewer/sensors.ts` makes up the readings from the planner's suit model in `src/data/suit.ts`. Metabolic rate swings around the Apollo EVA average, oxygen use follows it by the BVAD ratio, and the tank holds enough for 8 h at the planned use and loss. The simulation starts 2 h 30 min into the EVA. The fourth suit leaks close to the allowance on purpose, to show a caution: its row names the reading, and the Live view tab gets a yellow dot. A real feed would replace `readSuitSensors`, the only function the page calls.
+
+Everything updates once a second without redrawing terrain. Pause freezes positions and readings. A hidden page stops the clock. Hiding positions leaves the readings running.
 
 ### The viewer's map
 
 - The ground is the same terrain and CTX imagery as the editor's globe, drawn by about 600 lines of WebGL 1 code. Close in at the four rover sites it shows the HiRISE mosaics. The cursor readout gives coordinates and elevation above the MOLA areoid.
-- Sites are numbered squares in file order, joined by a dashed straight line. A mission file holds sites, not a walked route: the route the editor's Sites page finds stays in the editor's browser. The key on the map says so.
-- Drag to move, scroll to zoom, right-drag or Shift+drag to turn and tilt. On a touch screen, pinch to zoom and twist to turn. The arrow keys move the map, with Shift they turn and tilt it, and + and - zoom. The buttons on the right zoom, show the whole mission, face north, tilt, and draw heights three times taller. Taller heights exaggerate slopes and are for looking, not for judging them.
+- Sites are numbered squares in file order, joined by a dashed straight line. A mission file holds sites, not a walked route. The route the editor's Sites page finds stays in the editor's browser, and the map key says the line is not a walked route.
+- Drag to move, scroll to zoom, right-drag or Shift+drag to turn and tilt. On a touch screen, pinch to zoom and twist to turn. The arrow keys move the map, Shift with them turns and tilts it, and + and - zoom. With the sidebar open, buttons on the right zoom, show the whole mission, face north and tilt.
+- Heights are always three times taller than true, and the map key says "Heights ×3". There is no switch back to true scale. Slopes look steeper than they are, so judge them from the planner, not the picture. The flat map has no relief and drops the note.
 - Clicking a site's name in the panel brings it to the middle of the map. Clicking a pin opens the site in the panel.
 - The ground is a flat map around the middle of the mission, not a globe. That is exact enough for one site and the routes around it. Far from the middle, east-west distances stretch.
+- The map loads only the mission's region: the box around its sites and symbols, plus 10% or at least 500 m on each side. The camera can't leave it, and can't pull back past twice the distance that shows the whole mission. Past the region's edge the map is empty.
 - The status bar reports loading and missing terrain or imagery, with **Retry**. Ground with no terrain is drawn level. Imagery arrives tile by tile, and the coarser ground stays under it until it does.
 
 ### On a weak device
 
-- Nothing is drawn unless the camera moved or a tile arrived.
+- Terrain is drawn only when the camera moves or a tile arrives. Crew markers move on their own, once a second.
 - A view is at most 25 tiles, each a mesh of 1,089 points and one picture, with no lighting.
 - When frames take longer than about 45 ms, the ground is drawn at half resolution while the camera moves and sharp again when it stops. In Chromium's software renderer that brings a frame from about 100 ms to about 40 ms at 960 by 810 pixels.
 - Without WebGL the same tiles are drawn flat, seen from above, and the status bar says the map is flat. Adding `?flat` to the address asks for that on a device whose 3D is broken.
 
-Nobody outside the team has used the viewer yet. A walkthrough with a first-time reader still has to check that the dashed line is not taken for a walked route, and that a refused edit is understood.
+Nobody outside the team has used the viewer yet. A first walkthrough should have someone open and close the sidebar, find themselves and a teammate, locate a person, open a suit reading and say what the caution means, and enter and leave Edit. For recovery, have them enter a margin under 40%, undo it, retry after the planner drops out, and reopen a file with unsaved edits. Check that nobody takes the dashed site line for a walked route, and that **Data sources** makes it clear the positions and readings are simulated. Browser tests don't replace this.
 
 ## Route search
 

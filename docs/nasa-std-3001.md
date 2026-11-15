@@ -12,10 +12,10 @@ Status: **meets** means the code does what the requirement asks. **Estimate** me
 | V2 10119 | Yellow for the second alert level | Meets | `--color-caution` |
 | V2 10045 | Critical meaning never by color alone | Meets | Filled and outline triangles on alert values (end of `src/styles.css`, and `src/viewer/viewer.css` for the viewer), wider red stretches on the map (`plan-overlay.ts`), hatching in the route profile, triangle rail dot, NO-GO and CAUTION written out |
 | V2 10049, Table 33 | Characters at least 0.25° high, 0.4° preferred | Meets the minimum | `--text-min` 12px. 0.4° would be 19px, which only the readouts reach |
-| V2 10020 | Mark stale, missing or unavailable data | Meets | Weather and space weather `stale`, unknown terrain is a caution, coarse terrain dashed |
+| V2 10020 | Mark stale, missing or unavailable data | Meets | Weather and space weather `stale`, unknown terrain is a caution, coarse terrain dashed. The viewer's Data sources says its positions and suit readings are simulated. Paused markers say Paused. |
 | V2 10018 | Specific, informative messages | Meets | Every NO-GO and caution names the value and the limit, `src/data/plan.ts` |
 | V2 10008, 10046 | One unit for like items, units with values | Meets | SI in code, unit after every value |
-| V2 10028 | Recover from accidental changes | Meets | Undo, redo, reset to preset. The viewer has undo, and a way back to a file replaced while it had unsaved edits |
+| V2 10028 | Recover from accidental changes | Meets | Undo, redo, reset to preset. In the viewer nothing changes until you press Edit. It has undo, keeps edits when the sidebar closes, and offers a way back to a file replaced while it had unsaved edits |
 | V2 10080 | Confirm destructive commands | Meets | Mission delete asks first |
 | V2 10129 | Crew backup and restore of mission data | Meets | Mission file download and import |
 | V2 10040 | Only the information the task needs | Meets | "No filler" rules in AGENTS.md |
@@ -27,7 +27,7 @@ Status: **meets** means the code does what the requirement asks. **Estimate** me
 | V2 11005 | EVA paths free from hazards | Meets for slope | Slope limit per leg. Rocks show only through terrain detail; a rock abundance layer would close the gap |
 | V2 11030 rationale | Water for a 10 km walk-back after a rover failure | Meets | Walk-back is measured along the route, and no preset or field goes past 10 km. `WALK_BACK_REFERENCE` in `src/data/plan.ts` |
 | V2 11037 | Measure or calculate suited metabolic rate | Estimate | `suitLoad` in `src/data/plan.ts`: Apollo EVA average plus lifting work in Mars gravity |
-| V2 11038 | Show metabolic data to the crew | Estimate | Suit load tab: peak and average watts, energy |
+| V2 11038 | Show metabolic data to the crew | Estimate | Suit load tab: peak and average watts, energy. The viewer's Live view shows each crew member's metabolic rate, energy, oxygen use and leak, from simulated readings (`src/viewer/sensors.ts`) |
 | V2 11011 rationale | Suit cooling sized for 528 to 2220 kJ/h | Estimate | Peak over 617 W is a caution on the leg |
 | V2 7004 | 200 kcal more food per EVA hour | Meets | Go planner, `EVAFoodKcalPerHour` |
 | V2 11030 | 240 mL of drinking water per EVA hour | Meets | Go planner and the Suit load tab |

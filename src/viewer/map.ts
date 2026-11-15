@@ -6,18 +6,25 @@
 // around it, which is what the viewer is for. Far from the middle, east-west
 // distances stretch.
 //
-// Two sets of tiles are drawn. The first is loaded once and covers the whole
-// mission. The second follows the camera and is as fine as the zoom needs.
-// While a new one loads, the one before it stays. Nothing is drawn unless
-// something changed.
+// The map loads only the mission's own region, its sites and symbols with a
+// margin around them, and keeps the camera over it. It draws two sets of
+// tiles. The first loads once and covers the region. The second follows the
+// camera, is as fine as the zoom needs, and is cut to the region. While a new
+// one loads, the one before it stays. Nothing is drawn unless something
+// changed.
+//
+// Heights are always drawn three times taller, and the map key says so.
 
 import type { Site } from '../api'
 import type { Marker } from '../data/markers'
 import { DATUM_OFFSET } from '../data/terrain-source.js'
 import { formatElevation, formatLatLon } from '../format.js'
 import { h } from './dom'
+import { type IconName, icon } from './icons'
+import type { CrewPosition } from './live'
 import { type Frame, createFlatRenderer, createGlRenderer } from './gl'
-import { MAX_LEVEL, METERS_PER_DEGREE, type Patch, createTileSource, patchId } from './tiles'
+import { type MissionRegion, intersectBounds, missionRegion } from './region'
+import { type Bounds, MAX_LEVEL, METERS_PER_DEGREE, type Patch, createTileSource, patchId } from './tiles'
 import { type Basis, HALF_FOV, MIN_PITCH, type View, basis, ground, matrix, pixelsPerMeter, project } from './view'
 
 export interface MapStatus {
@@ -31,6 +38,7 @@ export interface MapStatus {
 export interface MapEvents {
   // A site pin was clicked.
   select(site: number): void
+  selectCrew(member: number): void
   status(status: MapStatus): void
   // Coordinates and elevation under the pointer, or '' when there is none.
   cursor(text: string): void
@@ -38,13 +46,11 @@ export interface MapEvents {
   scale(pixelsPerMeter: number): void
 }
 
-// With no sites to show: Tharsis and Valles Marineris, as the editor opens.
-const HOME = { lat: 0, lon: -85, dist: 9_000_000 }
 const MIN_DIST = 150
 const MAX_DIST = 22_000_000
 const TILTED = (50 * Math.PI) / 180
 const TOP_DOWN = Math.PI / 2
-const RELIEF = 3
+export const RELIEF = 3
 // Candidate line style from src/components/plan-overlay.ts: dashes of 6 on
 // 5, 2.5 px wide, on a dark band.
 const DASH = 6 / 11
@@ -80,12 +86,15 @@ export function createMap(root: HTMLElement, events: MapEvents) {
   const tiles = createTileSource((image) => renderer.release(image))
 
   // The middle of the mission. `cos` shortens a degree of longitude there.
-  let origin = { lat: HOME.lat, lon: HOME.lon, cos: 1 }
+  let origin = { lat: 0, lon: 0, cos: 1 }
+  // What is loaded, and how far the camera may pull back from it. Null
+  // until a mission with a place is shown.
+  let region: MissionRegion | null = null
+  let maxDist = MAX_DIST
   // The point the camera looks at, meters east and north of the origin.
   const target = { x: 0, y: 0 }
-  const view: View = { heading: 0, pitch: renderer.flat ? TOP_DOWN : TILTED, dist: HOME.dist, width: 1, height: 1 }
-  let fitDist = HOME.dist
-  let relief = 1
+  const view: View = { heading: 0, pitch: renderer.flat ? TOP_DOWN : TILTED, dist: MAX_DIST, width: 1, height: 1 }
+  let fitDist = MAX_DIST
   // The terrain height drawn at zero, so drawn heights stay small numbers.
   let h0 = DATUM_OFFSET
   let base: Patch | null = null
@@ -101,17 +110,123 @@ export function createMap(root: HTMLElement, events: MapEvents) {
   let selected = -1
   let pins: Array<{ x: number; y: number; site: number }> = []
   const icons = new Map<string, HTMLImageElement>()
+  const crewLayer = h('div', { class: 'crew-pins', 'aria-label': 'Crew positions' })
+  let crew: CrewPosition[] = []
+  let crewSignature = ''
+  let crewQueued = 0
+  let crewButtons: HTMLButtonElement[] = []
+
+  // Crew markers closer than this on screen merge into one group marker, as
+  // a map merges nearby pins. Zooming in, or clicking the group, parts them.
+  const GROUP_PX = 26
+  let crewPaused = false
+  let groupButtons: HTMLButtonElement[] = []
+  function groupButton(n: number): HTMLButtonElement {
+    let button = groupButtons[n]
+    if (!button) {
+      const made = h(
+        'button',
+        {
+          type: 'button',
+          class: 'crew-pin crew-pin--group',
+          onclick: () => lookAt(Number(made.dataset.lat), Number(made.dataset.lon), MIN_DIST),
+        },
+        h('span', { class: 'crew-pin__dot', 'aria-hidden': 'true' }),
+        h('span', { class: 'crew-pin__name' }),
+      )
+      button = groupButtons[n] = made
+      crewLayer.append(made)
+    }
+    return button
+  }
+
+  function drawCrew(b: Basis, tz: number) {
+    const labels: Array<[number, number, number, number]> = []
+    // Labels give way to the map controls and the site-order key.
+    const mapBox = root.getBoundingClientRect()
+    for (const control of [rail, key]) {
+      if (!control.getClientRects().length) continue
+      const box = control.getBoundingClientRect()
+      labels.push([box.left - mapBox.left, box.top - mapBox.top, box.width, box.height])
+    }
+    for (const pin of pins) labels.push([pin.x - 12, pin.y - 12, 32 + pen.measureText(sites[pin.site]!.name).width, 24])
+
+    // Puts a marker at a point, and its name on the side that covers least.
+    const place = (button: HTMLButtonElement, point: [number, number]) => {
+      button.hidden = false
+      button.style.left = `${point[0]}px`
+      button.style.top = `${point[1]}px`
+      const label = button.querySelector<HTMLElement>('.crew-pin__name')!
+      const width = label.offsetWidth,
+        height = label.offsetHeight
+      const choices = [
+        [20, -height / 2],
+        [-width - 20, -height / 2],
+        [-width / 2, 22],
+        [-width / 2, -height - 22],
+      ]
+      let side = choices[0]!
+      let best = Infinity
+      for (const candidate of choices) {
+        const left = point[0] + candidate[0]!,
+          top = point[1] + candidate[1]!
+        const outside = left < 0 || top < 0 || left + width > view.width || top + height > view.height
+        const overlaps = labels.filter(([x, y, w, h]) => left < x + w + 4 && x < left + width + 4 && top < y + h + 4 && y < top + height + 4).length
+        const score = overlaps + (outside ? 100 : 0)
+        if (score < best) {
+          side = candidate
+          best = score
+        }
+      }
+      label.style.left = `${22 + side[0]!}px`
+      label.style.top = `${22 + side[1]!}px`
+      labels.push([point[0] + side[0]!, point[1] + side[1]!, width, height])
+    }
+
+    // Each person joins the first group whose first member is near on screen.
+    const groups: Array<{ members: number[]; points: Array<[number, number]>; scene: Array<[number, number]> }> = []
+    crew.forEach((person, i) => {
+      crewButtons[i]!.hidden = true
+      const [x, y] = toScene(person.lat, person.lon)
+      const point = project(b, view, [x - target.x, y - target.y, zOf(x, y) - tz])
+      if (!point || point[0] < 16 || point[1] < 16 || point[0] > view.width - 16 || point[1] > view.height - 16) return
+      const near = groups.find(({ points: [first] }) => Math.hypot(first![0] - point[0], first![1] - point[1]) < GROUP_PX)
+      if (near) {
+        near.members.push(i)
+        near.points.push(point)
+        near.scene.push([x, y])
+      } else groups.push({ members: [i], points: [point], scene: [[x, y]] })
+    })
+
+    const mean = (values: Array<[number, number]>): [number, number] => [
+      values.reduce((sum, v) => sum + v[0], 0) / values.length,
+      values.reduce((sum, v) => sum + v[1], 0) / values.length,
+    ]
+    let used = 0
+    for (const { members, points, scene } of groups) {
+      if (members.length === 1) {
+        place(crewButtons[members[0]!]!, points[0]!)
+        continue
+      }
+      const people = members.map((i) => crew[i]!)
+      const you = people.some((person) => person.self)
+      const button = groupButton(used++)
+      const [lat, lon] = toGeo(...mean(scene))
+      button.dataset.lat = String(lat)
+      button.dataset.lon = String(lon)
+      button.classList.toggle('crew-pin--self', you)
+      const paused = crewPaused ? ' · Paused' : ''
+      button.querySelector('.crew-pin__name')!.textContent = `${you ? `You and ${people.length - 1} ${people.length === 2 ? 'other' : 'others'}` : `${people.length} crew`}${paused}`
+      button.setAttribute('aria-label', `Group: ${people.map((person) => (person.self ? `you, ${person.name}` : person.name)).join(', ')}. Zoom in to tell them apart.`)
+      place(button, mean(points))
+    }
+    for (let n = used; n < groupButtons.length; n++) groupButtons[n]!.hidden = true
+  }
 
   const east = () => METERS_PER_DEGREE * origin.cos
-  const toScene = (lat: number, lon: number): [number, number] => [
-    (((lon - origin.lon + 540) % 360) - 180) * east(),
-    (lat - origin.lat) * METERS_PER_DEGREE,
-  ]
-  const toGeo = (x: number, y: number): [lat: number, lon: number] => [
-    origin.lat + y / METERS_PER_DEGREE,
-    origin.lon + x / east(),
-  ]
-  const lift = () => (renderer.flat ? 0 : relief)
+  const toScene = (lat: number, lon: number): [number, number] => [(((lon - origin.lon + 540) % 360) - 180) * east(), (lat - origin.lat) * METERS_PER_DEGREE]
+  const toGeo = (x: number, y: number): [lat: number, lon: number] => [origin.lat + y / METERS_PER_DEGREE, origin.lon + x / east()]
+  const lift = () => (renderer.flat ? 0 : RELIEF)
   // Drawn height of the ground at a point, in meters above the zero level.
   const zOf = (x: number, y: number) => {
     const [lat, lon] = toGeo(x, y)
@@ -130,25 +245,27 @@ export function createMap(root: HTMLElement, events: MapEvents) {
     })
   }
 
-  // The tiles the camera needs: a square around the target, at the level
-  // where one tile is about as wide as the camera is far.
-  function area() {
+  // The level where one tile is about as wide as the camera is far.
+  const levelFor = (dist: number) => clamp(Math.floor(Math.log2((180 * east()) / (dist * 0.7))), 0, MAX_LEVEL)
+
+  // The tiles the camera needs: a square around the target, cut to the
+  // mission's region. Null with no region, or when the square misses it.
+  function area(): { level: number; bounds: Bounds } | null {
+    if (!region) return null
     const [lat, lon] = toGeo(target.x, target.y)
     const half = view.dist * 1.4
-    return {
-      level: clamp(Math.floor(Math.log2((180 * east()) / (view.dist * 0.7))), 0, MAX_LEVEL),
-      bounds: {
-        south: lat - half / METERS_PER_DEGREE,
-        north: lat + half / METERS_PER_DEGREE,
-        west: lon - half / east(),
-        east: lon + half / east(),
-      },
-    }
+    const bounds = intersectBounds(region.bounds, {
+      south: lat - half / METERS_PER_DEGREE,
+      north: lat + half / METERS_PER_DEGREE,
+      west: lon - half / east(),
+      east: lon + half / east(),
+    })
+    return bounds && { level: levelFor(view.dist), bounds }
   }
 
   // `arrived` gets the patch when its terrain is in, `complete` when every
   // picture is. Neither is called for a mission that is no longer shown.
-  async function load(place: ReturnType<typeof area>, arrived: (patch: Patch) => void, complete: (patch: Patch) => void = () => {}) {
+  async function load(place: { level: number; bounds: Bounds }, arrived: (patch: Patch) => void, complete: (patch: Patch) => void = () => {}) {
     const asked = mission
     loads++
     report()
@@ -174,6 +291,7 @@ export function createMap(root: HTMLElement, events: MapEvents) {
 
   function refresh() {
     const place = area()
+    if (!place) return
     const id = patchId(place.bounds, place.level)
     if (id === wanted) return
     wanted = id
@@ -191,7 +309,7 @@ export function createMap(root: HTMLElement, events: MapEvents) {
     )
   }
 
-  let baseArea: ReturnType<typeof area> | null = null
+  let baseArea: { level: number; bounds: Bounds } | null = null
   function loadBase() {
     if (!baseArea) return
     void load(baseArea, (patch) => {
@@ -220,10 +338,15 @@ export function createMap(root: HTMLElement, events: MapEvents) {
 
   let timer = 0
   function moved() {
-    view.dist = clamp(view.dist, MIN_DIST, MAX_DIST)
+    view.dist = clamp(view.dist, MIN_DIST, maxDist)
     view.pitch = renderer.flat ? TOP_DOWN : clamp(view.pitch, MIN_PITCH, TOP_DOWN)
     if (renderer.flat) view.heading = 0
-    target.y = clamp(target.y, (-90 - origin.lat) * METERS_PER_DEGREE, (90 - origin.lat) * METERS_PER_DEGREE)
+    // The camera looks at the region and nowhere else.
+    if (region) {
+      const { south, north, west, east: eastEdge } = region.bounds
+      target.x = clamp(target.x, (west - origin.lon) * east(), (eastEdge - origin.lon) * east())
+      target.y = clamp(target.y, (south - origin.lat) * METERS_PER_DEGREE, (north - origin.lat) * METERS_PER_DEGREE)
+    }
     // Lift the camera until it clears the ground under it.
     for (let i = 0; i < 12 && view.pitch < TOP_DOWN; i++) {
       const { eye } = basis(view)
@@ -265,6 +388,7 @@ export function createMap(root: HTMLElement, events: MapEvents) {
     }
     renderer.draw(active(), frame)
     drawOverlay(b, tz)
+    drawCrew(b, tz)
   }
 
   function drawOverlay(b: Basis, tz: number) {
@@ -401,7 +525,7 @@ export function createMap(root: HTMLElement, events: MapEvents) {
 
   function zoomAbout(px: number, py: number, factor: number) {
     const before = groundAt(px, py)
-    view.dist = clamp(view.dist * factor, MIN_DIST, MAX_DIST)
+    view.dist = clamp(view.dist * factor, MIN_DIST, maxDist)
     const after = groundAt(px, py)
     if (before && after) {
       target.x += before[0] - after[0]
@@ -515,37 +639,38 @@ export function createMap(root: HTMLElement, events: MapEvents) {
 
   // The camera rail.
 
-  const button = (text: string, tip: string, act: () => void) =>
-    h('button', { type: 'button', class: 'rail__button', 'aria-label': tip, 'data-tip': tip, onclick: act }, text)
+  const button = (face: IconName, tip: string, act: () => void) =>
+    h('button', { type: 'button', class: 'rail__button', 'aria-label': tip, 'data-tip': tip, onclick: act }, icon(face))
   const zoom = (factor: number) => zoomAbout(view.width / 2, view.height / 2, factor)
-  const tilt = button('Tilt', 'Tilt the view. Right-drag or Shift+drag also turns it.', () => {
+  const tilt = button('tilt', 'Tilt the view. Right-drag or Shift+drag also turns it.', () => {
     view.pitch = view.pitch < TOP_DOWN - 0.1 ? TOP_DOWN : TILTED
     moved()
   })
-  const taller = button(`×${RELIEF}`, `Draw heights ${RELIEF} times taller. Slopes then look steeper than they are.`, () => {
-    relief = relief === 1 ? RELIEF : 1
-    taller.setAttribute('aria-pressed', String(relief !== 1))
-    moved()
-  })
-  taller.setAttribute('aria-pressed', 'false')
-  const key = h('p', { class: 'key', hidden: true }, h('span', { class: 'key__line' }), 'Straight line between sites, in file order. Not a walked route.')
-  // The controls appear with the first mission. Before it there is no map.
+  const orderKey = h('span', { class: 'key__item' }, h('span', { class: 'key__line' }), 'Site order · Not a walked route')
+  const reliefKey = h(
+    'span',
+    { class: 'key__item', title: `Heights are drawn ${RELIEF} times taller than they are, so slopes look steeper. Shading and relief do not show which slopes are safe.` },
+    `Heights ×${RELIEF}`,
+  )
+  const key = h('p', { class: 'key', hidden: true }, reliefKey, orderKey)
+  // The page shows these controls only while its sidebar is open.
   const rail = h(
     'div',
     { class: 'rail', role: 'group', 'aria-label': 'Map view', hidden: true },
-    button('+', 'Zoom in', () => zoom(0.6)),
-    button('−', 'Zoom out', () => zoom(1 / 0.6)),
-    button('Fit', 'Show the whole mission', () => fit()),
+    button('plus', 'Zoom in', () => zoom(0.6)),
+    button('minus', 'Zoom out', () => zoom(1 / 0.6)),
+    button('fit', 'Show the whole mission', () => fit()),
     !renderer.flat && [
-      button('N', 'North up', () => {
+      button('north', 'North up', () => {
         view.heading = 0
         moved()
       }),
       tilt,
-      taller,
     ],
   )
-  root.append(canvas, overlay, rail, key)
+  // Corner brackets mark the edges of the map, as in the editor.
+  const corners = ['tl', 'tr', 'bl', 'br'].map((corner) => h('span', { class: `map__corner map__corner--${corner}`, 'aria-hidden': 'true' }))
+  root.append(canvas, overlay, crewLayer, ...corners, rail, key)
 
   function resize() {
     view.width = root.clientWidth
@@ -564,9 +689,9 @@ export function createMap(root: HTMLElement, events: MapEvents) {
   resize()
 
   // Brings a place to the middle of the map, close enough to see it.
-  function lookAt(lat: number, lon: number) {
+  function lookAt(lat: number, lon: number, distance = 2500) {
     ;[target.x, target.y] = toScene(lat, lon)
-    view.dist = Math.min(view.dist, 2500)
+    view.dist = Math.min(view.dist, distance)
     moved()
   }
 
@@ -578,42 +703,44 @@ export function createMap(root: HTMLElement, events: MapEvents) {
   }
 
   return {
-    // Shows a mission's sites and symbols, and frames them.
-    show(nextSites: Site[], nextMarkers: Marker[]) {
+    // Shows a mission's sites and symbols, and frames them. False when the
+    // mission has no place to show, so the map has nothing to load.
+    show(nextSites: Site[], nextMarkers: Marker[]): boolean {
       sites = nextSites
       markers = nextMarkers
       selected = -1
       mission++
       const points = [...sites.map((site) => [site.lat, site.lon]), ...markers.map((marker) => marker.point)] as Array<[number, number]>
-      const first = points[0]
-      if (!first) {
-        origin = { lat: HOME.lat, lon: HOME.lon, cos: 1 }
-        fitDist = HOME.dist
-      } else {
-        // Longitudes are taken relative to the first point, so a mission
-        // across the date line is not split in two.
-        const lats = points.map(([lat]) => lat)
-        const lons = points.map(([, lon]) => ((lon - first[1] + 540) % 360) - 180)
-        const lat = (Math.min(...lats) + Math.max(...lats)) / 2
-        origin = { lat, lon: first[1] + (Math.min(...lons) + Math.max(...lons)) / 2, cos: Math.max(0.2, Math.cos((lat * Math.PI) / 180)) }
-        const tall = (Math.max(...lats) - Math.min(...lats)) * METERS_PER_DEGREE
-        const wide = (Math.max(...lons) - Math.min(...lons)) * east()
-        const aspect = Math.max(0.5, view.width / view.height)
-        fitDist = clamp((Math.max(tall, wide / aspect) * 1.5) / (2 * HALF_FOV), 1200, MAX_DIST)
-      }
+      region = missionRegion(points)
       if (base) renderer.drop(base)
       base = null
       setDetail(null)
       h0 = DATUM_OFFSET
-      key.hidden = sites.length < 2
-      rail.hidden = false
       target.x = target.y = 0
-      view.dist = fitDist
       view.heading = 0
-      // A whole planet drawn flat reads best from straight above.
-      view.pitch = first ? TILTED : TOP_DOWN
-      baseArea = area()
-      wanted = patchId(baseArea.bounds, baseArea.level)
+      view.pitch = renderer.flat ? TOP_DOWN : TILTED
+      key.hidden = rail.hidden = !region
+      orderKey.hidden = sites.length < 2
+      reliefKey.hidden = renderer.flat
+      if (!region) {
+        // Nothing to load. The page shows the globe instead.
+        baseArea = null
+        wanted = ''
+        maxDist = fitDist = view.dist = MAX_DIST
+        requestDraw()
+        return false
+      }
+      const { lat, lon, bounds } = region
+      origin = { lat, lon, cos: Math.max(0.2, Math.cos((lat * Math.PI) / 180)) }
+      const tall = (bounds.north - bounds.south) * METERS_PER_DEGREE
+      const wide = (bounds.east - bounds.west) * east()
+      const aspect = Math.max(0.5, view.width / view.height)
+      fitDist = clamp((Math.max(tall, wide / aspect) * 1.2) / (2 * HALF_FOV), 1200, MAX_DIST)
+      // Pulling back past the region would only show empty space around it.
+      maxDist = fitDist * 2
+      view.dist = fitDist
+      baseArea = { level: levelFor(fitDist), bounds }
+      wanted = patchId(bounds, baseArea.level)
       loadBase()
       if (markers.length > 0) {
         // The symbol drawings are only fetched for a mission that uses them.
@@ -628,6 +755,7 @@ export function createMap(root: HTMLElement, events: MapEvents) {
         })
       }
       moved()
+      return true
     },
     // Marks a site and brings it to the middle of the map. -1 marks none.
     select(site: number) {
@@ -637,6 +765,35 @@ export function createMap(root: HTMLElement, events: MapEvents) {
       else requestDraw()
     },
     lookAt,
+    // Moving crew only repositions DOM markers, not the terrain renderer.
+    setCrew(next: CrewPosition[], paused: boolean) {
+      crew = next
+      crewPaused = paused
+      const signature = JSON.stringify(next.map((p) => [p.member, p.name, p.self, paused]))
+      if (signature !== crewSignature) {
+        crewSignature = signature
+        crewButtons = crew.map((person) =>
+          h(
+            'button',
+            {
+              type: 'button',
+              class: person.self ? 'crew-pin crew-pin--self' : 'crew-pin',
+              'aria-label': `${person.self ? 'You, ' : ''}${person.name}${paused ? ', paused position' : ''}`,
+              onclick: () => events.selectCrew(person.member),
+            },
+            h('span', { class: 'crew-pin__dot', 'aria-hidden': 'true' }),
+            h('span', { class: 'crew-pin__name' }, `${person.self ? 'You' : person.name}${paused ? ' · Paused' : ''}`),
+          ),
+        )
+        groupButtons = []
+        crewLayer.replaceChildren(...crewButtons)
+      }
+      if (!crewQueued)
+        crewQueued = requestAnimationFrame(() => {
+          crewQueued = 0
+          drawCrew(basis(view), zOf(target.x, target.y))
+        })
+    },
     // Loads again what failed.
     retry() {
       loadBase()

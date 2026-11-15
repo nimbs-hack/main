@@ -54,21 +54,30 @@ button:disabled {
   display: none !important;
 }
 
-/* Layout: top bar, messages, the panel beside the map, status bar. */
-
+/* The map owns the screen. The sidebar is closed until requested. */
 #viewer {
-  display: grid;
+  position: relative;
   height: 100dvh;
-  grid-template:
-    'bar bar' var(--topbar-height)
-    'alerts alerts' auto
-    'panel map' minmax(0, 1fr)
-    'status status' var(--statusbar-height)
-    / minmax(0, var(--sidebar-width)) minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.sidebar-toggle {
+  position: absolute;
+  z-index: 3;
+  top: var(--space-8);
+  left: var(--space-8);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 44px;
+  background: var(--color-surface);
+}
+
+.sidebar-backdrop {
+  display: none;
 }
 
 .bar {
-  grid-area: bar;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -80,13 +89,14 @@ button:disabled {
 .bar__title {
   display: flex;
   flex: 1;
-  align-items: baseline;
-  gap: var(--space-3);
+  flex-direction: column;
+  gap: var(--space-1);
   min-width: 0;
-  white-space: nowrap;
 }
 
 .bar__title strong {
+  max-width: 100%;
+  white-space: nowrap;
   overflow: hidden;
   font-size: var(--text-heading);
   font-weight: 700;
@@ -112,13 +122,24 @@ button:disabled {
   border: var(--border-width) solid var(--color-line-strong);
   background: var(--color-surface-raised);
   font-size: var(--text-data);
-  font-weight: 600;
 }
 
+.icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+.button--icon {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The action a view is there for, outlined in accent as in the editor. */
 .button--primary {
   border-color: var(--color-accent);
-  background: var(--color-accent);
-  color: var(--color-bg);
+  background: var(--color-accent-shade);
 }
 
 .link {
@@ -164,7 +185,9 @@ button:disabled {
 /* Messages. Each starts with a word saying what it is and offers what to do. */
 
 .alerts {
-  grid-area: alerts;
+  max-height: 30dvh;
+  overflow-y: auto;
+  font-size: var(--text-data);
 }
 
 .alerts p {
@@ -186,51 +209,111 @@ button:disabled {
 /* The panel. */
 
 .panel {
-  grid-area: panel;
+  position: absolute;
+  z-index: 4;
+  inset: 0 auto 0 0;
+  width: var(--sidebar-width);
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  min-height: 0;
-  border-right: var(--border-width) solid var(--color-line);
+  grid-template-rows: var(--topbar-height) auto auto minmax(0, 1fr) auto;
+  border-right: var(--border-width) solid var(--color-line-strong);
   background: var(--color-surface);
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition:
+    transform 180ms ease-out,
+    visibility 180ms;
 }
 
+.sidebar-open .panel {
+  transform: translateX(0);
+  visibility: visible;
+}
+
+.panel__actions {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: var(--border-width) solid var(--color-line);
+}
+
+.panel__actions > :nth-child(2) {
+  margin-left: auto;
+}
+
+.panel__content {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The editor's plan panel rail: icon over name, the open tab boxed with an
+   accent edge. */
 .tabs {
   display: flex;
-  overflow-x: auto;
-  border-bottom: var(--border-width) solid var(--color-line);
-  scrollbar-width: none;
+  flex-direction: column;
+  flex: 0 0 80px;
+  gap: var(--space-1);
+  overflow-y: auto;
+  border-right: var(--border-width) solid var(--color-line);
+  padding: var(--space-3) var(--space-1);
+  background: var(--color-bg);
 }
 
 .tabs button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 2px;
   flex: none;
-  height: 44px;
-  padding: 0 var(--space-3);
-  border: 0;
-  border-bottom: 2px solid transparent;
+  height: 52px;
+  padding: 0;
+  border: var(--border-width) solid transparent;
   background: none;
-  color: var(--color-text-muted);
-  font-size: var(--text-data);
-  font-weight: 600;
+  color: var(--color-text-dim);
+  font-size: var(--text-min);
+  font-weight: 400;
+  white-space: nowrap;
 }
 
-.tabs button[aria-current] {
-  border-bottom-color: var(--color-accent);
+.tabs button:hover {
   color: var(--color-text);
 }
-
-.tabs__flag {
-  margin-left: var(--space-2);
-  color: var(--color-caution);
-  font-weight: 400;
+.button:hover:not(:disabled) {
+  border-color: var(--color-text-muted);
 }
-
-.tabs__flag::before,
+.tabs button[aria-current] {
+  border-color: var(--color-line-strong);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+/* A dot on a rail icon: something in the tab is near a limit. A triangle:
+   over one, so the two differ by shape as well as color. */
+.tabs__flag {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  background: var(--color-caution);
+}
+.tabs__flag--hazard {
+  top: 4px;
+  right: 4px;
+  width: 9px;
+  height: 8px;
+  background: var(--color-hazard);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
 .cautions li::before {
   content: '△\00a0';
   color: var(--color-caution);
 }
 
 .panel__body {
+  flex: 1;
+  min-width: 0;
   overflow-y: auto;
   padding: var(--space-4);
 }
@@ -241,18 +324,32 @@ button:disabled {
   align-content: start;
 }
 
-.page h2 {
-  margin-bottom: var(--space-2);
+.page__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-heading);
+  font-weight: 700;
+}
+
+/* Group headers, as the editor's: smaller and quieter than the tab title,
+   with a rule running out to the edge. */
+.page :is(h2, h3) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 var(--space-1);
   color: var(--color-text-muted);
   font-size: var(--text-data);
   font-weight: 600;
 }
 
-.page h3 {
-  margin-top: var(--space-3);
-  color: var(--color-text-dim);
-  font-size: var(--text-label);
-  font-weight: 600;
+.page :is(h2, h3)::after {
+  content: '';
+  flex: 1;
+  height: var(--border-width);
+  background: var(--color-line);
 }
 
 .empty {
@@ -285,12 +382,15 @@ button:disabled {
   justify-content: space-between;
   gap: var(--space-4);
   min-height: var(--control-height);
-  padding: var(--space-1) 0;
-  border-bottom: var(--border-width) solid var(--color-line);
 }
 
 .row__label {
   color: var(--color-text-muted);
+}
+
+.row[title] .row__label {
+  text-decoration: underline dotted var(--color-text-dim);
+  text-underline-offset: 3px;
 }
 
 .row__value,
@@ -311,6 +411,8 @@ button:disabled {
 }
 
 .field {
+  min-width: 0;
+  max-width: 70%;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -336,7 +438,9 @@ button:disabled {
 }
 
 .field input.field__text {
-  width: 24ch;
+  min-width: 0;
+  width: 20ch;
+  max-width: 100%;
   text-align: left;
 }
 
@@ -347,6 +451,16 @@ button:disabled {
 .is-hazard::before {
   content: '▲\00a0';
 }
+
+.is-caution {
+  color: var(--color-caution);
+}
+
+.is-caution::before {
+  content: '△\00a0';
+}
+
+
 
 /* Numbers from before an edit the planner has not accepted. */
 .panel.is-stale :is(.readout__value, .row__value, .table td) {
@@ -361,9 +475,9 @@ button:disabled {
 
 .readout {
   display: grid;
-  gap: 2px;
-  padding: var(--space-3);
-  background: var(--color-surface-raised);
+  gap: var(--space-1);
+  padding: var(--space-3) 0;
+  border-bottom: var(--border-width) solid var(--color-line);
 }
 
 .readout__label {
@@ -382,7 +496,6 @@ button:disabled {
 }
 
 .readout__sub {
-  min-height: 1lh;
   color: var(--color-text-muted);
   font-size: var(--text-label);
 }
@@ -524,11 +637,26 @@ button:disabled {
   font-size: var(--text-data);
 }
 
-.person__more {
+/* "Details" with a chevron in a box, as on the editor's crew tiles. The
+   chevron turns when the row is open. */
+.more-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-surface-raised);
   color: var(--color-text-muted);
   font-size: var(--text-data);
-  text-decoration: underline;
-  text-underline-offset: 3px;
+}
+summary:hover .more-button {
+  border-color: var(--color-text-muted);
+  color: var(--color-text);
+}
+details[open] > summary .more-button .icon {
+  rotate: 180deg;
 }
 
 .briefing {
@@ -545,8 +673,8 @@ button:disabled {
 /* The map: the ground, then what is drawn on it, then the controls. */
 
 .map {
-  grid-area: map;
-  position: relative;
+  position: absolute;
+  inset: 0;
   overflow: hidden;
   min-height: 0;
   background: var(--color-bg);
@@ -566,14 +694,23 @@ button:disabled {
   touch-action: none;
 }
 
+.sidebar-open .map {
+  left: var(--sidebar-width);
+  bottom: var(--viewer-status-height, var(--statusbar-height));
+}
+
 .rail {
   position: absolute;
   top: 50%;
-  right: var(--space-3);
+  right: var(--space-8);
   display: grid;
   translate: 0 -50%;
   border: var(--border-width) solid var(--color-line-strong);
   background: var(--color-surface);
+}
+
+#viewer:not(.sidebar-open) .rail {
+  display: none;
 }
 
 .rail__button {
@@ -587,6 +724,11 @@ button:disabled {
   font-weight: 600;
 }
 
+.rail__button .icon {
+  display: block;
+  margin: auto;
+}
+
 .rail__button:first-child {
   border-top: 0;
 }
@@ -598,17 +740,29 @@ button:disabled {
 
 .key {
   position: absolute;
-  bottom: var(--space-3);
-  left: var(--space-3);
+  z-index: 1;
+  bottom: var(--space-8);
+  left: var(--space-8);
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  max-width: calc(100% - 2 * var(--space-3));
+  max-width: calc(100% - 2 * var(--space-8));
   padding: var(--space-1) var(--space-2);
   border: var(--border-width) solid var(--color-line);
   background: var(--color-surface);
   color: var(--color-text-muted);
   font-size: var(--text-label);
+}
+
+.key__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.key__item:not([hidden]) + .key__item:not([hidden]) {
+  padding-left: var(--space-2);
+  border-left: var(--border-width) solid var(--color-line-strong);
 }
 
 /* The line as the map draws it: dashes of 6 on 5 on a dark band. */
@@ -621,104 +775,369 @@ button:disabled {
 }
 
 .status {
-  grid-area: status;
-  display: flex;
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  left: var(--sidebar-width);
+  display: none;
   align-items: center;
   gap: var(--space-4);
-  padding: 0 var(--space-4);
+  min-height: var(--statusbar-height);
+  padding: var(--space-1) var(--space-3);
   border-top: var(--border-width) solid var(--color-line);
   background: var(--color-surface);
   color: var(--color-text-muted);
   font-size: var(--text-label);
-  white-space: nowrap;
 }
 
+.sidebar-open .status,
+.status.has-warning {
+  display: flex;
+}
+#viewer:not(.sidebar-open) .status.has-warning {
+  left: 0;
+  width: max-content;
+  max-width: 100%;
+}
+#viewer:not(.sidebar-open) .status :is(.status__scale, .status__cursor) {
+  display: none;
+}
 .status [role='status'] {
   display: flex;
-  gap: var(--space-3);
+  flex-wrap: wrap;
+  gap: var(--space-2);
   color: var(--color-warning);
 }
-
 .status [role='status']:empty {
   display: none;
 }
-
 .credits {
-  position: relative;
-  flex: 1;
+  padding: var(--space-3) var(--space-4);
+  border-top: var(--border-width) solid var(--color-line);
+  font-size: var(--text-label);
+  color: var(--color-text-muted);
 }
-
-.credits summary {
-  width: max-content;
+.credits summary,
+.more summary {
   cursor: pointer;
-  list-style: none;
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  width: fit-content;
 }
-
-.credits summary::-webkit-details-marker {
-  display: none;
-}
-
 .credits div {
-  position: absolute;
-  z-index: 5;
-  bottom: calc(100% + var(--space-2));
-  left: 0;
-  padding: var(--space-2) var(--space-3);
-  border: var(--border-width) solid var(--color-line-strong);
-  background: var(--color-bg);
-  color: var(--color-text);
+  padding-top: var(--space-2);
+  display: grid;
+  gap: var(--space-2);
 }
-
 .status__scale {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  margin-left: auto;
   color: var(--color-text);
+  white-space: nowrap;
 }
-
 .scale {
   height: 6px;
   border: var(--border-width) solid var(--color-text);
   border-top: 0;
 }
-
 .status__cursor {
-  min-width: 30ch;
   color: var(--color-text);
+  white-space: nowrap;
+}
+.more {
+  border-top: var(--border-width) solid var(--color-line);
+  padding-top: var(--space-3);
+  font-size: var(--text-data);
+}
+.more[open] summary {
+  margin-bottom: var(--space-3);
+}
+.briefing-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.row__value {
+  overflow-wrap: anywhere;
+}
+select {
+  max-width: 65%;
+  min-height: var(--control-height);
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--color-line-strong);
+  border-radius: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  appearance: none;
+}
+.live-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.team {
+  display: grid;
+}
+.team__person {
+  border-bottom: var(--border-width) solid var(--color-line);
+}
+/* As on the Crew tab, the whole line opens the person's readings. */
+.team__person summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: var(--space-3) 0;
+  cursor: pointer;
+  list-style: none;
+}
+.team__person summary::-webkit-details-marker {
+  display: none;
+}
+.team__person summary:hover {
+  background: var(--color-surface-raised);
+}
+.team__who {
+  flex: 1;
+  min-width: 0;
+}
+.team__who strong {
+  display: block;
+  font-size: var(--text-body);
+  font-weight: 600;
+}
+.team__line {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--color-text-muted);
+  font-size: var(--text-label);
+  font-variant-numeric: tabular-nums;
+}
+.team__body {
+  padding: 0 0 var(--space-4) calc(12px + var(--space-3));
+}
+.team__body .row__value {
+  font-variant-numeric: tabular-nums;
+}
+.team__position {
+  flex: 1;
   text-align: right;
 }
+.team__symbol {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--color-text);
+}
+.team__symbol--self {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
 
-/* A narrow screen stacks the map over the panel. */
+/* Crew uses crosshair marks, distinct from numbered site pins. */
+.crew-pins {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.crew-pin {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  translate: -50% -50%;
+  padding: 0;
+  border: 0;
+  background: none;
+  pointer-events: auto;
+}
+.crew-pin__dot {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--color-text);
+  background: var(--color-bg);
+}
+.crew-pin__dot::after {
+  content: '+';
+  position: absolute;
+  inset: 0;
+  color: var(--color-text);
+  font-size: var(--text-heading);
+  line-height: 20px;
+  text-align: center;
+}
+.crew-pin--self .crew-pin__dot {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+.crew-pin--self .crew-pin__dot::after {
+  color: var(--color-bg);
+}
+.crew-pin__name {
+  position: absolute;
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-bg);
+  font-size: var(--text-data);
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.crew-pin:focus-visible {
+  outline: none;
+}
+.crew-pin:focus-visible .crew-pin__dot,
+.crew-pin:hover .crew-pin__name {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 @media (max-width: 860px) {
-  #viewer {
-    height: auto;
-    min-height: 100dvh;
-    grid-template:
-      'bar' var(--topbar-height)
-      'alerts' auto
-      'map' 55dvh
-      'panel' auto
-      'status' auto
-      / minmax(0, 1fr);
-  }
-
   .panel {
-    border-right: 0;
+    width: min(var(--sidebar-width), calc(100% - var(--space-6)));
   }
-
-  .bar__file,
-  .status__cursor {
+  .sidebar-open .map {
+    left: 0;
+    bottom: 0;
+  }
+  .sidebar-open .sidebar-backdrop {
+    display: block;
+    position: absolute;
+    z-index: 3;
+    inset: 0;
+    width: 100%;
+    border: 0;
+    background: rgb(0 0 0 / 0.4);
+  }
+  .sidebar-open .status {
     display: none;
   }
-
-  .status {
-    min-height: var(--statusbar-height);
-    flex-wrap: wrap;
+  .status.has-warning {
+    left: 0;
   }
-
+  .bar {
+    padding-left: var(--space-3);
+  }
+  .bar__title strong {
+    font-size: var(--text-body);
+  }
+  .panel__actions {
+    padding: var(--space-2) var(--space-3);
+    gap: var(--space-1);
+  }
+  .panel__body {
+    padding: var(--space-3);
+  }
+  .row {
+    gap: var(--space-2);
+    font-size: var(--text-data);
+  }
+  .field {
+    padding: 0 var(--space-2);
+    max-width: 65%;
+  }
   .field input.field__text {
     width: 16ch;
   }
+  .person summary {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .site__head {
+    flex-wrap: wrap;
+  }
+  .table {
+    min-width: 320px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel {
+    transition: none;
+  }
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+/* A tile failure can wrap. Keep its recovery action clear of the map key. */
+#viewer:not(.sidebar-open) .key {
+  bottom: calc(var(--space-8) + var(--viewer-status-height, 0px));
+}
+
+.status {
+  flex-wrap: wrap;
+}
+
+/* Before a file is open, Mars turns in the middle of the screen. */
+.globe {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  justify-items: center;
+  gap: var(--space-6);
+  padding: calc(var(--space-8) * 2) var(--space-4) var(--space-8);
+  background: var(--color-bg);
+}
+
+.globe__sphere {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  /* The drawing is square. Contain keeps it round on a narrow screen. */
+  object-fit: contain;
+}
+
+/* Without the mosaic the globe is a plain disc. */
+.globe--missing .globe__sphere {
+  width: auto;
+  max-width: 100%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--color-surface-raised);
+}
+
+.globe__actions .empty {
+  justify-items: center;
+  text-align: center;
+}
+
+.globe__actions .button {
+  min-width: 220px;
+}
+
+/* Corner brackets frame the map, as in the editor. Controls sit inside them. */
+.map__corner {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 0 solid var(--color-text-dim);
+  pointer-events: none;
+}
+.map__corner--tl {
+  top: 14px;
+  left: 14px;
+  border-width: 1px 0 0 1px;
+}
+.map__corner--tr {
+  top: 14px;
+  right: 14px;
+  border-width: 1px 1px 0 0;
+}
+.map__corner--bl {
+  bottom: 14px;
+  left: 14px;
+  border-width: 0 0 1px 1px;
+}
+.map__corner--br {
+  right: 14px;
+  bottom: 14px;
+  border-width: 0 1px 1px 0;
 }

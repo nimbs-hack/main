@@ -243,8 +243,17 @@ export function GlobeCanvas({
     if (terrain.ready) terrainReady()
 
     const handler = new ScreenSpaceEventHandler(scene.canvas)
-    const siteAt = (position: Cartesian2): number | undefined =>
-      (scene.pick(position)?.id as SiteEntity | undefined)?.siteIndex
+    // Cesium's pick throws while the camera or canvas is degenerate, such as
+    // mid-flight or with the canvas at zero size. This runs on every mouse
+    // move, so a throw here floods the console and the dev server's log.
+    const siteAt = (position: Cartesian2): number | undefined => {
+      if (scene.canvas.clientWidth === 0 || scene.canvas.clientHeight === 0) return undefined
+      try {
+        return (scene.pick(position)?.id as SiteEntity | undefined)?.siteIndex
+      } catch {
+        return undefined
+      }
+    }
     let dragging: { index: number; entity: SiteEntity; moved: boolean } | null = null
 
     handler.setInputAction(({ position }: { position: Cartesian2 }) => {
