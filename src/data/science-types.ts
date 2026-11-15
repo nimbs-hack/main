@@ -1,4 +1,4 @@
-export type ScienceCategory = 'optical' | 'thermal' | 'spectral' | 'topographic' | 'geophysical' | 'atmospheric' | 'radiation' | 'chemical'
+export type ScienceCategory = 'optical' | 'thermal' | 'spectral' | 'topographic' | 'geophysical' | 'atmospheric' | 'radiation' | 'chemical' | 'geologic'
 
 // Layers are grouped by the question an astronaut asks, not by instrument.
 export type ScienceGroup = 'footing' | 'science' | 'environment'
@@ -18,7 +18,8 @@ export type ScienceMetadata = {
   coverage: string
   epoch: string
   limitation: string
-  legend: { low: string; high: string; colors: string[] }
+  // `categorical` maps color units, not amounts, so they get no ramp.
+  legend: { low: string; high: string; colors: string[]; categorical?: boolean }
 }
 
 export type ScienceRaster = ScienceMetadata & {

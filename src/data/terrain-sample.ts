@@ -74,10 +74,10 @@ export function samplingProvider(provider: TerrainProvider): TerrainProvider {
   return sampler
 }
 
-async function sampleAt(provider: TerrainProvider, level: number, points: LatLon[]) {
+async function sampleAt(provider: TerrainProvider, level: number, points: LatLon[], baseline: number) {
   const positions = points.flatMap((point) => [point,
-    offset(point, SLOPE_BASELINE, 0), offset(point, -SLOPE_BASELINE, 0),
-    offset(point, 0, SLOPE_BASELINE), offset(point, 0, -SLOPE_BASELINE),
+    offset(point, baseline, 0), offset(point, -baseline, 0),
+    offset(point, 0, baseline), offset(point, 0, -baseline),
   ].map(([lat, lon]) => Cartographic.fromDegrees(lon, lat)))
   const heights = (await sampleTerrain(samplingProvider(provider), level, positions)).map((c) => c.height)
   return points.map((_, i): SurfaceSample => {
@@ -86,19 +86,21 @@ async function sampleAt(provider: TerrainProvider, level: number, points: LatLon
     return {
       elevation: known(center) ? center - DATUM_OFFSET : null,
       slope: [north, south, east, west].every(known)
-        ? slopeFromNeighbors(north as number, south as number, east as number, west as number, SLOPE_BASELINE)
+        ? slopeFromNeighbors(north as number, south as number, east as number, west as number, baseline)
         : null,
     }
   })
 }
 
 // Tries a detailed level first, then coarser ones where tiles are missing.
-export async function sampleSurface(provider: TerrainProvider, points: LatLon[], level = 14) {
+// `baseline` is the neighbor distance for slope. Fine terrain can use a short
+// one; on the global terrain anything under 60 m only measures mesh noise.
+export async function sampleSurface(provider: TerrainProvider, points: LatLon[], level = 14, baseline = SLOPE_BASELINE) {
   let samples = points.map((): SurfaceSample => ({ elevation: null, slope: null }))
   for (let current = level; current >= 8; current -= 2) {
     const missing = samples.map((s, i) => (s.elevation === null ? i : -1)).filter((i) => i >= 0)
     if (missing.length === 0) break
-    const found = await sampleAt(provider, current, missing.map((i) => points[i])).catch(() => [])
+    const found = await sampleAt(provider, current, missing.map((i) => points[i]), baseline).catch(() => [])
     missing.forEach((index, k) => { if (found[k]) samples[index] = found[k] })
     samples = [...samples]
   }

@@ -17,6 +17,10 @@ export function formatMeasurement({ value, unit }) {
 }
 
 function Ramp({ legend }) {
+  // Categorical maps have no ramp. Their colors name units, not amounts.
+  if (legend.categorical) {
+    return <div className="layers__legend"><div className="layers__scale"><span>{legend.low}</span><span>{legend.high}</span></div></div>
+  }
   const colors = legend.colors.length ? legend.colors : ['#000000', '#ffffff']
   return (
     <div className="layers__legend">

@@ -94,8 +94,8 @@ Copy patterns people already know instead of inventing new ones. Copy the behavi
 - The status bar works like Google Earth's. Left side: tile state only while loading or failed, then a "Data attribution" button that opens the credits. Right side: scale bar, camera height, cursor coordinates and elevation. Never show "loaded" or other steady-state text.
 - The layer switcher works like Google Maps'. One tile opens a row of layer tiles with real thumbnails. Full controls (opacity, legends, sources) sit behind More.
 - Route alternatives work like Google Maps directions. Every option is drawn dashed in its own color. Hovering a row or a line highlights it and shows a tooltip with name, distance and max slope. Clicking either picks it and makes it the plan. Editing the route by hand clears the pick.
-- Route lines use deploy-v1's styles, kept as constants in `src/components/plan-overlay.ts`. Candidates are dashed 6 5 at 2.5 px, each dash outlined in dark at 5.5 px and 60% opacity, with the gaps left open. Every line drawn over imagery needs a dark casing or halo, or it vanishes on ground of its own color. The plan, which is the selected route, is a solid red 3.5 px line on a dark 6.5 px halo, with any stretch over the slope limit in orange on top. Start and target are square A and B pins with red and green borders.
-- The right-click menu works like Google Maps'. Coordinates at the top copy on click.
+- Route lines use deploy-v1's styles, kept as constants in `src/components/plan-overlay.ts`. Candidates are dashed 6 5 at 2.5 px between two thin, continuous dark rails, so the line edge is outlined end to end and the gaps between dashes stay clear. Dashes are measured in meters along the route, not in screen pixels, so they stay on the same ground as the camera moves. Every line drawn over imagery needs a dark casing or halo, or it vanishes on ground of its own color. The plan, which is the selected route, is a solid red 3.5 px line on a dark 6.5 px halo, with any stretch over the slope limit in orange on top. Start and target are square A and B pins with red and green borders.
+- The right-click menu works like Google Maps'. Coordinates at the top copy on click. It also shows the geologic unit and the nearest rover's weather for the spot. Map markers are MIL-STD-2525C symbols from deploy-v1, added from this menu. Right-click a marker to rename, re-symbol or delete it. Symbols are drawn monochrome, as 2525C allows, so frame shape shows affiliation and red stays the selection color.
 
 ### Settings panels
 
@@ -131,6 +131,10 @@ Each color means one thing everywhere. If a color needs a legend to read, put th
 - No footnote paragraphs in panels. Put a caveat in the tooltip of the value it qualifies. The one exception is a single line where users edit assumptions, such as the suit limits.
 - Pick the unit by size: meters under 1 km, kilometers above. Coordinates are decimal degrees with east longitude 0 to 360°.
 - When alternatives come out the same, collapse them into one row and say why ("Ground here varies under 2°"). Never show four identical rows.
+- Say how good the data is wherever a decision rests on it. Terrain detail shows in the right-click menu, the Terrain tab and the profile, and fine terrain is outlined on the map. A leg on terrain coarser than 20 m is a caution, because slope there is a smoothed lower bound.
+- Dashes mean "not settled": candidate routes, legs while terrain loads, fine-terrain outlines, and the profile line where the terrain is coarse. Solid means measured and chosen. Don't use dashes for decoration.
+- Anything that changes with time is checked against the planned EVA window, from the Schedule start (UTC, empty means now) to the end of the route's time. A forecast says what it can't see: CME forecasts only cover CMEs already launched, so an EVA beyond their horizon is a caution, not a clear.
+- Don't invent numbers to fill a gap. When storm dose can't be estimated, the panel says the dose assumes a quiet sun.
 - Every failure says what to do next. Failed tiles and samples get Retry. A route blocked by the slope limit says which limit would work and has a button that applies it.
 
 ### Comparing layouts

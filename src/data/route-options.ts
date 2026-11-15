@@ -23,8 +23,8 @@ export const STRATEGIES: { id: Strategy, name: string, note: string }[] = [
 
 // Grid shape: steps between start and target, and extra steps around them.
 const ALONG = 40
-const MARGIN = 10
-const HALF_WIDTH = 14
+const MARGIN_SHARE = 10 / 40
+const HALF_SHARE = 14 / 40
 
 export type Grid = {
   cols: number
@@ -37,22 +37,27 @@ export type Grid = {
 
 // Nodes on a grid aligned with the start-to-target line. Offsets are flat
 // east and north meters, fine for routes of a few tens of kilometers.
-export function buildGrid(start: LatLon, target: LatLon): Grid {
+// `along` is the number of cells between start and target. More cells follow
+// fine terrain more closely; margin and corridor width keep their proportion.
+export function buildGrid(start: LatLon, target: LatLon, along = ALONG): Grid {
+  const steps = Math.max(2, Math.round(along))
+  const margin = Math.round(steps * MARGIN_SHARE)
+  const halfWidth = Math.round(steps * HALF_SHARE)
   const length = Math.max(1, distance(start, target))
-  const cell = length / ALONG
+  const cell = length / steps
   const heading = bearing(start, target) * Math.PI / 180
-  const cols = ALONG + 2 * MARGIN + 1
-  const rows = 2 * HALF_WIDTH + 1
+  const cols = steps + 2 * margin + 1
+  const rows = 2 * halfWidth + 1
   const points: LatLon[] = []
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const u = (c - MARGIN) * cell
-      const v = (r - HALF_WIDTH) * cell
+      const u = (c - margin) * cell
+      const v = (r - halfWidth) * cell
       points.push(offset(start, u * Math.cos(heading) - v * Math.sin(heading), u * Math.sin(heading) + v * Math.cos(heading)))
     }
   }
-  const startIndex = HALF_WIDTH * cols + MARGIN
-  return { cols, rows, cell, points, start: startIndex, target: startIndex + ALONG }
+  const startIndex = halfWidth * cols + margin
+  return { cols, rows, cell, points, start: startIndex, target: startIndex + steps }
 }
 
 // Steepest slope at each node in degrees, from neighbors on the grid.

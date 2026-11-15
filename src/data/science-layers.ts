@@ -14,6 +14,9 @@ const RASTER_ROLES: Record<string, { group: ScienceGroup; short: string; sampled
   'themis-night': { group: 'footing', short: 'Night IR', sampled: true },
   'themis-day': { group: 'science', short: 'Day IR', sampled: true },
   'tes-albedo': { group: 'science', short: 'Albedo', sampled: true },
+  // Categorical colors. A pixel's place on a ramp means nothing, so the unit
+  // comes from the geology lookup instead of sampling.
+  geology: { group: 'science', short: 'Geology', sampled: false },
 }
 
 const OBSERVATION_SHORT: Record<string, string> = {
@@ -24,7 +27,7 @@ const OBSERVATION_SHORT: Record<string, string> = {
   geophysical: 'Quake',
 }
 
-const categories: ScienceCategory[] = ['optical', 'thermal', 'spectral', 'topographic', 'geophysical', 'atmospheric', 'radiation', 'chemical']
+const categories: ScienceCategory[] = ['optical', 'thermal', 'spectral', 'topographic', 'geophysical', 'atmospheric', 'radiation', 'chemical', 'geologic']
 
 function rasterLayer(source: typeof rasters[number]): ScienceRaster {
   const category = categories.find((category) => category === source.category)

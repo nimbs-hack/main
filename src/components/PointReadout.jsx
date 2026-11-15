@@ -4,6 +4,9 @@ import { slopeLevel } from '../data/route-profile'
 import { SITES } from '../data/sites'
 import { formatElevation, formatLatLon } from '../format'
 import { formatMeasurement } from './SciencePanel'
+import { MIL2525C_BY_ID, MIL2525C_SYMBOLS, MIL2525C_THEMES } from '../data/mil2525c'
+import { formatPressure, formatTemp } from '../data/weather'
+import { COARSE_DETAIL, detailLabel } from '../data/terrain-detail'
 import { formatDistance, formatSlope, rampColor } from './RouteProfile'
 import './point-menu.css'
 
@@ -14,14 +17,21 @@ const GAP = 4
 
 /**
  * Right-click menu for one spot on the map, after Google Maps: coordinates,
- * elevation and slope, plan actions, and the layer values and nearby rover
- * readings behind a fold. Opens at `probe.screen`, flipped to stay inside
- * the map. Esc or a click outside closes it.
+ * elevation and slope, geologic unit, estimated weather, plan actions, map
+ * symbols, and the layer values and nearby rover readings behind a fold.
+ * Opened on a placed marker, it edits that marker instead. Opens at
+ * `probe.screen`, flipped to stay inside the map. Esc or a click outside
+ * closes it.
  */
-export default function PointReadout({ probe, rasters, observations, limit, actions = [], onClose }) {
+export default function PointReadout({
+  probe, rasters, observations, limit, actions = [], weather, marker,
+  onAddMarker, onUpdateMarker, onRemoveMarker, onClose,
+}) {
   const menu = useRef(null)
   const [place, setPlace] = useState(null)
   const [more, setMore] = useState(false)
+  const [picking, setPicking] = useState(false)
+  const [theme, setTheme] = useState(MIL2525C_THEMES[0].id)
   const [copied, setCopied] = useState(false)
   const [lat, lon] = probe.point
   const where = formatLatLon(lat, lon)
@@ -35,7 +45,7 @@ export default function PointReadout({ probe, rasters, observations, limit, acti
     const left = x + GAP + el.offsetWidth > box.width ? Math.max(GAP, x - GAP - el.offsetWidth) : x + GAP
     const top = y + GAP + el.offsetHeight > box.height ? Math.max(GAP, y - GAP - el.offsetHeight) : y + GAP
     setPlace({ left, top })
-  }, [probe.screen, probe.status, more])
+  }, [probe.screen, probe.status, probe.geology, more, picking, theme])
 
   useEffect(() => {
     const close = (event) => {
@@ -85,17 +95,86 @@ export default function PointReadout({ probe, rasters, observations, limit, acti
           <>
             <span>{probe.elevation === null ? '—' : formatElevation(probe.elevation)}</span>
             <span className={`is-${slopeLevel(probe.slope, limit)}`}>{formatSlope(probe.slope)}</span>
+            {probe.detail != null && (
+              <span
+                className={probe.detail > COARSE_DETAIL ? 'is-caution' : ''}
+                title={probe.detail > COARSE_DETAIL ? 'Coarse terrain hides boulders and small scarps. Slope here is a smoothed lower bound.' : 'Ground spacing of the elevation model here'}
+              >
+                {detailLabel(probe.detail)} terrain
+              </span>
+            )}
           </>
         )}
       </p>
+      {probe.geology && probe.geology !== 'none' && probe.geology !== 'error' && (
+        <p className="pointmenu__fact" title={`${probe.geology.source}. Mapped at 1:20M, so the boundary can be kilometers off.`}>
+          <span>{probe.geology.unit}</span> {probe.geology.description}
+        </p>
+      )}
+      {weather?.report?.latest && (
+        <p
+          className="pointmenu__fact"
+          title={`${weather.report.rover} ${weather.report.instrument}, sol ${weather.report.latest.sol} (${weather.report.latest.date}), ${formatDistance(weather.distance)} away. Pressure scaled to this elevation with a 10.8 km scale height.`}
+        >
+          <span>Air</span> {formatTemp(weather.report.latest.airMinK)} to {formatTemp(weather.report.latest.airMaxK)}
+          {weather.estimate != null && <> · ≈ {formatPressure(weather.estimate)}</>}
+        </p>
+      )}
 
-      {[actions.filter((a) => !a.group), actions.filter((a) => a.group === 'tools')].map((group, i) => group.length > 0 && (
+      {marker && (
+        <div className="pointmenu__group pointmenu__marker">
+          <label className="pointmenu__name">
+            <input type="text" aria-label="Marker name" value={marker.label} maxLength={40} onChange={(event) => onUpdateMarker({ label: event.target.value })} />
+          </label>
+          <p className="pointmenu__sidc" title="MIL-STD-2525C symbol identification code">
+            {MIL2525C_BY_ID[marker.symbol]?.name} · {MIL2525C_BY_ID[marker.symbol]?.sidc}
+          </p>
+          <button type="button" role="menuitem" aria-expanded={picking} onClick={() => setPicking(!picking)}>Change symbol</button>
+          <button type="button" role="menuitem" onClick={onRemoveMarker}>Delete marker</button>
+        </div>
+      )}
+
+      {!marker && [actions.filter((a) => !a.group), actions.filter((a) => a.group === 'tools')].map((group, i) => group.length > 0 && (
         <div key={i} className="pointmenu__group">
           {group.map((action) => (
             <button key={action.label} type="button" role="menuitem" onClick={action.run}>{action.label}</button>
           ))}
         </div>
       ))}
+
+      <div className="pointmenu__group">
+        {!marker && (
+          <button type="button" role="menuitem" aria-expanded={picking} onClick={() => setPicking(!picking)}>Add symbol</button>
+        )}
+        {picking && (
+          <div className="pointmenu__picker">
+            <div className="pointmenu__themes" role="tablist" aria-label="Symbol groups">
+              {MIL2525C_THEMES.map((t) => (
+                <button key={t.id} type="button" role="tab" aria-selected={theme === t.id} title={t.label} onClick={() => setTheme(t.id)}>{t.shortLabel}</button>
+              ))}
+            </div>
+            <div className="pointmenu__symbols">
+              {MIL2525C_SYMBOLS.filter((symbol) => symbol.theme === theme).map((symbol) => (
+                <button
+                  key={symbol.id}
+                  type="button"
+                  aria-label={symbol.name}
+                  title={`${symbol.name} · ${symbol.sidc}`}
+                  aria-pressed={marker?.symbol === symbol.id}
+                  onClick={() => {
+                    if (marker) {
+                      onUpdateMarker({ symbol: symbol.id })
+                      setPicking(false)
+                    } else onAddMarker(symbol.id)
+                  }}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true" dangerouslySetInnerHTML={{ __html: symbol.svgInner }} />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
 
       {probe.status === 'ready' && (
         <div className="pointmenu__group">

@@ -21,6 +21,7 @@
 //   Rebuild both from the rendered sphere coordinates, on every tile.
 import { BoundingSphere, Cartesian3, CesiumTerrainProvider, Ellipsoid, EllipsoidalOccluder, OrientedBoundingBox, Terrain } from 'cesium'
 import { TERRAIN_API_PATH } from './terrain-source'
+import { limiter } from './performance'
 
 const RADIUS = 3_396_190
 export const MARS_SPHERE = new Ellipsoid(RADIUS, RADIUS, RADIUS)
@@ -53,10 +54,18 @@ export function createTerrain() {
       credit: 'Terrain: NASA / JPL-Caltech Mars Trek',
     }).then((provider) => {
       const request = provider.requestTileGeometry.bind(provider)
-      provider.requestTileGeometry = (x, y, level, req) =>
-        request(x, y, level, req)?.then((data) => prepareTerrainTile(
-          data, provider.tilingScheme.tileXYToRectangle(x, y, level),
-        ))
+      const prepared = (x, y, level) => (data) => prepareTerrainTile(
+        data, provider.tilingScheme.tileXYToRectangle(x, y, level),
+      )
+      // Route and point sampling ask for tiles without a request object, all
+      // of them at once. A browser opens six connections to a server, so a
+      // long route would hold every one and the globe would wait behind it.
+      // Three at a time leaves the globe the other three. samplingProvider()
+      // in terrain-sample.ts caches the sampled tiles.
+      const sample = limiter(3)
+      provider.requestTileGeometry = (x, y, level, req) => (req
+        ? request(x, y, level, req)?.then(prepared(x, y, level))
+        : sample(() => request(x, y, level)).then(prepared(x, y, level)))
       return provider
     }),
   )

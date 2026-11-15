@@ -95,3 +95,11 @@ test('simplify keeps the ends and drops collinear nodes', () => {
   const straight = Array.from({ length: 41 }, (_, k) => grid.start + k)
   expect(simplify(grid, straight, 0.5)).toEqual([grid.start, grid.target])
 })
+
+test('a finer grid keeps its proportions and puts the ends on nodes', () => {
+  const grid = buildGrid(start, target, 160)
+  expect(grid.cols).toBe(160 + 2 * 40 + 1)
+  expect(grid.rows).toBe(2 * 56 + 1)
+  expect(grid.points[grid.start]).toEqual(start)
+  expect(grid.points[grid.target][1]).toBeCloseTo(0.05, 6)
+})

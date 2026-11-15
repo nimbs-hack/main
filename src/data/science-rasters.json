@@ -83,5 +83,22 @@
     "maxLevel": 1,
     "tileSize": 256,
     "url": "/api/science/mola-roughness/{z}/{y}/{x}.png"
+  },
+  {
+    "id": "geology",
+    "category": "geologic",
+    "name": "Global geologic map, SIM 3292",
+    "description": "Geologic units mapped from orbit, colored by unit and age. Right-click a spot for its unit name.",
+    "source": "USGS SIM 3292 via NASA Mars Trek",
+    "sourceUrl": "https://pubs.usgs.gov/publication/sim3292",
+    "credit": "Tanaka et al. 2014, USGS SIM 3292; NASA Mars Trek",
+    "resolution": "1:20,000,000 map scale; units are tens to thousands of km across",
+    "coverage": "Global",
+    "epoch": "Published 2014 from MGS, Odyssey, MEX and MRO data",
+    "limitation": "Map units, not rock types at a site. Boundaries are drawn at 1:20M, so they can be kilometers off at EVA scale. Colors are categories, not a value scale.",
+    "legend": { "low": "Colors are map units", "high": "Right-click for the unit", "colors": [], "categorical": true },
+    "maxLevel": 11,
+    "tileSize": 256,
+    "url": "/api/science/geology/{z}/{y}/{x}.png"
   }
 ]

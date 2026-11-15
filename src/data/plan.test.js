@@ -88,3 +88,23 @@ test('presets are recognized and durations read as hours and minutes', () => {
   expect(formatDuration(3 * 3600)).toBe('3 h')
   expect(formatDuration(3 * 3600 + 5 * 60)).toBe('3 h 05 min')
 })
+
+test('legs on coarse terrain are a caution with the detail named', async () => {
+  const { assess, DEFAULT_LIMITS: limits } = await import('./plan')
+  const { resample } = await import('./geo')
+  const path = [[0, 0], [0, 0.01]]
+  const samples = resample(path, 51).map((s) => ({ ...s, elevation: 0, slope: 2, layers: {}, detail: s.d > 300 ? 326 : 1.3 }))
+  const result = assess(samples, path, limits)
+  expect(result.verdict).toBe('caution')
+  expect(result.legs[0].coarsest).toBe(326)
+  expect(result.reasons.map((r) => r.text).join()).toMatch(/^Leg 1: .* on 326 m terrain$/)
+})
+
+test('outside reasons merge, no-go first, and set the verdict', async () => {
+  const { withReasons } = await import('./plan')
+  const base = { verdict: 'caution', reasons: [{ level: 'caution', text: 'route' }] }
+  const merged = withReasons(base, [{ level: 'no-go', text: 'storm' }])
+  expect(merged.verdict).toBe('no-go')
+  expect(merged.reasons.map((r) => r.text)).toEqual(['storm', 'route'])
+  expect(withReasons(base, [])).toBe(base)
+})

@@ -70,6 +70,7 @@
 .profile__band.is-caution { fill: color-mix(in srgb, var(--color-caution) 55%, transparent); }
 .profile__band.is-hazard { fill: color-mix(in srgb, var(--color-hazard) 70%, transparent); }
 .profile__line { fill: none; stroke: var(--color-text); stroke-width: 1.5; }
+.profile__line.is-coarse { stroke-dasharray: 4 4; }
 
 /* Elevation at the top and bottom of the chart, right aligned inside it. */
 .profile__axis {

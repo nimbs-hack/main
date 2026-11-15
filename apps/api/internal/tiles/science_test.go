@@ -55,7 +55,7 @@ func TestScienceAllowlistAndCache(t *testing.T) {
 			calls := 0
 			client := &http.Client{Transport: scienceTransport(func(r *http.Request) (*http.Response, error) {
 				calls++
-				want := fmt.Sprintf("https://trek.nasa.gov/tiles/Mars/EQ/%s/1.0.0/default/default028mm/0/0/1.%s", source.layer, source.extension)
+				want := source.url(0, 0, 1)
 				if r.URL.String() != want {
 					t.Errorf("upstream = %s, want %s", r.URL, want)
 				}

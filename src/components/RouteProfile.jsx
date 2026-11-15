@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import { SLOPE_LIMIT, slopeLevel } from '../data/route-profile'
 import { formatElevation } from '../format'
+import { COARSE_DETAIL, detailLabel } from '../data/terrain-detail'
 import './route-profile.css'
 
 const WIDTH = 1000
@@ -49,7 +50,16 @@ function Chart({ samples, bottom, top, limit }) {
   const y = (e) => HEIGHT - ((e - bottom) / (top - bottom)) * HEIGHT
   const known = samples.filter((s) => s.elevation !== null)
   if (known.length < 2) return null
-  const line = known.map((s) => `${x(s.d)},${y(s.elevation)}`).join(' ')
+  // The line is solid on fine terrain and dashed where the terrain is
+  // coarse, so the profile shows where its own shape is uncertain.
+  const runs = []
+  for (const s of known) {
+    const coarse = s.detail != null && s.detail > COARSE_DETAIL
+    const point = `${x(s.d)},${y(s.elevation)}`
+    const last = runs.at(-1)
+    if (last && last.coarse === coarse) last.points.push(point)
+    else runs.push({ coarse, points: last ? [last.points.at(-1), point] : [point] })
+  }
   const bands = []
   for (let i = 1; i < samples.length; i++) {
     const a = samples[i - 1]
@@ -67,7 +77,9 @@ function Chart({ samples, bottom, top, limit }) {
   return (
     <svg className="profile__svg" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="none" aria-hidden="true">
       {bands}
-      <polyline className="profile__line" points={line} vectorEffect="non-scaling-stroke" />
+      {runs.map((run, i) => (
+        <polyline key={i} className={`profile__line${run.coarse ? ' is-coarse' : ''}`} points={run.points.join(' ')} vectorEffect="non-scaling-stroke" />
+      ))}
     </svg>
   )
 }
@@ -179,6 +191,7 @@ export default function RouteProfile({
                   <b>{formatDistance(hovered.d)}</b>
                   {hovered.elevation != null && <>{formatElevation(hovered.elevation)}</>}
                   <i className={`is-${slopeLevel(hovered.slope, limit)}`}>{formatSlope(hovered.slope)}</i>
+                  {hovered.detail != null && hovered.detail > COARSE_DETAIL && <i className="is-caution">{detailLabel(hovered.detail)} terrain</i>}
                 </span>
               </div>
             )}

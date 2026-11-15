@@ -17,14 +17,21 @@ import (
 	"syscall"
 	"time"
 
+	"mars-console/api/internal/env"
 	"mars-console/api/internal/tiles"
 )
 
 func handler(cacheDir, staticDir string, client *http.Client) (http.Handler, func()) {
 	mux := http.NewServeMux()
-	flushCTX := tiles.RegisterCTX(mux, filepath.Join(cacheDir, "ctx-v01"), client)
-	flushTerrain := tiles.RegisterTerrain(mux, filepath.Join(cacheDir, "mars-v14-v2"), client)
+	// Four downloads at a time, the same order of load a browser puts on the
+	// upstream servers by itself.
+	ahead := tiles.NewReadAhead(4, 512)
+	flushCTX := tiles.RegisterCTX(mux, filepath.Join(cacheDir, "ctx-v01"), client, ahead)
+	flushTerrain := tiles.RegisterTerrain(mux, filepath.Join(cacheDir, "mars-v14-v2"), client, ahead)
 	flushScience := tiles.RegisterScience(mux, filepath.Join(cacheDir, "science-v1"), client)
+	env.RegisterGeology(mux, client)
+	env.RegisterWeather(mux, client)
+	env.RegisterSpaceWeather(mux, client)
 	// An unknown API route must not return the SPA's HTML.
 	mux.HandleFunc("/api/", http.NotFound)
 	mux.HandleFunc("/api", http.NotFound)
@@ -59,7 +66,7 @@ func handler(cacheDir, staticDir string, client *http.Client) (http.Handler, fun
 		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
 	})
-	return mux, func() { flushCTX(); flushTerrain(); flushScience() }
+	return mux, func() { ahead.Close(); flushCTX(); flushTerrain(); flushScience() }
 }
 
 func run() error {

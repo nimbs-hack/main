@@ -1,6 +1,7 @@
 import { cumulative, distance } from './geo'
 import type { LatLon } from './geo'
 import { slopeLevel } from './route-profile'
+import { COARSE_DETAIL, detailLabel } from './terrain-detail'
 import type { ProfileSample } from './route-profile'
 
 // An EVA plan: walk from start through the waypoints to the target, work
@@ -107,6 +108,10 @@ export type Leg = {
   over: number
   caution: number
   unknown: number
+  // Distance on terrain coarser than COARSE_DETAIL, and the coarsest detail
+  // on the leg in meters. Slope there is a smoothed lower bound.
+  coarse: number
+  coarsest: number | null
 }
 
 // Per-leg slope stats. Leg i runs from vertex i to vertex i + 1 of the path.
@@ -124,6 +129,8 @@ export function legStats(samples: ProfileSample[], path: LatLon[], limit: number
     over: 0,
     caution: 0,
     unknown: 0,
+    coarse: 0,
+    coarsest: null,
   }))
   if (!legs.length) return legs
   for (let i = 1; i < samples.length; i++) {
@@ -136,6 +143,10 @@ export function legStats(samples: ProfileSample[], path: LatLon[], limit: number
     if (level === 'hazard') leg.over += step
     else if (level === 'caution') leg.caution += step
     else if (level === 'unknown') leg.unknown += step
+    if (s.detail != null) {
+      leg.coarsest = Math.max(leg.coarsest ?? 0, s.detail)
+      if (s.detail > COARSE_DETAIL) leg.coarse += step
+    }
   }
   return legs
 }
@@ -193,6 +204,9 @@ export function assess(samples: ProfileSample[], path: LatLon[], limits: Limits,
   for (const leg of legs) {
     if (leg.over === 0 && leg.caution > 0) reasons.push({ level: 'caution', text: `Leg ${leg.index}: ${meters(leg.caution)} within 5° of limit` })
     if (leg.unknown > 0) reasons.push({ level: 'caution', text: `Leg ${leg.index}: no terrain for ${meters(leg.unknown)}` })
+    if (leg.coarse > 0 && leg.coarsest !== null) {
+      reasons.push({ level: 'caution', text: `Leg ${leg.index}: ${meters(leg.coarse)} on ${detailLabel(leg.coarsest)} terrain` })
+    }
   }
   if (total <= limits.eva && total > limits.eva * 0.85) {
     reasons.push({ level: 'caution', text: `EVA uses ${Math.round((total / limits.eva) * 100)}% of the time budget` })
@@ -211,4 +225,13 @@ export function assess(samples: ProfileSample[], path: LatLon[], limits: Limits,
     maxFromStart,
     dose: doseRate === null ? null : doseRate * (total / 86400),
   }
+}
+
+// Adds reasons from outside the route, such as space weather, and takes the
+// worst verdict of the two.
+export function withReasons(assessment: Assessment, extra: Reason[]): Assessment {
+  if (!extra.length) return assessment
+  const reasons = [...extra.filter((r) => r.level === 'no-go'), ...assessment.reasons, ...extra.filter((r) => r.level !== 'no-go')]
+  const verdict: Verdict = reasons.some((r) => r.level === 'no-go') ? 'no-go' : reasons.some((r) => r.level === 'caution') ? 'caution' : 'go'
+  return { ...assessment, reasons, verdict }
 }

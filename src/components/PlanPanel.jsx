@@ -5,6 +5,9 @@ import { slopeLevel } from '../data/route-profile'
 import { SITES } from '../data/sites'
 import { formatLatLon } from '../format'
 import { formatDistance, formatSlope } from './RouteProfile'
+import { ageDays, celsius, formatAge } from '../data/weather'
+import { CME_MARGIN, formatFrom, formatWhen, strength } from '../data/space-weather'
+import { COARSE_DETAIL, detailLabel } from '../data/terrain-detail'
 import './plan-panel.css'
 
 /*
@@ -23,6 +26,13 @@ import './plan-panel.css'
  *   status      profile sampling: 'idle' | 'loading' | 'ready' | 'error'
  *   placing     'start' | 'target' | 'waypoint' | null, what a map click does
  *   dose        { site, when, measurement } for the radiation reference
+ *   weather     nearest rover station: { report, distance, estimate, atHigh },
+ *               estimates in pascals scaled to the start and highest point
+ *   space       { status, data, check, start, end, now }: CME forecasts at
+ *               Mars checked against the EVA window, times in ms
+ *   when        planned EVA start, UTC ISO string, or null for now
+ *   terrainDetail { finest, coarsest, coarse } in meters under the route
+ *   onWhen(iso | null)
  *   onPlacing(mode), onSite(id), onRemoveWaypoint(index), onLimits(limits),
  *   onRetry(), onWalk(), onClear()
  */
@@ -37,6 +47,7 @@ const ICONS = {
   limits: <path d="M5 4v16M12 4v16M19 4v16M3 8h4M10 15h4M17 10h4" />,
   pick: <path d="M12 3v4M12 17v4M3 12h4M17 12h4M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z" />,
   search: <><circle cx="11" cy="11" r="6" /><path d="m20 20-4.5-4.5" /></>,
+  weather: <path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 11a3.5 3.5 0 0 0 1 7Z" />,
 }
 
 function Icon({ name }) {
@@ -120,6 +131,66 @@ function Row({ label, hint, wide, children }) {
   )
 }
 
+// Space weather rows: CMEs forecast to reach Mars, checked against the EVA
+// window. Strength wording follows DONKI: a glancing blow or minor impact
+// is the CME's edge or a weak one.
+function spaceRows(space) {
+  const group = 'Space weather'
+  if (!space || space.status === 'loading') return [{ label: 'During EVA', group, basic: true, node: <Value>…</Value> }]
+  if (!space.data) return [{ label: 'During EVA', group, basic: true, node: <Value level="caution">No forecast</Value> }]
+  const { check, now } = space
+  const margin = `${CME_MARGIN / 3_600_000} h`
+  const during = check?.during ?? []
+  const worst = during.some((x) => strength(x) === 'full') ? 'hazard' : during.length ? 'caution' : null
+  const describe = (x) => `${strength(x) === 'full' ? 'Full hit' : 'Glancing'}, ${Math.round(x.speedKmS)} km/s, ${formatWhen(x.arrival)}`
+  const rows = [
+    { label: 'During EVA', group, basic: true, hint: `CME arrivals from ${margin} before the start to ${margin} after the end. Arrival forecasts can be off by about that much.`, node: <Value level={worst}>{during.length ? `${strength(during[0]) === 'full' ? 'CME' : 'Glancing CME'} ${formatFrom(during[0].arrival, now)}` : 'Clear'}</Value> },
+    { label: 'Next CME at Mars', group, basic: true, hint: check?.next ? describe(check.next) : 'Forecasts only cover CMEs already launched.', node: <Value>{check?.next ? formatFrom(check.next.arrival, now) : 'None forecast'}</Value> },
+    { label: 'Last CME at Mars', group, basic: false, hint: check?.last ? describe(check.last) : undefined, node: <Value>{check?.last ? formatFrom(check.last.arrival, now) : 'None in 30 d'}</Value> },
+  ]
+  const run = check?.next ?? check?.last
+  if (run?.link) {
+    rows.push({ label: 'Model run', group, basic: false, hint: `${space.data.source}. Checked ${formatWhen(space.data.fetchedAt)}.`, node: (
+      <span className="plan__box"><a className="plan__out" href={run.link} target="_blank" rel="noopener noreferrer">{run.simulationId.replace('WSA-ENLIL/', 'ENLIL ')} ↗</a></span>
+    ) })
+  }
+  return rows
+}
+
+// Weather tab rows from the nearest rover station. Values arrive in SI and
+// convert here for display only.
+function weatherRows(weather) {
+  const r = weather?.report
+  const latest = r?.latest
+  if (!weather) return [{ label: 'Station', group: 'Station', basic: true, node: <Value>Pick a start</Value> }]
+  if (!r || r === 'error' || !latest) {
+    return [{ label: 'Station', group: 'Station', basic: true, node: <Value>{r === 'error' ? 'Feed unavailable' : 'Loading…'}</Value> }]
+  }
+  const age = ageDays(latest)
+  const source = `${r.rover} ${r.instrument}, ${r.site}`
+  const temp = (k) => (k == null ? '—' : Math.round(celsius(k)))
+  const hpa = (pa) => (pa == null ? '—' : (pa / 100).toFixed(2))
+  const scaled = 'Scaled from the station with a 10.8 km scale height. Ignores weather between the two places.'
+  return [
+    { label: 'Station', group: 'Station', basic: true, hint: `${source}${r.stale ? '. Feed down, showing the last copy.' : ''}`, node: <Value>{r.rover} {r.instrument}</Value> },
+    { label: 'Latest sol', group: 'Station', basic: true, hint: latest.date, node: <Value unit={formatAge(age)} level={age !== null && age > STALE_DAYS ? 'caution' : null}>{latest.sol}</Value> },
+    { label: 'Distance', group: 'Station', basic: false, node: <Value unit={weather.distance >= 1000 ? 'km' : 'm'}>{weather.distance >= 1000 ? (weather.distance / 1000).toFixed(1) : Math.round(weather.distance)}</Value> },
+    { label: 'Season Ls', group: 'Station', basic: false, hint: 'Solar longitude. 0° is northern spring, 90° summer, 180° autumn, 270° winter.', node: <Value unit="°">{latest.ls == null ? '—' : Math.round(latest.ls)}</Value> },
+    { label: 'Air low', group: 'Air', basic: true, node: <Value unit="°C">{temp(latest.airMinK)}</Value> },
+    { label: 'Air high', group: 'Air', basic: true, node: <Value unit="°C">{temp(latest.airMaxK)}</Value> },
+    { label: 'Ground low', group: 'Air', basic: false, node: <Value unit="°C">{temp(latest.groundMinK)}</Value> },
+    { label: 'Ground high', group: 'Air', basic: false, node: <Value unit="°C">{temp(latest.groundMaxK)}</Value> },
+    { label: 'At station', group: 'Pressure', basic: true, node: <Value unit="hPa">{hpa(latest.pressurePa)}</Value> },
+    { label: 'At start', group: 'Pressure', basic: true, hint: scaled, node: <Value unit="hPa">{weather.estimate == null ? '—' : `≈ ${hpa(weather.estimate)}`}</Value> },
+    { label: 'At highest point', group: 'Pressure', basic: false, hint: scaled, node: <Value unit="hPa">{weather.atHigh == null ? '—' : `≈ ${hpa(weather.atHigh)}`}</Value> },
+    { label: 'Sky', group: 'Sky', basic: true, node: <Value>{latest.opacity || '—'}</Value> },
+    { label: 'UV', group: 'Sky', basic: false, node: <Value>{latest.uv || '—'}</Value> },
+    { label: 'Sunrise', group: 'Sky', basic: false, hint: 'Local mean solar time at the station', node: <Value unit="LMST">{latest.sunrise || '—'}</Value> },
+    { label: 'Sunset', group: 'Sky', basic: false, hint: 'Local mean solar time at the station', node: <Value unit="LMST">{latest.sunset || '—'}</Value> },
+    { label: 'Trend', group: `Last ${r.history.length} sols`, basic: true, full: true, node: <Trend history={r.history} /> },
+  ]
+}
+
 // Whole minutes for a value box with a "min" unit.
 function minutes(seconds) {
   return Math.round(seconds / 60)
@@ -186,11 +257,45 @@ const CATS = [
   { id: 'time', icon: 'time', title: 'Time' },
   { id: 'range', icon: 'range', title: 'Walk-back' },
   { id: 'dose', icon: 'dose', title: 'Radiation' },
+  { id: 'weather', icon: 'weather', title: 'Weather' },
 ]
 
+// A reading older than this is flagged on the rail. The rovers report about
+// once a sol, so a month without one means the feed stopped.
+const STALE_DAYS = 30
+
+// Air temperature range and pressure over recent sols, one column per sol.
+function Trend({ history }) {
+  const temps = history.filter((r) => r.airMinK != null && r.airMaxK != null)
+  const pressures = history.filter((r) => r.pressurePa != null)
+  if (temps.length < 2 && pressures.length < 2) return null
+  const first = history[0].sol
+  const last = history.at(-1).sol
+  const x = (sol) => ((sol - first) / Math.max(1, last - first)) * 100
+  const lowT = Math.min(...temps.map((r) => r.airMinK))
+  const highT = Math.max(...temps.map((r) => r.airMaxK))
+  const lowP = Math.min(...pressures.map((r) => r.pressurePa))
+  const highP = Math.max(...pressures.map((r) => r.pressurePa))
+  const yT = (k) => 38 - ((k - lowT) / Math.max(1, highT - lowT)) * 36
+  const yP = (pa) => 38 - ((pa - lowP) / Math.max(1, highP - lowP)) * 36
+  return (
+    <div className="plan__trend">
+      <svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true">
+        {temps.map((r) => <line key={r.sol} className="plan__trend-band" x1={x(r.sol)} x2={x(r.sol)} y1={yT(r.airMinK)} y2={yT(r.airMaxK)} vectorEffect="non-scaling-stroke" />)}
+        <polyline className="plan__trend-line" points={pressures.map((r) => `${x(r.sol)},${yP(r.pressurePa)}`).join(' ')} vectorEffect="non-scaling-stroke" />
+      </svg>
+      <p>
+        <span>Sol {first} to {last}</span>
+        <span><i className="plan__key plan__key--band" aria-hidden="true" />Air {Math.round(celsius(lowT))} to {Math.round(celsius(highT))} °C</span>
+        <span><i className="plan__key plan__key--line" aria-hidden="true" />Pressure {(lowP / 100).toFixed(2)} to {(highP / 100).toFixed(2)} hPa</span>
+      </p>
+    </div>
+  )
+}
+
 export default function PlanPanel({
-  plan, limits, assessment, status, placing, dose,
-  onPlacing, onSite, onRemoveWaypoint, onLimits, onRetry, onWalk, onClear,
+  plan, limits, assessment, status, placing, dose, weather, space, when, terrainDetail,
+  onWhen, onPlacing, onSite, onRemoveWaypoint, onLimits, onRetry, onWalk, onClear,
 }) {
   const searchId = useId()
   const [advanced, setAdvanced] = useState(false)
@@ -264,8 +369,23 @@ export default function PlanPanel({
       { label: 'Over limit', group: 'This route', basic: true, node: <Value unit="m" level={a && a.legs.some((l) => l.over > 0) ? 'hazard' : null}>{a ? Math.round(a.legs.reduce((s, l) => s + l.over, 0)) : pending}</Value> },
       { label: 'Near limit', group: 'This route', basic: false, node: <Value unit="m">{a ? Math.round(a.legs.reduce((s, l) => s + l.caution, 0)) : pending}</Value> },
       { label: 'No terrain data', group: 'This route', basic: false, node: <Value unit="m">{a ? Math.round(a.legs.reduce((s, l) => s + l.unknown, 0)) : pending}</Value> },
+      { label: 'Finest', group: 'Detail', basic: false, hint: 'Ground spacing of the best elevation model under the route. Fine terrain shows scarps a few meters high.', node: <Value>{terrainDetail ? detailLabel(terrainDetail.finest) : pending}</Value> },
+      { label: 'Coarsest', group: 'Detail', basic: true, hint: `Coarser than ${COARSE_DETAIL} m hides boulders and small scarps, so slope there is a smoothed lower bound. Dashed outlines on the map mark fine terrain.`, node: <Value level={terrainDetail && terrainDetail.coarsest > COARSE_DETAIL ? 'caution' : null}>{terrainDetail ? detailLabel(terrainDetail.coarsest) : pending}</Value> },
+      { label: 'On coarse terrain', group: 'Detail', basic: true, node: <Value unit="m" level={terrainDetail?.coarse > 0 ? 'caution' : null}>{terrainDetail ? Math.round(terrainDetail.coarse) : pending}</Value> },
     ],
     time: [
+      { label: 'EVA start', group: 'Schedule', basic: true, wide: true, hint: 'UTC. Empty means now. Space weather is checked against this window.', node: (
+        <span className="plan__box plan__box--edit plan__box--when">
+          <input
+            type="datetime-local"
+            aria-label="EVA start, UTC"
+            value={when ? when.slice(0, 16) : ''}
+            onChange={(event) => onWhen(event.target.value ? `${event.target.value}:00Z` : null)}
+          />
+          {when ? <button type="button" onClick={() => onWhen(null)} title="Start now">Now</button> : <span className="plan__unit">UTC</span>}
+        </span>
+      ) },
+      { label: 'EVA end', group: 'Schedule', basic: true, hint: 'Start plus the route time, or the whole budget before there is a route.', node: <Value>{space ? formatWhen(new Date(space.end).toISOString()) : '—'}</Value> },
       { label: 'EVA budget', group: 'Budget', basic: true, node: field('eva', 'EVA budget') },
       { label: 'Time at target', group: 'Budget', basic: true, node: field('work', 'Time at target') },
       { label: 'Flat pace', group: 'Budget', basic: false, hint: "Tobler's hiking function, scaled to this pace", node: field('pace', 'Flat pace') },
@@ -277,22 +397,26 @@ export default function PlanPanel({
       { label: 'Walk-back limit', group: 'Limit', basic: true, node: field('range', 'Walk-back limit') },
       { label: 'Max from start', group: 'This route', basic: true, node: <Value unit="km" level={a && a.maxFromStart > limits.range ? 'hazard' : null}>{a ? (a.maxFromStart / 1000).toFixed(2) : pending}</Value> },
     ],
+    weather: weatherRows(weather),
     dose: [
+      ...spaceRows(space),
       { label: 'Dose rate', group: 'Reference', basic: false, hint: dose ? `${dose.site} RAD mean, ${dose.when}` : undefined, node: <Value unit="mSv/day">{dose ? (dose.measurement.value * 1000).toFixed(2) : '—'}</Value> },
-      { label: 'EVA dose', group: 'This route', basic: true, hint: dose ? `${dose.site} RAD mean, ${dose.when}` : undefined, node: <Value unit="mSv">{a?.dose != null ? (a.dose * 1000).toFixed(3) : pending}</Value> },
+      { label: 'EVA dose', group: 'This route', basic: true, hint: dose ? `${dose.site} RAD mean, ${dose.when}. Assumes a quiet sun; a solar particle event can raise it many times over.` : undefined, node: <Value unit="mSv">{a?.dose != null ? (a.dose * 1000).toFixed(3) : pending}</Value> },
     ],
   }
 
   const visible = (row) => (query ? match(row.label) : advanced || row.basic)
+  const weatherAge = weather?.report?.latest ? ageDays(weather.report.latest) : null
 
   // Worst state per tab, for the dot on its rail icon.
   const sum = (key) => (a ? a.legs.reduce((total, leg) => total + leg[key], 0) : 0)
   const flags = {
     route: null,
-    terrain: !a ? null : sum('over') > 0 ? 'hazard' : sum('caution') > 0 || sum('unknown') > 0 ? 'caution' : null,
+    terrain: !a ? null : sum('over') > 0 ? 'hazard' : sum('caution') > 0 || sum('unknown') > 0 || sum('coarse') > 0 ? 'caution' : null,
     time: !a ? null : a.total > limits.eva ? 'hazard' : a.total > limits.eva * 0.85 ? 'caution' : null,
     range: a && a.maxFromStart > limits.range ? 'hazard' : null,
-    dose: null,
+    dose: space?.check?.reasons.some((r) => r.level === 'no-go') ? 'hazard' : space?.check?.reasons.length ? 'caution' : null,
+    weather: weatherAge !== null && weatherAge > STALE_DAYS ? 'caution' : null,
   }
 
   // One tab, or every tab's matches while searching.
@@ -383,7 +507,9 @@ export default function PlanPanel({
                 {groups.map(({ group, rows: list }) => (
                   <section key={group} className="plan__cat" aria-label={group}>
                     <h4 className="plan__cat-title">{group}</h4>
-                    {list.map((row) => <Row key={row.label} label={row.label} hint={row.hint} wide={row.wide}>{row.node}</Row>)}
+                    {list.map((row) => (row.full
+                      ? <div key={row.label} className="plan__row plan__row--full">{row.node}</div>
+                      : <Row key={row.label} label={row.label} hint={row.hint} wide={row.wide}>{row.node}</Row>))}
                   </section>
                 ))}
               </div>

@@ -23,6 +23,7 @@ import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { LOCAL_MAX_ZOOM, MAX_NATIVE_ZOOM, localTilePath, remoteTileUrl } from '../data/basemap'
 import { SITES } from '../data/sites'
 import { DATUM_OFFSET, MARS_SPHERE, createTerrain } from '../data/terrain'
+import { FAST_VIEWER_OPTIONS, tuneViewer } from '../data/performance'
 import NavControls from './NavControls'
 import { pickGround, setupControls } from './camera'
 import { warmSiteImagery } from '../cache/map-cache'
@@ -30,13 +31,20 @@ import { addCtxLayer } from '../data/ctx-layer.ts'
 import { addRouteOverlay } from './route-overlay.ts'
 import { SAMPLED_RASTERS, SCIENCE_LAYERS, SCIENCE_RASTERS } from '../data/science-layers'
 import { addScienceOverlay } from '../data/science-overlay'
-import { cumulative, distance } from '../data/geo'
+import { distance, resample } from '../data/geo'
 import { buildProfile, slopeLevel, summarize } from '../data/route-profile'
-import { DEFAULT_LIMITS, EMPTY_PLAN, assess, insertWaypoint, moveVertex, planPath, removeWaypoint } from '../data/plan'
+import { DEFAULT_LIMITS, EMPTY_PLAN, assess, withReasons, insertWaypoint, moveVertex, planPath, removeWaypoint } from '../data/plan'
 import { addPlanOverlay } from './plan-overlay'
 import { areaStats, buildGrid, routeOptions, sameReason } from '../data/route-options'
 import RouteOptions from './RouteOptions'
 import { formatDistance } from './RouteProfile'
+import { STATIONS, fetchWeather, formatPressure, formatTemp, nearestStation, pressureAt } from '../data/weather'
+import { fetchUnit } from '../data/geology'
+import { coverage, detailAt, detailLabel, detailMeters, levelAt, levelForSpacing, outline, slopeBaseline } from '../data/terrain-detail'
+import { checkSpaceWeather, fetchSpaceWeather } from '../data/space-weather'
+import { TERRAIN_API_PATH } from '../data/terrain-source'
+import { addToolOverlay } from './tool-overlay'
+import { addMarker as addMapMarker, loadMarkers, removeMarker, saveMarkers, symbolImage, updateMarker } from '../data/markers'
 import LayerSwitcher from './LayerSwitcher'
 import MapTools, { ToolButtons } from './MapTools'
 import { sampleRaster } from '../data/raster-sample'
@@ -55,9 +63,12 @@ const OBSERVATIONS = SCIENCE_LAYERS.filter((layer) => layer.kind === 'observatio
 const PROFILE_RASTERS = SAMPLED_RASTERS.filter((layer) => layer.id === 'mola-roughness')
 const RADIATION = OBSERVATIONS.find((record) => record.category === 'radiation')
 // Finer layers draw above coarser ones.
-const RANK = ['tes-albedo', 'mola-roughness', 'mola-color', 'themis-day', 'themis-night']
+const RANK = ['tes-albedo', 'mola-roughness', 'mola-color', 'geology', 'themis-day', 'themis-night']
+// Every overlay starts off. Two that were on by default made up half of the
+// tile requests of a zoom, and held back the imagery and terrain under them.
+// The layer switcher turns them on.
 const DEFAULT_OVERLAYS = Object.fromEntries(SCIENCE_RASTERS.map((layer) => [layer.id, {
-  on: layer.id === 'mola-color' || layer.id === 'themis-night',
+  on: false,
   opacity: layer.id === 'mola-color' ? 0.45 : 0.6,
 }]))
 // A new start this far from the old target starts a new plan.
@@ -134,6 +145,49 @@ function aimLight(scene) {
   Cartesian3.add(toLight, Cartesian3.multiplyByScalar(up, Math.sin(LIGHT_ELEVATION), right), toLight)
   Cartesian3.negate(toLight, scene.light.direction)
   Cartesian3.normalize(scene.light.direction, scene.light.direction)
+}
+
+// Terrain at this tile level or deeper counts as fine and gets an outline.
+// Level 15 is about 5 m between samples.
+const FINE_LEVEL = 15
+
+// Each weather station sits at its rover's last reported position.
+const STATION_POSITIONS = Object.fromEntries(STATIONS.map(({ id, siteId }) => [id, SITES.find((s) => s.id === siteId).traverse.position]))
+// The rovers report once a sol. Refetch hourly so a long session stays current.
+const WEATHER_REFRESH = 3_600_000
+
+// Map markers as billboards, one per marker, with the label under the symbol.
+function syncMarkers(viewer, entities, markers) {
+  for (const entity of entities.values()) viewer.entities.remove(entity)
+  entities.clear()
+  const text = cssValue('--color-text')
+  const bg = cssValue('--color-bg')
+  for (const m of markers) {
+    const entity = viewer.entities.add({
+      position: Cartesian3.fromDegrees(m.point[1], m.point[0], 0, MARS),
+      billboard: {
+        image: symbolImage(m.symbol, text, bg),
+        heightReference: HeightReference.CLAMP_TO_GROUND,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+      label: {
+        text: m.label,
+        font: LABEL_FONT,
+        fillColor: Color.fromCssColorString(text),
+        style: LabelStyle.FILL,
+        showBackground: true,
+        backgroundColor: Color.fromCssColorString(bg).withAlpha(0.82),
+        backgroundPadding: new Cartesian2(6, 3),
+        verticalOrigin: VerticalOrigin.TOP,
+        pixelOffset: new Cartesian2(0, 20),
+        heightReference: HeightReference.CLAMP_TO_GROUND,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    })
+    entity.markerId = m.id
+    entities.set(m.id, entity)
+  }
+  viewer.scene.requestRender()
 }
 
 // Canvas position of a ground point, or null when it's out of view.
@@ -220,42 +274,21 @@ function createViewer(container, ctxOptions) {
     skyAtmosphere: false,
     // Sources are credited in the status bar.
     creditContainer: document.createElement('div'),
-    requestRenderMode: true,
-    maximumRenderTimeChange: Infinity,
+    ...FAST_VIEWER_OPTIONS,
   })
 
   const stopCtx = addCtxLayer(viewer, ctxOptions)
 
   const { scene } = viewer
   scene.backgroundColor = cssColor('--color-bg')
-  scene.fog.enabled = false
   scene.globe.showGroundAtmosphere = false
   scene.globe.baseColor = cssColor('--color-surface')
   scene.globe.enableLighting = true
   // Let terrain hide markers and labels on slopes and the far side of Mars.
   scene.globe.depthTestAgainstTerrain = true
-  // Keep decoded terrain and imagery when zooming away and back.
-  scene.globe.tileCacheSize = 512
-  // Avoid fetching every intermediate close-up during a flight or scroll.
-  // Once motion stops, return to the original full-detail error threshold.
-  let refinementTimer
-  const removeMoveStart = viewer.camera.moveStart.addEventListener(() => {
-    clearTimeout(refinementTimer)
-    scene.globe.maximumScreenSpaceError = 8
-    scene.requestRender()
-  })
-  const removeMoveEnd = viewer.camera.moveEnd.addEventListener(() => {
-    refinementTimer = setTimeout(() => {
-      if (viewer.isDestroyed()) return
-      scene.globe.maximumScreenSpaceError = 2
-      scene.requestRender()
-    }, 150)
-  })
-  const stopRefinement = () => {
-    clearTimeout(refinementTimer)
-    removeMoveStart()
-    removeMoveEnd()
-  }
+  // Coarser tiles while the camera makes a big zoom, a larger tile cache,
+  // and the rest of what keeps drawing cheap. See src/data/performance.js.
+  const stopRefinement = tuneViewer(viewer)
   scene.globe.dynamicAtmosphereLighting = false
   scene.light = new DirectionalLight({ direction: new Cartesian3(0, 0, -1), intensity: 2 })
   scene.preUpdate.addEventListener(() => aimLight(scene))
@@ -405,6 +438,14 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   // The suggestion last applied, and the waypoints it set.
   const [chosenRoute, setChosenRoute] = useState(null)
   const [layersOpen, setLayersOpen] = useState(false)
+  // Station reports by id: a report, 'error', or missing while loading.
+  const [weather, setWeather] = useState({})
+  const [stationElevation, setStationElevation] = useState({})
+  const [markers, setMarkers] = useState(loadMarkers)
+  const [spaceWeather, setSpaceWeather] = useState({ status: 'loading', data: null })
+  // Minute clock for time-relative checks such as CME arrivals.
+  const [clock, setClock] = useState(() => Date.now())
+  const markerEntities = useRef(new Map())
   const [profile, setProfile] = useState({ status: 'idle', samples: null })
   const [profileAttempt, setProfileAttempt] = useState(0)
   const [profileOpen, setProfileOpen] = useState(true)
@@ -544,8 +585,9 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     // Right click opens the point menu. Right drag still tilts the camera:
     // Cesium only reports a click when the pointer didn't move.
     handler.setInputAction(({ position }) => {
+      const markerId = viewer.scene.pick(position)?.id?.markerId ?? null
       const point = toLatLon(position)
-      if (point) onContextRef.current({ point, screen: { x: position.x, y: position.y } })
+      if (point || markerId) onContextRef.current({ point, markerId, screen: { x: position.x, y: position.y } })
     }, ScreenSpaceEventType.RIGHT_CLICK)
     const noMenu = (event) => event.preventDefault()
     viewer.scene.canvas.addEventListener('contextmenu', noMenu)
@@ -656,13 +698,18 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       return
     }
     let cancelled = false
-    const length = cumulative(routePath).at(-1)
     setProfile({ status: 'loading', samples: null })
+    // Sample at the finest terrain anywhere on the route. Where the route
+    // leaves it, sampling falls back to coarser levels and the legs say so.
+    const finest = Math.max(9, ...resample(routePath, 24).map(({ point }) => levelAt(terrainProvider, point) ?? 9))
+    const level = Math.min(17, finest)
     buildProfile(routePath, {
       provider: terrainProvider,
       rasters: PROFILE_RASTERS,
       count: 200,
-      level: length > 20_000 ? 12 : 15,
+      level,
+      baseline: slopeBaseline(detailMeters(level)),
+      detail: (point) => detailAt(terrainProvider, point),
     }).then((samples) => {
       if (cancelled) return
       const known = samples.some((s) => s.elevation !== null)
@@ -679,10 +726,29 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
 
   const summary = useMemo(() => (profile.samples ? summarize(profile.samples) : null), [profile.samples])
   const doseRate = RADIATION?.measurements[0]?.unit === 'Sv/day' ? RADIATION.measurements[0].value : null
-  const assessment = useMemo(
+  const routeAssessment = useMemo(
     () => (profile.status === 'ready' && routePath ? assess(profile.samples, routePath, limits, doseRate) : null),
     [profile, routePath, limits, doseRate],
   )
+  // The EVA window: from the planned start, or now, for the route's time,
+  // or the whole budget before a route exists.
+  const evaStart = plan.when ? Date.parse(plan.when) : clock
+  const evaEnd = evaStart + (routeAssessment?.total ?? limits.eva) * 1000
+  const spaceCheck = useMemo(
+    () => (spaceWeather.status === 'loading' ? null : checkSpaceWeather(spaceWeather.data, evaStart, evaEnd, clock)),
+    [spaceWeather, evaStart, evaEnd, clock],
+  )
+  const assessment = useMemo(
+    () => (routeAssessment && spaceCheck ? withReasons(routeAssessment, spaceCheck.reasons) : routeAssessment),
+    [routeAssessment, spaceCheck],
+  )
+  // Finest and coarsest terrain under the route, for the Terrain tab.
+  const terrainDetail = useMemo(() => {
+    const details = (profile.samples ?? []).map((sample) => sample.detail).filter((d) => d != null)
+    if (!details.length) return null
+    const coarse = routeAssessment?.legs.reduce((sum, leg) => sum + leg.coarse, 0) ?? 0
+    return { finest: Math.min(...details), coarsest: Math.max(...details), coarse }
+  }, [profile.samples, routeAssessment])
 
   // Sample the grid once per start and target. Limits only rerun the search.
   const routeStart = plan.start
@@ -694,12 +760,20 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     }
     const controller = new AbortController()
     setRouteField({ status: 'loading' })
-    const grid = buildGrid(routeStart, routeTarget)
-    const level = distance(routeStart, routeTarget) > 20_000 ? 12 : 14
+    // On fine terrain the grid gets finer too, up to 160 cells between start
+    // and target, so routes can thread between scarps the terrain shows.
+    const length = distance(routeStart, routeTarget)
+    const finest = Math.max(9, ...[routeStart, routeTarget, resample([routeStart, routeTarget], 3)[1].point].map((point) => levelAt(terrainProvider, point) ?? 9))
+    const along = Math.min(160, Math.max(40, Math.round(length / Math.max(4 * detailMeters(finest), length / 160))))
+    const grid = buildGrid(routeStart, routeTarget, along)
+    const level = levelForSpacing(grid.cell, finest)
+    // Slope probes cost five samples a node. On a dense grid the search
+    // already reads slope between nodes, so skip them.
+    const probeSlopes = grid.points.length <= 6000
     const night = SAMPLED_RASTERS.find((layer) => layer.id === 'themis-night')
     loadRouteField(grid, {
       elevations: () => sampleElevations(terrainProvider, grid.points, level),
-      surface: () => sampleSurface(terrainProvider, grid.points, level),
+      surface: () => (probeSlopes ? sampleSurface(terrainProvider, grid.points, level) : Promise.resolve([])),
       thermal: () => night ? sampleRaster(night, grid.points) : Promise.resolve(grid.points.map(() => null)),
     }, (result) => {
       const known = result.field.elevation.some((elevation) => elevation !== null)
@@ -755,7 +829,8 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   const startAt = (point, startName = null) => {
     setPlan((current) => {
       const far = current.target && distance(current.target, point) > NEW_PLAN_DISTANCE
-      return far ? { ...EMPTY_PLAN, start: point, startName } : { ...current, start: point, startName }
+      // A new start elsewhere drops the route but keeps the planned time.
+      return far ? { ...EMPTY_PLAN, when: current.when, start: point, startName } : { ...current, start: point, startName }
     })
     setPlacing((current) => (current === 'start' ? null : current))
   }
@@ -778,7 +853,11 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     if (siteId) return onSite(siteId)
     setProbe(null)
   }
-  onContextRef.current = (opened) => setProbe(opened ? { ...opened, status: 'loading' } : null)
+  onContextRef.current = (opened) => {
+    if (!opened) return setProbe(null)
+    const placed = opened.markerId ? markers.find((m) => m.id === opened.markerId) : null
+    setProbe({ ...opened, point: placed?.point ?? opened.point, markerId: placed?.id ?? null, status: 'loading' })
+  }
   const closeProbe = useCallback(() => setProbe(null), [])
   onMoveVertexRef.current = (index, point) => setPlan((current) => moveVertex(current, index, point))
 
@@ -812,6 +891,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       if (cancelled) return
       setProbe((current) => current?.point !== probePoint ? current : {
         ...current,
+        detail: detailAt(terrainProvider, probePoint),
         status: surface.elevation === null ? 'error' : 'ready',
         elevation: surface.elevation,
         slope: surface.slope,
@@ -822,6 +902,116 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     })
     return () => { cancelled = true }
   }, [terrainProvider, probePoint])
+
+  // The geologic unit under the probe, fetched next to the terrain samples.
+  useEffect(() => {
+    if (!probePoint) return
+    const controller = new AbortController()
+    fetchUnit(probePoint, controller.signal).then(
+      (unit) => setProbe((current) => (current?.point === probePoint ? { ...current, geology: unit ?? 'none' } : current)),
+      (error) => {
+        if (error.name !== 'AbortError') setProbe((current) => (current?.point === probePoint ? { ...current, geology: 'error' } : current))
+      },
+    )
+    return () => controller.abort()
+  }, [probePoint])
+
+  // Rover weather, from the Go server's cached copy of the NASA feeds.
+  useEffect(() => {
+    const controller = new AbortController()
+    const load = () => {
+      for (const { id } of STATIONS) {
+        fetchWeather(id, controller.signal).then(
+          (report) => setWeather((current) => ({ ...current, [id]: report })),
+          (error) => {
+            if (error.name !== 'AbortError') setWeather((current) => ({ ...current, [id]: current[id] && current[id] !== 'error' ? current[id] : 'error' }))
+          },
+        )
+      }
+    }
+    load()
+    const timer = setInterval(load, WEATHER_REFRESH)
+    return () => {
+      controller.abort()
+      clearInterval(timer)
+    }
+  }, [])
+
+  // CME forecasts for Mars. The server caches an hour, so refetching hourly
+  // costs nothing upstream.
+  useEffect(() => {
+    const controller = new AbortController()
+    const load = () => fetchSpaceWeather(controller.signal).then(
+      (data) => setSpaceWeather({ status: 'ready', data }),
+      (error) => {
+        if (error.name !== 'AbortError') setSpaceWeather((current) => (current.data ? { ...current, data: { ...current.data, stale: true } } : { status: 'error', data: null }))
+      },
+    )
+    load()
+    const timer = setInterval(load, WEATHER_REFRESH)
+    const tick = setInterval(() => setClock(Date.now()), 60_000)
+    return () => {
+      controller.abort()
+      clearInterval(timer)
+      clearInterval(tick)
+    }
+  }, [])
+
+  // Where Trek has fine terrain, outlined on the map with its detail, so a
+  // planner can keep the route where slope numbers mean something.
+  useEffect(() => {
+    if (!viewer || !terrainProvider) return
+    const overlay = addToolOverlay(viewer, cssValue('--color-bg'))
+    const controller = new AbortController()
+    fetch(`${TERRAIN_API_PATH}/layer.json`, { signal: controller.signal }).then((r) => r.json()).then((layer) => {
+      const boxes = coverage(layer.available ?? [], FINE_LEVEL)
+      const dim = cssValue('--color-text-muted')
+      overlay.set({
+        lines: boxes.map((box) => ({ points: outline(box), color: dim, dash: [2, 5], width: 1.25 })),
+        dots: boxes.map((box) => {
+          const center = [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]
+          const detail = detailAt(terrainProvider, center) ?? detailMeters(FINE_LEVEL)
+          return { point: [box[2], box[1]], color: dim, bare: true, label: `${detailLabel(detail)} terrain`, maxHeight: 400_000 }
+        }),
+      })
+    }, () => {})
+    return () => {
+      controller.abort()
+      overlay.destroy()
+    }
+  }, [viewer, terrainProvider])
+
+  // Station ground elevation, so pressure can be scaled to other heights.
+  useEffect(() => {
+    if (!terrainProvider) return
+    let cancelled = false
+    const ids = STATIONS.map((s) => s.id)
+    sampleSurface(terrainProvider, ids.map((id) => STATION_POSITIONS[id]), 14).then((samples) => {
+      if (!cancelled) setStationElevation(Object.fromEntries(ids.map((id, i) => [id, samples[i].elevation])))
+    }, () => {})
+    return () => { cancelled = true }
+  }, [terrainProvider])
+
+  // Weather near a point: the closest station, its latest reading, and the
+  // pressure scaled to `elevation` when both heights are known.
+  const weatherNear = (point, elevation) => {
+    const near = point && nearestStation(point, STATION_POSITIONS)
+    const report = near && weather[near.id]
+    if (!near || !report || report === 'error' || !report.latest) return near ? { distance: near.distance, report: report ?? null } : null
+    const base = stationElevation[near.id]
+    const pa = report.latest.pressurePa
+    const estimate = pa != null && base != null && elevation != null ? pressureAt(pa, base, elevation) : null
+    return { distance: near.distance, report, estimate }
+  }
+  const planWeather = weatherNear(plan.start ?? (site ? [site.lat, site.lon] : null), profile.samples?.[0]?.elevation ?? null)
+  const highWeather = planWeather?.report?.latest && summary?.high != null ? weatherNear(plan.start, summary.high) : null
+  const probeWeather = probe?.status === 'ready' ? weatherNear(probe.point, probe.elevation) : null
+
+  useEffect(() => saveMarkers(markers), [markers])
+  useEffect(() => {
+    if (viewer) syncMarkers(viewer, markerEntities.current, markers)
+  }, [viewer, markers])
+  const probeMarker = probe?.markerId ? markers.find((m) => m.id === probe.markerId) ?? null : null
 
   const probeActions = probePoint ? [
     { label: 'Start here', run: () => actions.start(probePoint) },
@@ -884,6 +1074,11 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
         status={profile.status}
         placing={placing}
         dose={dose}
+        weather={planWeather && { ...planWeather, atHigh: highWeather?.estimate ?? null }}
+        space={{ status: spaceWeather.status, data: spaceWeather.data, check: spaceCheck, start: evaStart, end: evaEnd, now: clock }}
+        when={plan.when ?? null}
+        onWhen={(when) => setPlan((current) => ({ ...current, when }))}
+        terrainDetail={terrainDetail}
         onPlacing={setPlacing}
         onSite={chooseSite}
         onRemoveWaypoint={(index) => setPlan((current) => removeWaypoint(current, index))}
@@ -905,6 +1100,11 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
             <div className="readout readout--tr">
               <span className="readout__label">Site</span>
               <span className="readout__value">{site.name}</span>
+              {planWeather?.report?.latest && (
+                <span className="readout__sub" title={`${planWeather.report.rover} ${planWeather.report.instrument}, ${planWeather.report.latest.date}. ${formatDistance(planWeather.distance)} from here.`}>
+                  {planWeather.report.instrument} sol {planWeather.report.latest.sol} · {formatTemp(planWeather.report.latest.airMinK)} to {formatTemp(planWeather.report.latest.airMaxK)} · {formatPressure(planWeather.report.latest.pressurePa)}
+                </span>
+              )}
             </div>
           )}
           <NavControls viewer={viewer}>
@@ -1016,6 +1216,11 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
               observations={OBSERVATIONS}
               limit={limits.slope}
               actions={probeActions}
+              weather={probeWeather}
+              marker={probeMarker}
+              onAddMarker={(symbol) => { setMarkers((current) => addMapMarker(current, symbol, probe.point)); setProbe(null) }}
+              onUpdateMarker={(change) => setMarkers((current) => updateMarker(current, probe.markerId, change))}
+              onRemoveMarker={() => { setMarkers((current) => removeMarker(current, probe.markerId)); setProbe(null) }}
               onClose={closeProbe}
             />
           )}

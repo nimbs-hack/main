@@ -1,6 +1,7 @@
 import { Cartesian2, Cartesian3, Cartographic, EllipsoidalOccluder } from 'cesium'
 import type { Viewer } from 'cesium'
 import { DATUM_OFFSET } from '../data/terrain.js'
+import { cumulative } from '../data/geo'
 import type { LatLon } from '../data/geo'
 
 export type PlanVertex = { point: LatLon, kind: 'start' | 'waypoint' | 'target', label: string }
@@ -11,10 +12,10 @@ export type PlanColors = { text: string, bg: string, surface: string, dim: strin
 
 // Line styles ported from deploy-v1 (apps/web/src/components/MapView.tsx).
 // Selected: a dark 6.5 px halo at 72% under a solid 3.5 px accent line at
-// 98%. Candidates keep deploy-v1's 6 5 dash, and each dash gets a dark
-// outline so it stays readable on ground of its own color. The gaps stay
-// open. Unfocused lines fade only slightly.
-const CANDIDATE = { dash: [6, 5], width: 2.5, alpha: 0.9, casing: 5.5, casingAlpha: 0.6 }
+// 98%. Candidates keep deploy-v1's 6 5 dash inside a continuous dark
+// outline along both edges, so they stay readable on ground of their own
+// color. The gaps between dashes stay clear. Unfocused lines fade slightly.
+const CANDIDATE = { dash: [6, 5], width: 2.5, alpha: 0.9, casing: 5.5, casingAlpha: 0.85 }
 const SELECTED = { halo: 6.5, haloAlpha: 0.72, width: 3.5, alpha: 0.98 }
 // How close the pointer must be to a candidate line to hover or pick it.
 const LINE_HIT = 6
@@ -22,6 +23,11 @@ const LINE_HIT = 6
 type Projected = { location: Cartographic, position: Cartesian3, screen: Cartesian2 | null }
 
 const HIT_RADIUS = 14
+// A terrain height is a ray cast against the tile mesh. While tiles stream
+// in during a zoom they would be redone for every point on every frame, so
+// tile changes refresh heights at most this often. New points and a new
+// elevation scale are placed at once.
+const HEIGHTS_MS = 400
 const LABEL_FONT = '500 11px "JetBrains Mono Variable", ui-monospace, monospace'
 
 /**
@@ -41,11 +47,19 @@ export function addPlanOverlay(viewer: Viewer, colors: PlanColors) {
   const occluder = new EllipsoidalOccluder(scene.ellipsoid, viewer.camera.positionWC)
   let vertices: (PlanVertex & Projected)[] = []
   let route: (RoutePoint & Projected)[] = []
-  let alternatives: (Omit<Alternative, 'points'> & { points: ({ point: LatLon } & Projected)[] })[] = []
+  // `along` is each point's ground distance from the route's start, which
+  // anchors the dashes to the terrain.
+  let alternatives: (Omit<Alternative, 'points'> & { points: ({ point: LatLon } & Projected)[], along: number[] })[] = []
   let dragging: number | null = null
-  let heightsDirty = true
+  // `heightsNow`: place every point this frame. `heightsStale`: tiles have
+  // changed since the last pass. `heightsDirty` is set for one draw.
+  let heightsDirty = false
+  let heightsNow = true
+  let heightsStale = false
+  let lastHeights = 0
+  let later: ReturnType<typeof setTimeout> | undefined
   let exaggeration = scene.verticalExaggeration
-  const removeProgress = scene.globe.tileLoadProgressEvent.addEventListener(() => { heightsDirty = true })
+  const removeProgress = scene.globe.tileLoadProgressEvent.addEventListener(() => { heightsStale = true })
 
   const project = <T extends { point: LatLon }>(item: T): T & Projected => ({
     ...item,
@@ -65,8 +79,14 @@ export function addPlanOverlay(viewer: Viewer, colors: PlanColors) {
     return p.screen
   }
 
+  // Candidates are drawn one at a time here, then copied over, so cutting the
+  // middle out of one outline never erases a line drawn before it.
+  const scratch = document.createElement('canvas')
+  const scratchContext = scratch.getContext('2d')!
+
   // Traces visible points into the current path, breaking at hidden ones.
-  const trace = (points: Projected[]) => {
+  const trace = (points: Projected[], target = context) => {
+    const context = target
     context.beginPath()
     let connected = false
     for (const p of points) {
@@ -120,27 +140,83 @@ export function addPlanOverlay(viewer: Viewer, colors: PlanColors) {
     context.setLineDash([])
   }
 
-  const drawAlternatives = () => {
+  // Dashes fixed to the ground, so they don't slide as the camera moves.
+  // The period is the power of two in meters nearest to the 6 5 pattern's
+  // 11 px at the current zoom. Zooming past a step halves or doubles it, and
+  // every other dash boundary stays where it was.
+  const groundDashes = (target: CanvasRenderingContext2D, points: Projected[], along: number[]) => {
+    let pixels = 0
+    let meters = 0
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1].screen
+      const b = points[i].screen
+      if (!a || !b) continue
+      pixels += Math.hypot(b.x - a.x, b.y - a.y)
+      meters += along[i] - along[i - 1]
+    }
+    target.beginPath()
+    if (pixels <= 0 || meters <= 0) return
+    const pattern = CANDIDATE.dash[0] + CANDIDATE.dash[1]
+    const period = 2 ** Math.round(Math.log2((pattern * meters) / pixels))
+    const on = (period * CANDIDATE.dash[0]) / pattern
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1].screen
+      const b = points[i].screen
+      const d0 = along[i - 1]
+      const d1 = along[i]
+      if (!a || !b || d1 <= d0) continue
+      const at = (d: number) => {
+        const t = (d - d0) / (d1 - d0)
+        return [a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t]
+      }
+      for (let start = Math.floor(d0 / period) * period; start < d1; start += period) {
+        const from = Math.max(d0, start)
+        const to = Math.min(d1, start + on)
+        if (to <= from) continue
+        const [x0, y0] = at(from)
+        const [x1, y1] = at(to)
+        target.moveTo(x0, y0)
+        target.lineTo(x1, y1)
+      }
+    }
+  }
+
+  const drawAlternatives = (scale: number) => {
+    if (scratch.width !== canvas.width || scratch.height !== canvas.height) {
+      scratch.width = canvas.width
+      scratch.height = canvas.height
+    }
+    const sc = scratchContext
     // Unfocused first, so the focused one lands on top.
     for (const alt of [...alternatives].sort((a, b) => Number(a.focus) - Number(b.focus))) {
       for (const p of alt.points) place(p)
-      trace(alt.points)
       const width = alt.focus ? SELECTED.width : CANDIDATE.width
-      // Outline: the same dashes, wider and dark, so only the dashes get a
-      // border. Butt caps keep the outline from spilling into the gaps.
-      context.setLineDash(CANDIDATE.dash)
-      context.lineCap = 'butt'
-      context.globalAlpha = alt.focus ? SELECTED.haloAlpha : CANDIDATE.casingAlpha
-      context.strokeStyle = colors.bg
-      context.lineWidth = width + CANDIDATE.casing - CANDIDATE.width
-      context.stroke()
+      sc.setTransform(1, 0, 0, 1, 0, 0)
+      sc.clearRect(0, 0, scratch.width, scratch.height)
+      sc.setTransform(scale, 0, 0, scale, 0, 0)
+      sc.lineJoin = 'round'
+      sc.lineCap = 'round'
+      trace(alt.points, sc)
+      // A solid dark band, then its middle cut away: two thin rails.
+      sc.globalAlpha = CANDIDATE.casingAlpha
+      sc.strokeStyle = colors.bg
+      sc.lineWidth = width + CANDIDATE.casing - CANDIDATE.width
+      sc.stroke()
+      sc.globalAlpha = 1
+      sc.globalCompositeOperation = 'destination-out'
+      sc.lineWidth = width
+      sc.stroke()
+      sc.globalCompositeOperation = 'source-over'
+      // The dashes between the rails, measured on the ground.
+      groundDashes(sc, alt.points, alt.along)
+      sc.lineCap = 'butt'
+      sc.strokeStyle = alt.color
+      sc.stroke()
+      context.save()
+      context.setTransform(1, 0, 0, 1, 0, 0)
       context.globalAlpha = alt.focus ? 1 : CANDIDATE.alpha
-      context.strokeStyle = alt.color
-      context.lineWidth = width
-      context.stroke()
-      context.lineCap = 'round'
-      context.globalAlpha = 1
-      context.setLineDash([])
+      context.drawImage(scratch, 0, 0)
+      context.restore()
     }
   }
 
@@ -177,13 +253,25 @@ export function addPlanOverlay(viewer: Viewer, colors: PlanColors) {
     context.setTransform(scale, 0, 0, scale, 0, 0)
     context.clearRect(0, 0, width, height)
     occluder.cameraPosition = viewer.camera.positionWC
-    heightsDirty ||= exaggeration !== scene.verticalExaggeration
+    heightsNow ||= exaggeration !== scene.verticalExaggeration
     exaggeration = scene.verticalExaggeration
+    const now = performance.now()
+    heightsDirty = heightsNow || (heightsStale && now - lastHeights >= HEIGHTS_MS)
+    if (heightsDirty) {
+      lastHeights = now
+      heightsNow = false
+      heightsStale = false
+    } else if (heightsStale) {
+      later ??= setTimeout(() => {
+        later = undefined
+        scene.requestRender()
+      }, HEIGHTS_MS)
+    }
     context.lineJoin = 'round'
     context.lineCap = 'round'
 
     for (const v of vertices) place(v)
-    drawAlternatives()
+    drawAlternatives(scale)
     if (route.length > 1 && dragging === null) drawRoute()
     else drawLegs()
     vertices.forEach(drawVertex)
@@ -192,7 +280,7 @@ export function addPlanOverlay(viewer: Viewer, colors: PlanColors) {
 
   const removeRender = scene.postRender.addEventListener(draw)
   const redraw = () => {
-    heightsDirty = true
+    heightsNow = true
     scene.requestRender()
   }
 
@@ -203,7 +291,7 @@ export function addPlanOverlay(viewer: Viewer, colors: PlanColors) {
       redraw()
     },
     setAlternatives(next: Alternative[]) {
-      alternatives = next.map((alt) => ({ ...alt, points: alt.points.map((point) => project({ point })) }))
+      alternatives = next.map((alt) => ({ ...alt, points: alt.points.map((point) => project({ point })), along: cumulative(alt.points) }))
       redraw()
     },
     // Id of the candidate line under a canvas position, if any.
@@ -248,6 +336,7 @@ export function addPlanOverlay(viewer: Viewer, colors: PlanColors) {
       redraw()
     },
     destroy() {
+      clearTimeout(later)
       removeProgress()
       removeRender()
       canvas.remove()

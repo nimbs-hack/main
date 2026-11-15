@@ -129,6 +129,7 @@ The [NASA Trek WMTS documentation](https://trek.nasa.gov/tiles/apidoc/trekAPI.ht
 | `mola-color` | Mars Global Surveyor MOLA | 463 m/pixel, 128 pixels/degree | 0–7 | Observations from 1999–2001 |
 | `tes-albedo` | Mars Global Surveyor TES visible/NIR detector | About 7,410 m/pixel, 8 pixels/degree | 0–1 | Mission archive; exact interval unspecified |
 | `mola-roughness` | Mars Global Surveyor MOLA | About 7,500 m/pixel, 8 pixels/degree | 0–1 | Kreslavsky and Head 2000 product cited by Trek |
+| `geology` | USGS SIM 3292 global geologic map (Tanaka et al. 2014), compiled from MGS, Odyssey, MEX and MRO data | 1:20,000,000 map scale | 0–11 | Published 2014 |
 
 Resolution describes the source product, not the tile pixels. Level 1 has only 1,024 pixels around the equator, about 20.8 km/pixel. Level 9 is about 81 m/pixel. Resampling does not improve the instrument's resolution.
 
@@ -159,6 +160,14 @@ Append the product label below and `/1.0.0/WMTSCapabilities.xml` for capabilitie
 | `mola-color` | `Mars_MGS_MOLA_ClrShade_merge_global_463m` | jpg |
 | `tes-albedo` | `Mars_MGS_TES_Albedo_mosaic_global_7410m` | png |
 | `mola-roughness` | `mola_roughness` | png |
+
+The geology layer is not under that prefix. Trek serves it from its ArcGIS WMTS:
+
+```text
+https://trek.nasa.gov/mars/trekarcgis/rest/services/SIM3292_Global_Geology/MapServer/WMTS/tile/1.0.0/SIM3292_Global_Geology/default/default028mm/{z}/{y}/{x}.png
+```
+
+Its capabilities list levels 0 to 11. A level 3 sample over Gale (`3/2/12`) returned a 256×256, 8-bit colormap PNG. Its colors name map units, so the browser never samples it as a ramp. The unit at a point comes from the same service's `identify` call instead (see below). The source map is [USGS SIM 3292](https://pubs.usgs.gov/publication/sim3292), public domain.
 
 Every product returned HTTP 200 for both level-zero hemispheres, an intermediate tile and the maximum-level tile below. Every sample decoded to 256×256 pixels. PNG samples retained alpha; MOLA color samples were RGB JPEG. Maximum-level sample coordinates cover the Gale crater region in the planetocentric, east-positive -180° to +180° convention.
 
@@ -196,3 +205,56 @@ These are computed in the browser from the sources above. Nothing new is downloa
 - Layer lanes and point readouts read pixels from the same science tiles at each source's `maxLevel` (`src/data/raster-sample.ts`). A value is the pixel's position on the layer legend, 0 to 100. It is not a calibrated temperature, albedo or roughness. MOLA color relief is excluded because its hillshade turns sunlit slopes white.
 - Routes are the public rover traverses in `src/data/traverses/`, resampled every 1/160 of the segment. "Last 2 km" is the final 2,000 m of the drive, used as a stand-in for a single EVA route.
 - The suit view position is simulated with step controls. Its dose readout is the historical Curiosity RAD mean from 2012 to 2013, not a live value.
+
+## Geologic unit lookup
+
+`GET /api/geology/unit?lat=..&lon=..` (`apps/api/internal/env/geology.go`) returns the SIM 3292 unit under a point, for example `AHi`, "Amazonian and Hesperian impact unit", at Gale. The server calls Trek's ArcGIS `identify` on `SIM3292_Global_Geology/MapServer` with zero tolerance, rounds coordinates to 0.01°, and keeps answers in memory. Coordinates are planetocentric latitude and east longitude, -180 to 180, on the Mars 2000 sphere.
+
+The map is 1:20M. Unit boundaries can be kilometers off at EVA scale, and units are mapped landforms and ages, not rock types at a spot. An ArcGIS Online copy of the same polygons also answered queries (`services.arcgis.com/nzS0F0zdNLvs7nc8/.../Mars_Geology_feature_layer/FeatureServer/0`), but we use the Trek service to keep one provider.
+
+Higher resolution geology exists only as GIS downloads. [USGS SIM 3464](https://pubs.usgs.gov/publication/sim3464) maps Jezero and Nili Planum at 1:75,000, a 349 MB database with no service found. TES thermal inertia (`TES_Thermal_Inertia`) and dust index (`tes_ruffdust`) tiles stop at level 1 and 2, far too coarse for a site.
+
+## Rover weather
+
+`GET /api/weather/gale` and `GET /api/weather/jezero` (`apps/api/internal/env/weather.go`) read NASA's public weather feeds, convert them to SI and cache them for an hour. If a feed fails, the server returns its last copy with `stale: true`.
+
+| Station | Rover and instrument | Feed | Channels | Latest when checked on 2026-11-14 |
+| --- | --- | --- | --- | --- |
+| `gale` | Curiosity REMS | `https://mars.nasa.gov/rss/api/?feed=weather&category=msl&feedtype=json` | Air min/max, ground min/max, pressure, sky opacity, UV index, sunrise/sunset LMST | Sol 4995, 2026-08-25 |
+| `jezero` | Perseverance MEDA | `https://mars.nasa.gov/rss/api/?feed=weather&category=mars2020&feedtype=json` | Air min/max, pressure, sunrise/sunset LMST | Sol 1133, 2024-04-27 |
+
+Feeds give °C and Pa. We store kelvin and pascals and convert for display. The REMS feed holds 4,745 sols; the browser gets the last 120 with data. Values of `--` are missing channels, not zero. The MEDA feed has not updated since April 2024, so the panel flags readings older than 30 days.
+
+The REMS feed carries this disclaimer from Centro de Astrobiología: its values are for outreach, measured at the rover and affected by it. For research use, the PDS archives the calibrated data. The deploy-v1 branch also reads PDS4 MEDA and PDS3 REMS products from `atmos.nmsu.edu`. We have not ported that yet.
+
+Pressure at another elevation is an estimate: `p = p_station × exp(-(z - z_station) / 10,800 m)`, the scale height deploy-v1 uses. Station elevation comes from Mars Trek terrain at the rover's last position. It ignores weather between the two places, so it is only meaningful near the station.
+
+## Map symbols
+
+Markers use 30 MIL-STD-2525C symbols ported from deploy-v1 (`src/data/mil2525c.ts`). Each is hand-drawn 24×24 SVG with its 15-character SIDC. They are drawn monochrome, which the standard allows, so frame shape alone shows affiliation. Markers are saved in the browser's local storage only.
+
+## Terrain detail
+
+Mars Trek's terrain tileset (`mars_v14`) only has deep levels where a high resolution elevation model exists. `layer.json` lists available tiles per level as rectangles. At Jezero and Gale tiles reach level 17; ordinary ground stops at level 9 to 12, and deeper requests return 404. We checked this on 2026-11-14 by decoding level 14 and 16 tiles at Jezero and Gale and requesting the same levels over plains at 30°N 0°E and 45°N 110°E.
+
+`src/data/terrain-detail.ts` treats the deepest level at a point as the detail there: one 64-cell tile across, `2πR / 2^(z+1) / 64`. That is about 326 m at level 9 (MOLA), 41 m at level 12 (HRSC) and 1.3 m at level 17 (HiRISE). It is the tile grid's spacing, not the source model's posting, and Trek simplifies meshes, so treat it as an upper bound on what the terrain can show.
+
+- Fine terrain, level 15 and deeper, is outlined on the map from `layer.json`.
+- Route profiles sample at the finest level on the route, with a slope baseline of four cells (5 m minimum, 60 m maximum) instead of the fixed 60 m.
+- Route suggestions use up to 160 grid cells between start and target on fine terrain and read terrain at the level that resolves half a cell.
+- Legs on terrain coarser than 20 m are a caution. That threshold is a planning assumption.
+
+Where a fine model meets the global one, Trek left vertical walls (about 357 m around Curiosity). The renderer smooths them, but slopes sampled across a seam are not real. The coarse-terrain caution covers most of these crossings.
+
+## Space weather
+
+`GET /api/spaceweather` (`apps/api/internal/env/spaceweather.go`) reads WSA-ENLIL model runs from [NASA DONKI](https://api.nasa.gov/) for the last 30 days and keeps arrivals forecast at Mars. Each CME keeps the arrival from its newest run. The server caches for an hour.
+
+- Endpoint: `https://api.nasa.gov/DONKI/WSAEnlilSimulations?startDate=..&endDate=..&api_key=..`. One request may span at most 60 days. `DEMO_KEY` allows about 10 requests an hour; set `NASA_API_KEY` for more. The CCMC host `kauai.ccmc.gsfc.nasa.gov` timed out from our network on 2026-11-14, so we use the api.nasa.gov mirror.
+- On 2026-11-14 it returned 10 CMEs with Mars arrivals in the previous 30 days, the latest a glancing blow at 726 km/s on 13 November, 12:00 UTC.
+- Each run flags a Mars arrival as a glancing blow or minor impact, or neither. We call neither a full hit.
+
+`src/data/space-weather.ts` checks arrivals against the EVA window with a 12 hour margin on each side. A full hit inside it is no-go, a glancing or minor one is caution. The margin is a planning assumption based on ENLIL's typical arrival error at Earth of about 10 hours. Forecasts only cover CMEs already launched, so an EVA more than 2 days out is a caution too.
+
+We do not estimate storm doses. The EVA dose stays the quiet-sun Curiosity RAD average, and the UI says so.
+

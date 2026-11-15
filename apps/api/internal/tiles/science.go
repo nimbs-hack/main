@@ -19,16 +19,30 @@ type scienceSource struct {
 	extension string
 	maxLevel  int
 	tileSize  int
+	// template overrides the Trek tile path. It takes z, y and x, in that order.
+	template string
+}
+
+// url is the upstream tile for one grid cell.
+func (s scienceSource) url(z, y, x int) string {
+	if s.template != "" {
+		return fmt.Sprintf(s.template, z, y, x)
+	}
+	return fmt.Sprintf("https://trek.nasa.gov/tiles/Mars/EQ/%s/1.0.0/default/default028mm/%d/%d/%d.%s", s.layer, z, y, x, s.extension)
 }
 
 // Verified Mars Trek EQ products. Keep this allowlist in sync with
 // src/data/science-rasters.json and data/SOURCES.md.
 var scienceSources = map[string]scienceSource{
-	"themis-day":     {"THEMIS_DayIR_ControlledMosaics_100m_v2_oct2018", "png", 9, 256},
-	"themis-night":   {"THEMIS_NightIR_ControlledMosaics_100m_v2_oct2018", "png", 9, 256},
-	"mola-color":     {"Mars_MGS_MOLA_ClrShade_merge_global_463m", "jpg", 7, 256},
-	"tes-albedo":     {"Mars_MGS_TES_Albedo_mosaic_global_7410m", "png", 1, 256},
-	"mola-roughness": {"mola_roughness", "png", 1, 256},
+	"themis-day":     {"THEMIS_DayIR_ControlledMosaics_100m_v2_oct2018", "png", 9, 256, ""},
+	"themis-night":   {"THEMIS_NightIR_ControlledMosaics_100m_v2_oct2018", "png", 9, 256, ""},
+	"mola-color":     {"Mars_MGS_MOLA_ClrShade_merge_global_463m", "jpg", 7, 256, ""},
+	"tes-albedo":     {"Mars_MGS_TES_Albedo_mosaic_global_7410m", "png", 1, 256, ""},
+	"mola-roughness": {"mola_roughness", "png", 1, 256, ""},
+	// USGS SIM 3292 global geologic map (Tanaka et al. 2014), served by Trek's
+	// ArcGIS WMTS rather than the static tile tree.
+	"geology": {"SIM3292_Global_Geology", "png", 11, 256,
+		"https://trek.nasa.gov/mars/trekarcgis/rest/services/SIM3292_Global_Geology/MapServer/WMTS/tile/1.0.0/SIM3292_Global_Geology/default/default028mm/%d/%d/%d.png"},
 }
 
 func validateSciencePNG(data []byte) error {
@@ -76,7 +90,7 @@ func RegisterScience(mux *http.ServeMux, cacheDir string, client *http.Client) f
 		}
 		key := fmt.Sprintf("%s-%d-%d-%d.png", id, z, y, x)
 		data, err := cache.Get(r.Context(), key, func(ctx context.Context) ([]byte, error) {
-			url := fmt.Sprintf("https://trek.nasa.gov/tiles/Mars/EQ/%s/1.0.0/default/default028mm/%d/%d/%d.%s", source.layer, z, y, x, source.extension)
+			url := source.url(z, y, x)
 			data, headers, err := Fetch(ctx, &fixedClient, url, 2*1024*1024)
 			if err != nil {
 				return nil, err

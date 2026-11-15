@@ -352,6 +352,43 @@
   .plan__row { grid-template-columns: minmax(0, 1fr) 130px; padding-left: 0; }
 }
 
+/* EVA start: a UTC date-time field with a reset to now. */
+.plan__box--when input { color-scheme: dark; font-size: 13px; }
+.plan__box--when button {
+  flex: none;
+  height: 22px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.plan__out { color: var(--color-text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan__out:hover { text-decoration: underline; }
+
+/* A full-width row, used for the weather trend chart. */
+.plan__row--full { display: block; padding-right: 0; }
+.plan__trend svg { display: block; width: 100%; height: 56px; border: 1px solid var(--color-line); background: var(--color-bg); }
+.plan__trend-band { stroke: var(--color-text-dim); stroke-width: 2; }
+.plan__trend-line { fill: none; stroke: var(--color-text); stroke-width: 1.25; }
+.plan__key { display: inline-block; width: 8px; margin-right: var(--space-1); vertical-align: middle; }
+.plan__key--band { height: 8px; background: var(--color-text-dim); }
+.plan__key--line { height: 0; border-top: 1.5px solid var(--color-text); }
+.plan__trend p {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .plan__switch span::after { transition: none; }
 }

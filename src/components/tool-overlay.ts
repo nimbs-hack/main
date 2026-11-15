@@ -5,12 +5,16 @@ import type { LatLon } from '../data/geo'
 
 // What a map tool draws. Lines can be dashed. Dots carry an optional label.
 export type ToolLine = { points: LatLon[], color: string, dash?: number[], width?: number }
-export type ToolDot = { point: LatLon, color: string, label?: string, hollow?: boolean }
+// `bare` draws the label alone. `maxHeight` hides the dot when the camera is
+// higher than that many meters, so context labels don't litter a globe view.
+export type ToolDot = { point: LatLon, color: string, label?: string, hollow?: boolean, bare?: boolean, maxHeight?: number }
 export type ToolShapes = { lines: ToolLine[], dots: ToolDot[] }
 
 type Projected = { location: Cartographic, position: Cartesian3, screen: Cartesian2 | null }
 
 const LABEL_FONT = '500 11px "JetBrains Mono Variable", ui-monospace, monospace'
+// Tile changes refresh heights at most this often, as in plan-overlay.ts.
+const HEIGHTS_MS = 400
 
 /**
  * Canvas layer for the ruler, range rings and line of sight, drawn over the
@@ -28,9 +32,15 @@ export function addToolOverlay(viewer: Viewer, background: string) {
   const occluder = new EllipsoidalOccluder(scene.ellipsoid, viewer.camera.positionWC)
   let lines: (ToolLine & { projected: Projected[] })[] = []
   let dots: (ToolDot & Projected)[] = []
-  let heightsDirty = true
+  // `heightsNow`: place every point this frame. `heightsStale`: tiles have
+  // changed since the last pass. `heightsDirty` is set for one draw.
+  let heightsDirty = false
+  let heightsNow = true
+  let heightsStale = false
+  let lastHeights = 0
+  let later: ReturnType<typeof setTimeout> | undefined
   let exaggeration = scene.verticalExaggeration
-  const removeProgress = scene.globe.tileLoadProgressEvent.addEventListener(() => { heightsDirty = true })
+  const removeProgress = scene.globe.tileLoadProgressEvent.addEventListener(() => { heightsStale = true })
 
   const project = ([lat, lon]: LatLon): Projected => ({
     location: Cartographic.fromDegrees(lon, lat, DATUM_OFFSET),
@@ -60,8 +70,20 @@ export function addToolOverlay(viewer: Viewer, background: string) {
     context.setTransform(scale, 0, 0, scale, 0, 0)
     context.clearRect(0, 0, width, height)
     occluder.cameraPosition = viewer.camera.positionWC
-    heightsDirty ||= exaggeration !== scene.verticalExaggeration
+    heightsNow ||= exaggeration !== scene.verticalExaggeration
     exaggeration = scene.verticalExaggeration
+    const now = performance.now()
+    heightsDirty = heightsNow || (heightsStale && now - lastHeights >= HEIGHTS_MS)
+    if (heightsDirty) {
+      lastHeights = now
+      heightsNow = false
+      heightsStale = false
+    } else if (heightsStale) {
+      later ??= setTimeout(() => {
+        later = undefined
+        scene.requestRender()
+      }, HEIGHTS_MS)
+    }
     context.lineJoin = 'round'
     context.lineCap = 'round'
 
@@ -92,22 +114,28 @@ export function addToolOverlay(viewer: Viewer, background: string) {
     context.font = LABEL_FONT
     context.textBaseline = 'middle'
     context.textAlign = 'left'
+    const cameraHeight = viewer.camera.positionCartographic.height
     for (const dot of dots) {
+      if (dot.maxHeight !== undefined && cameraHeight > dot.maxHeight) continue
       const s = place(dot)
       if (!s) continue
-      context.beginPath()
-      context.arc(s.x, s.y, 5, 0, Math.PI * 2)
-      context.fillStyle = dot.hollow ? background : dot.color
-      context.fill()
-      context.lineWidth = 2
-      context.strokeStyle = dot.color
-      context.stroke()
+      if (!dot.bare) {
+        context.beginPath()
+        context.arc(s.x, s.y, 5, 0, Math.PI * 2)
+        context.fillStyle = dot.hollow ? background : dot.color
+        context.fill()
+        context.lineWidth = 2
+        context.strokeStyle = dot.color
+        context.stroke()
+      }
       if (!dot.label) continue
       const w = context.measureText(dot.label).width + 10
+      const x = dot.bare ? s.x + 4 : s.x + 9
+      const y = dot.bare ? s.y + 13 : s.y
       context.fillStyle = background
-      context.fillRect(s.x + 9, s.y - 9, w, 18)
+      context.fillRect(x, y - 9, w, 18)
       context.fillStyle = dot.color
-      context.fillText(dot.label, s.x + 14, s.y + 0.5)
+      context.fillText(dot.label, x + 5, y + 0.5)
     }
     heightsDirty = false
   }
@@ -117,10 +145,11 @@ export function addToolOverlay(viewer: Viewer, background: string) {
     set(shapes: ToolShapes) {
       lines = shapes.lines.map((line) => ({ ...line, projected: line.points.map(project) }))
       dots = shapes.dots.map((dot) => ({ ...dot, ...project(dot.point) }))
-      heightsDirty = true
+      heightsNow = true
       scene.requestRender()
     },
     destroy() {
+      clearTimeout(later)
       removeProgress()
       removeRender()
       canvas.remove()

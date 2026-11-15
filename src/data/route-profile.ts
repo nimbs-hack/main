@@ -18,6 +18,9 @@ export type ProfileSample = {
   elevation: number | null
   slope: number | null
   layers: Record<string, number | null>
+  // Terrain detail at the sample in meters, from the tile level available
+  // there. Missing when the profile was built without it.
+  detail?: number | null
 }
 
 export async function buildProfile(path: LatLon[], options: {
@@ -25,12 +28,14 @@ export async function buildProfile(path: LatLon[], options: {
   rasters: ScienceRaster[]
   count?: number
   level?: number
+  baseline?: number
+  detail?: (point: LatLon) => number | null
   load?: TileLoader
 }): Promise<ProfileSample[]> {
   const stations = resample(path, options.count ?? 160)
   const points = stations.map((s) => s.point)
   const [surface, ...layers] = await Promise.all([
-    sampleSurface(options.provider, points, options.level),
+    sampleSurface(options.provider, points, options.level, options.baseline),
     ...options.rasters.map((source) => sampleRaster(source, points, options.load)),
   ])
   return stations.map((station, i) => ({
@@ -38,6 +43,7 @@ export async function buildProfile(path: LatLon[], options: {
     elevation: surface[i].elevation,
     slope: surface[i].slope,
     layers: Object.fromEntries(options.rasters.map((source, k) => [source.id, layers[k][i]])),
+    detail: options.detail?.(station.point) ?? null,
   }))
 }
 
