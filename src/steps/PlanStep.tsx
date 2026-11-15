@@ -42,7 +42,7 @@ export function PlanStep({
   const last = own ? stops.at(-1) : undefined
   // The site the next stop will be. It starts on one that can follow the last.
   const [chosen, setChosen] = useState<number | null>(null)
-  const pick = chosen !== null && chosen < names.length ? chosen : names.findIndex((_, i) => i !== last)
+  const pick = chosen !== null && chosen < names.length && chosen !== last ? chosen : names.findIndex((_, i) => i !== last)
   const [open, setOpen] = useState(-1)
   const [drag, setDrag] = useState<{ from: number; over: number } | null>(null)
 
@@ -68,7 +68,7 @@ export function PlanStep({
   return (
     <>
       <div className="plan-add">
-        <Select label="Next stop" value={names[pick] ?? ''} options={names} onChange={(name) => setChosen(names.indexOf(name))} />
+        <Select label="Next stop" value={String(pick)} options={names.map((_, i) => String(i))} format={(index) => names[Number(index)] ?? ''} onChange={(index) => setChosen(Number(index))} />
         <Button disabled={pick < 0 || pick === last} title={pick === last ? 'The plan is at this site already' : undefined} onClick={() => onAdd(pick)}>
           Add stop
         </Button>

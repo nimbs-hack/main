@@ -9,6 +9,7 @@ function isTile(url) {
   return (url.origin === self.location.origin &&
     (/^\/api\/science\/(themis-day|themis-night|mola-color|tes-albedo|mola-roughness)\/\d+\/\d+\/\d+\.png$/.test(url.pathname) ||
      /^\/api\/imagery\/ctx-v01\/\d+\/\d+\/\d+\.png$/.test(url.pathname) ||
+     /^\/api\/imagery\/viking\/\d+\/\d+\/\d+\.jpg$/.test(url.pathname) ||
      /^\/api\/terrain\/mars-v14\/\d+\/\d+\/\d+\.terrain$/.test(url.pathname))) ||
     (url.origin === 'https://trek.nasa.gov' &&
     /^\/tiles\/Mars\/EQ\/.+\/\d+\/\d+\/\d+\.(png|jpg)$/.test(url.pathname)) ||

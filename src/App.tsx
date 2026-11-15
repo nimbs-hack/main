@@ -5,6 +5,8 @@ import { type Astronaut, type Catalog, type Planned, PlannerError, fetchCatalog,
 import { Mark, StageIcon } from './components/icons'
 import { MissionMenu } from './components/MissionMenu'
 import { NewMission } from './components/NewMission'
+import { Tutorial, tutorialSeen } from './components/Tutorial'
+import type { RouteEnds } from './steps/SitesPage'
 import { CrewStep } from './steps/CrewStep'
 import { HomeStep } from './steps/HomeStep'
 import { PhasesStep } from './steps/PhasesStep'
@@ -225,6 +227,10 @@ function Editor({ catalog, planned: opening, library: kept, fileId: openingId }:
   const [library, setLibrary] = useState(kept)
   const [fileId, setFileId] = useState(openingId)
   const [creating, setCreating] = useState(false)
+  // The guided tour starts by itself once, on the first visit.
+  const [touring, setTouring] = useState(() => !tutorialSeen())
+  // Whether the EVA route on the map has its two ends, for the tour.
+  const [routeEnds, setRouteEnds] = useState<RouteEnds>({ start: false, target: false })
   useEffect(() => void store('library', library), [library])
   useEffect(() => void store('current', fileId), [fileId])
   // The viewer's mission is in the list now, so the next start opens it from there.
@@ -534,6 +540,13 @@ function Editor({ catalog, planned: opening, library: kept, fileId: openingId }:
             </button>
           </div>
         )}
+        <button
+          type="button"
+          className={`topbar__action tutorial-button${fileId === null ? ' tutorial-button--end' : ''}`}
+          onClick={() => setTouring(true)}
+        >
+          Tutorial
+        </button>
         <input
           ref={fileInput}
           type="file"
@@ -604,6 +617,19 @@ function Editor({ catalog, planned: opening, library: kept, fileId: openingId }:
             onNew={() => setCreating(true)}
           />,
         )}
+      {touring && (
+        <Tutorial
+          progress={{
+            fileId,
+            draft,
+            stage: step,
+            creating,
+            routeStart: routeEnds.start,
+            routeTarget: routeEnds.target,
+          }}
+          onEnd={() => setTouring(false)}
+        />
+      )}
       {creating && (
         <NewMission
           catalog={catalog}
@@ -733,6 +759,7 @@ function Editor({ catalog, planned: opening, library: kept, fileId: openingId }:
               onAddTask={(stop) => commit((d) => edits.addTask(d, stop))}
               onUpdateTask={(i, patch, field) => commit((d) => edits.updateTask(d, i, patch), `task ${i} ${field}`)}
               onRemoveTask={(i) => commit((d) => edits.removeTask(d, i))}
+              onRoute={setRouteEnds}
             />
           </Suspense>
         </KeepAlive>

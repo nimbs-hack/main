@@ -21,7 +21,7 @@ import {
   Viewer,
 } from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
-import { LOCAL_MAX_ZOOM, MAX_NATIVE_ZOOM, localTilePath, remoteTileUrl } from '../data/basemap'
+import { LOCAL_MAX_ZOOM, MAX_NATIVE_ZOOM, localTilePath, proxyTileUrl } from '../data/basemap'
 import { SITES } from '../data/sites'
 import { DATUM_OFFSET, MARS_SPHERE, createTerrain } from '../data/terrain'
 import { FAST_VIEWER_OPTIONS, tuneViewer } from '../data/performance'
@@ -56,7 +56,6 @@ import { sampleRaster } from '../data/raster-sample'
 import { sampleElevations, sampleSurface } from '../data/terrain-sample'
 import { loadRouteField } from '../data/route-field'
 import { GROUND_RADIUS, sampleGround } from '../data/ground'
-import SciencePanel from './SciencePanel'
 import RouteProfile from './RouteProfile'
 import PointReadout from './PointReadout'
 import SuitView, { PLAY_TICK_MS } from './SuitView'
@@ -264,7 +263,7 @@ function flyToSite(viewer, site) {
 function createViewer(container, ctxOptions) {
   const terrain = createTerrain()
   const imagery = new UrlTemplateImageryProvider({
-    url: remoteTileUrl('{z}', '{y}', '{x}'),
+    url: proxyTileUrl('{z}', '{y}', '{x}'),
     tilingScheme: new GeographicTilingScheme({ ellipsoid: MARS }),
     maximumLevel: MAX_NATIVE_ZOOM,
     credit: 'Viking MDIM 2.1 color mosaic: NASA / JPL-Caltech / USGS',
@@ -507,16 +506,16 @@ function followWalker(viewer, point, heading, playing, elevation) {
  * where the first is the start, the last the target and the rest stops. A
  * mission without a plan visits its sites in list order. Add EVA to mission records the walk as a task at
  * the target site. `mission.flag` puts a caution dot on the Sites plan tab.
- * `missionPanel` renders the mission's sites and tasks as a tab of the plan
+ * `missionPanel` renders the mission's sites as a tab of the plan
  * panel and gets { placing, onPlacing } to drive the map from it. While
  * placing is 'site' every click adds a site, until Esc or onPlacing(null).
  * `missionPlan` is the Plan tab, where `mission.route` is edited.
  */
-export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onScienceSource, onViewer, mission = null, missionPanel = null, missionPlan = null }) {
+export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onScienceSource, onViewer, onRoute, mission = null, missionPanel = null, missionPlan = null }) {
   const container = useRef(null)
   const [viewer, setViewer] = useState(null)
   const labels = useRef(null)
-  const [relief, setRelief] = useState(RELIEF_STEPS[0])
+  const [relief, setRelief] = useState(RELIEF_STEPS[1])
   // False until the first tiles are on screen. Until then the map is black.
   const [planetShown, setPlanetShown] = useState(false)
   const [imagerySource, setImagerySource] = useState('v01')
@@ -530,7 +529,6 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   const [routeHover, setRouteHover] = useState(null)
   // Tooltip for the suggested route line under the pointer.
   const [lineTip, setLineTip] = useState(null)
-  const [layersOpen, setLayersOpen] = useState(false)
   // Station reports by id: a report, 'error', or missing while loading.
   const [weather, setWeather] = useState({})
   const [stationElevation, setStationElevation] = useState({})
@@ -849,6 +847,10 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   useEffect(() => {
     onScienceSource?.([...new Set(activeRasters.map((layer) => layer.credit))].join(' · '))
   }, [activeRasters, onScienceSource])
+
+  useEffect(() => {
+    onRoute?.({ start: plan.start !== null, target: plan.target !== null })
+  }, [onRoute, plan.start, plan.target])
 
   useEffect(() => {
     saveEva(mission?.id, { plan, limits })
@@ -1457,7 +1459,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
               type="button"
               aria-label="Global view"
               data-tip="Whole planet"
-              onClick={() => (site ? onSite(site.id) : viewer && flyHome(viewer))}
+              onClick={() => { onSite(null); if (viewer) flyHome(viewer) }}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <circle cx="12" cy="12" r="8" />
@@ -1529,22 +1531,8 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
             layers={SCIENCE_RASTERS}
             overlays={overlays}
             onToggle={(id) => setOverlays((current) => ({ ...current, [id]: { ...current[id], on: !current[id].on } }))}
-            onMore={() => setLayersOpen((open) => !open)}
-            moreOpen={layersOpen}
-          />
-
-          <SciencePanel
-            open={layersOpen}
-            onOpen={setLayersOpen}
-            layers={SCIENCE_LAYERS}
-            overlays={overlays}
             statuses={statuses}
-            onToggle={(id) => setOverlays((current) => ({ ...current, [id]: { ...current[id], on: !current[id].on } }))}
-            onOpacity={(id, opacity) => setOverlays((current) => ({ ...current, [id]: { ...current[id], opacity } }))}
-            onAll={(on) => setOverlays((current) => Object.fromEntries(Object.entries(current).map(([id, state]) => [id, { ...state, on }])))}
             onRetry={(id) => setAttempts((current) => ({ ...current, [id]: (current[id] ?? 0) + 1 }))}
-            siteId={site?.id}
-            onSite={(id) => { if (id !== site?.id) onSite(id) }}
           />
 
           {probe && !suit && (

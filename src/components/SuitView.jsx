@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { guidance, slopeLevel, SLOPE_LIMIT } from '../data/route-profile'
 import { formatElevation } from '../format'
-import { formatMeasurement } from './SciencePanel'
+import { formatMeasurement } from '../data/science-format'
 import { formatDistance, formatSlope } from './RouteProfile'
 import './suit-view.css'
 

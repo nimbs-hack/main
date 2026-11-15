@@ -28,6 +28,7 @@ func handler(cacheDir, staticDir string, client *http.Client) (http.Handler, fun
 	// upstream servers by itself.
 	ahead := tiles.NewReadAhead(4, 512)
 	flushCTX := tiles.RegisterCTX(mux, filepath.Join(cacheDir, "ctx-v01"), client, ahead)
+	flushViking := tiles.RegisterViking(mux, filepath.Join(cacheDir, "viking-v1"), client, ahead)
 	flushTerrain := tiles.RegisterTerrain(mux, filepath.Join(cacheDir, "mars-v14-v2"), client, ahead)
 	flushScience := tiles.RegisterScience(mux, filepath.Join(cacheDir, "science-v1"), client)
 	flushHiRISE := tiles.RegisterHiRISE(mux, filepath.Join(cacheDir, "hirise-v1"), client)
@@ -69,7 +70,14 @@ func handler(cacheDir, staticDir string, client *http.Client) (http.Handler, fun
 		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
 	})
-	return mux, func() { ahead.Close(); flushCTX(); flushTerrain(); flushScience(); flushHiRISE() }
+	return mux, func() {
+		ahead.Close()
+		flushViking()
+		flushCTX()
+		flushTerrain()
+		flushScience()
+		flushHiRISE()
+	}
 }
 
 func run() error {

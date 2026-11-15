@@ -274,7 +274,7 @@ button:disabled {
   border-color: var(--color-line-strong);
   background: var(--color-surface-raised);
   color: var(--color-text);
-  box-shadow: inset 2px 0 0 var(--color-accent);
+  border-left: 2px solid var(--color-accent);
 }
 /* A dot on a rail icon: something in the tab is near a limit. A triangle:
    over one, so the two differ by shape as well as color. */
@@ -496,12 +496,12 @@ button:disabled {
 }
 
 .site__leg {
-  color: var(--color-text-muted);
+  color: var(--color-text);
   font-size: var(--text-data);
 }
 
 .site__place {
-  color: var(--color-text-dim);
+  color: var(--color-text);
   font-size: var(--text-label);
 }
 
@@ -716,6 +716,7 @@ details[open] > summary .more-button .icon {
 }
 
 .key {
+  flex-wrap: wrap;
   position: absolute;
   z-index: 1;
   bottom: var(--space-8);

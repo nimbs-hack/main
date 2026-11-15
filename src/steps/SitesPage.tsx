@@ -10,6 +10,8 @@ import { loadPhotos, photoKey, type Draft, type Selection } from '../state'
 import { PlanStep } from './PlanStep'
 import { SitesStep } from './SitesStep'
 
+export type RouteEnds = { start: boolean; target: boolean }
+
 // What the map hands over when an assessed EVA is added to the mission.
 interface Eva {
   // Planetocentric latitude and east longitude, -180 to 180.
@@ -31,7 +33,7 @@ interface MapHooks {
 // MarsGlobe is plain JavaScript. These are the props this page relies on.
 const MarsGlobe = UntypedGlobe as unknown as ComponentType<{
   site: (typeof SITES)[number] | null
-  onSite: (id: string) => void
+  onSite: (id: string | null) => void
   onStatus: (status: string) => void
   onImagerySource: (source: string) => void
   onScienceSource: (credit: string) => void
@@ -53,6 +55,7 @@ const MarsGlobe = UntypedGlobe as unknown as ComponentType<{
   }
   missionPanel: (hooks: MapHooks) => ReactNode
   missionPlan: ReactNode
+  onRoute?: (ends: RouteEnds) => void
 }>
 
 // Tasks are stored in half hours, from 0.5 to 127.5.
@@ -66,8 +69,8 @@ function evaNote({ verdict, distance, maxSlope }: Eva): string {
 }
 
 // The sites stage: the map with the plan panel on its left. Its Sites tab
-// holds the mission's places and their tasks, and its Plan tab the order the
-// EVA visits them in, next to the EVA route settings. The route runs through
+// holds the mission's places, and its Plan tab their visiting order and
+// tasks, next to the EVA route settings. The route runs through
 // the plan's stops. An assessed EVA becomes a task at its target site, so its
 // hours count against the phase.
 export function SitesPage({
@@ -90,6 +93,7 @@ export function SitesPage({
   onAddTask,
   onUpdateTask,
   onRemoveTask,
+  onRoute,
 }: {
   missionId: string
   catalog: Catalog
@@ -111,6 +115,8 @@ export function SitesPage({
   onAddTask: (stop: number) => void
   onUpdateTask: (index: number, patch: Partial<Task>, field: string) => void
   onRemoveTask: (index: number) => void
+  // Whether the EVA route has a start and a target, each time that changes.
+  onRoute?: (ends: RouteEnds) => void
 }) {
   // The landing site in view, from the map's own list of NASA missions.
   const [siteId, setSiteId] = useState<string | null>(null)
@@ -151,8 +157,8 @@ export function SitesPage({
     <>
       <MarsGlobe
         site={site}
-        // Picking the selected site again returns to the global view.
-        onSite={(id: string) => setSiteId((current) => (current === id ? null : id))}
+        onSite={setSiteId}
+        onRoute={onRoute}
         onStatus={setStatus}
         onImagerySource={setImagerySource}
         onScienceSource={setScienceCredit}

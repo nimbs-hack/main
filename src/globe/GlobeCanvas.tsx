@@ -24,7 +24,7 @@ import type { Site } from '../api'
 import NavControls from '../components/NavControls.jsx'
 import MapLabels, { type MapLabel } from '../components/MapLabels'
 import { pickGround, setupControls } from '../components/camera.js'
-import { LOCAL_MAX_ZOOM, MAX_NATIVE_ZOOM, localTilePath, remoteTileUrl } from '../data/basemap.js'
+import { LOCAL_MAX_ZOOM, MAX_NATIVE_ZOOM, localTilePath, proxyTileUrl } from '../data/basemap.js'
 import { addCtxLayer } from '../data/ctx-layer.ts'
 import { DATUM_OFFSET, MARS_SPHERE, createTerrain } from '../data/terrain.js'
 import { FAST_VIEWER_OPTIONS, tuneViewer } from '../data/performance.js'
@@ -94,7 +94,7 @@ function aimLight(viewer: Viewer): void {
 function createViewer(container: HTMLElement, ctx: Parameters<typeof addCtxLayer>[1]) {
   const terrain = createTerrain()
   const imagery = new UrlTemplateImageryProvider({
-    url: remoteTileUrl('{z}', '{y}', '{x}'),
+    url: proxyTileUrl('{z}', '{y}', '{x}'),
     tilingScheme: new GeographicTilingScheme({ ellipsoid: MARS_SPHERE }),
     maximumLevel: MAX_NATIVE_ZOOM,
   })
@@ -209,7 +209,7 @@ export function GlobeCanvas({
 }) {
   const container = useRef<HTMLDivElement>(null)
   const [viewer, setViewer] = useState<Viewer | null>(null)
-  const [relief, setRelief] = useState(RELIEF_STEPS[0]!)
+  const [relief, setRelief] = useState(RELIEF_STEPS[1]!)
   // False until the first tiles are on screen. Until then the globe is black.
   const [planetShown, setPlanetShown] = useState(false)
 

@@ -209,6 +209,7 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
     const projected = new Cartesian2()
     let heightsDirty = true
     let lastHeights = -Infinity
+    let exaggeration = viewer.scene.verticalExaggeration
     const dirty = () => { heightsDirty = true; viewer.scene.requestRender() }
     const removeTiles = viewer.scene.globe.tileLoadProgressEvent.addEventListener(dirty)
     const removeMove = viewer.camera.moveEnd.addEventListener(dirty)
@@ -228,7 +229,8 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
         if (box.width && box.height) obstacles.push({ x: box.left - stageBox.left, y: box.top - stageBox.top, width: box.width, height: box.height })
       }
       occluder.cameraPosition = viewer.camera.positionWC
-      const refresh = heightsDirty || now - lastHeights > 1000
+      const refresh = heightsDirty || now - lastHeights > 1000 || exaggeration !== viewer.scene.verticalExaggeration
+      exaggeration = viewer.scene.verticalExaggeration
       if (refresh) { lastHeights = now; heightsDirty = false }
       const anchors: LabelAnchor[] = []
       for (const row of rows) {
@@ -238,9 +240,10 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
           row.location.latitude = lat * Math.PI / 180
           row.location.longitude = lon * Math.PI / 180
         }
+        // getHeight already includes the scene's elevation exaggeration,
+        // and the datum is the exaggeration's fixed point.
         if (refresh || row.item.positionAt) row.terrainHeight = viewer.scene.globe.getHeight(row.location) ?? DATUM_OFFSET
-        const relative = viewer.scene.verticalExaggerationRelativeHeight
-        row.location.height = relative + (row.terrainHeight - relative) * viewer.scene.verticalExaggeration
+        row.location.height = row.terrainHeight
         viewer.scene.ellipsoid.cartographicToCartesian(row.location, row.position)
         const at = occluder.isPointVisible(row.position) && viewer.scene.cartesianToCanvasCoordinates(row.position, projected)
         if (!at || at.x < 0 || at.y < 0 || at.x > width || at.y > height) continue

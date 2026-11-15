@@ -117,7 +117,7 @@ export function createMap(root: HTMLElement, events: MapEvents) {
   let selected = -1
   let pins: Array<{ x: number; y: number; site: number }> = []
   const icons = new Map<string, HTMLImageElement>()
-  const crewLayer = h('div', { class: 'crew-pins', 'aria-label': 'Crew positions' })
+  const crewLayer = h('div', { class: 'crew-pins', 'aria-label': 'Simulated crew positions' })
   let crew: CrewPosition[] = []
   let crewSignature = ''
   let crewQueued = 0
@@ -702,7 +702,8 @@ export function createMap(root: HTMLElement, events: MapEvents) {
     { class: 'key__item', title: `Heights are drawn ${RELIEF} times taller than they are, so slopes look steeper. Shading and relief do not show which slopes are safe.` },
     `Heights ×${RELIEF}`,
   )
-  const key = h('p', { class: 'key', hidden: true }, reliefKey, orderKey, blockedKey)
+  const simulationKey = h('span', { class: 'key__item', hidden: true }, 'Crew positions simulated')
+  const key = h('p', { class: 'key', hidden: true }, reliefKey, orderKey, blockedKey, simulationKey)
   // The page shows these controls only while its sidebar is open.
   const rail = h(
     'div',
@@ -823,6 +824,7 @@ export function createMap(root: HTMLElement, events: MapEvents) {
     lookAt,
     // Moving crew only repositions DOM markers, not the terrain renderer.
     setCrew(next: CrewPosition[], paused: boolean) {
+      simulationKey.hidden = next.length === 0
       crew = next
       crewPaused = paused
       const signature = JSON.stringify(next.map((p) => [p.member, p.name, p.self, paused]))

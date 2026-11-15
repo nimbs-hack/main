@@ -98,7 +98,13 @@ type tile struct{ z, col, row int }
 // Columns wrap around the planet. Rows stop at the poles. Children are left
 // out past maxZ, and nothing is listed below readAheadFrom.
 func around(t tile, maxZ int) []tile {
-	if t.z < readAheadFrom {
+	return aroundFrom(t, readAheadFrom, maxZ)
+}
+
+// aroundFrom is around with its own first level, for a coarse layer whose
+// deepest level is below readAheadFrom.
+func aroundFrom(t tile, minZ, maxZ int) []tile {
+	if t.z < minZ {
 		return nil
 	}
 	cols, rows := 2<<t.z, 1<<t.z

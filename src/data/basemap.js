@@ -10,6 +10,11 @@ export const MAX_NATIVE_ZOOM = 7
 // with the app in public/tiles. `bun run tiles` downloads them.
 export const LOCAL_MAX_ZOOM = 3
 
+// Straight from Trek. Only `bun run tiles` uses it.
 export const remoteTileUrl = (z, y, x) => `${TREK}/${z}/${y}/${x}.jpg`
+
+// The app asks the Go server, which keeps every tile it fetches on disk and
+// fetches the tiles around each one ahead of time (apps/api/internal/tiles/viking.go).
+export const proxyTileUrl = (z, y, x) => `/api/imagery/viking/${z}/${y}/${x}.jpg`
 
 export const localTilePath = (z, y, x) => `tiles/viking/${z}/${y}/${x}.jpg`

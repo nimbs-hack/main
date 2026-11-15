@@ -34,7 +34,7 @@ interface Doc {
 const STORE = 'nimbs.viewer.file'
 const SECONDS_PER_DAY = 86400
 const TABS = [
-  ['live', 'Live view'],
+  ['live', 'Simulation'],
   ['overview', 'Mission'],
   ['sites', 'Sites'],
   ['crew', 'Crew'],
@@ -587,7 +587,7 @@ function briefingTab({ planned }: Doc): Child {
   return h('p', { class: 'briefing-text' }, planned.mission.briefing || 'No briefing in this file.')
 }
 
-// Suit sensors, as the Live view shows them.
+// Suit sensors shown in the simulation.
 
 const levelClass = (level?: Level) => (level === 'hazard' ? 'is-hazard' : level === 'caution' ? 'is-caution' : '')
 const worstOf = (all: SuitReading[]): Level => {
@@ -678,6 +678,7 @@ function personSummary(r: SuitReading): Child[] {
 function liveTab({ planned: { mission } }: Doc): Child {
   if (!mission.crew.length) return h('p', { class: 'note' }, 'This mission has no crew.')
   return [
+    h('p', { class: 'note' }, 'Crew positions and suit readings are simulated.'),
     h(
       'div',
       { class: 'live-actions' },
@@ -694,7 +695,7 @@ function liveTab({ planned: { mission } }: Doc): Child {
             renderPanel()
           },
         }),
-        'Show positions',
+        'Show simulated positions',
       ),
       h(
         'button',
