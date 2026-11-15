@@ -1,3 +1,5 @@
+import { deferTerrainShaders } from './terrain-shaders'
+
 // What makes the globe cheap to draw. Both viewers use it: the Sites map and
 // the Review globe. The target is integrated graphics, where the cost is
 // filling pixels and uploading tiles, not triangle count.
@@ -39,6 +41,7 @@ export const FAST_VIEWER_OPTIONS = {
 // Settings that need the scene. Returns a function that undoes the listeners.
 export function tuneViewer(viewer) {
   const { scene } = viewer
+  const stopShaders = deferTerrainShaders(scene)
   // Created by default and drawn every frame, though no sky is shown.
   if (scene.sun) scene.sun.show = false
   if (scene.moon) scene.moon.show = false
@@ -83,6 +86,7 @@ export function tuneViewer(viewer) {
     }, REST_MS)
   })
   return () => {
+    stopShaders()
     clearTimeout(rest)
     removeStart()
     removeChanged()

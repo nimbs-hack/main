@@ -32,5 +32,8 @@
     "typescript": "^5",
     "vite": "^8.3.8",
     "vite-plugin-static-copy": "^4.1.1"
+  },
+  "patchedDependencies": {
+    "@cesium/engine@26.5.0": "patches/@cesium%2Fengine@26.5.0.patch"
   }
 }
