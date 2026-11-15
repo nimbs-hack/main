@@ -29,4 +29,8 @@ export default defineConfig({
   define: {
     CESIUM_BASE_URL: JSON.stringify(`/${CESIUM_BASE}`),
   },
+  // Vite would copy every browser error into this terminal. An error thrown
+  // on each mouse move then floods it until the dev server stops answering,
+  // so errors stay in the browser console.
+  server: { forwardConsole: false },
 })

@@ -179,6 +179,8 @@ export function EvaTime({ missionId, sites, tasks, selectedSite }: {
   const stale = age !== null && age > STALE_DAYS
   const half = 44_388_000 // half a sol
   const isPlanned = chosen !== null && Number.isFinite(plannedAt) && chosen.start === plannedAt
+  // With no start typed in, the Sites page starts the EVA at the best window.
+  const isCurrent = planned ? isPlanned : chosen !== null && chosen === search.best
 
   const row = (key: string, label: string, w: EvaWindow | null, at: number, best: boolean) => (
     <li key={key}>
@@ -204,6 +206,7 @@ export function EvaTime({ missionId, sites, tasks, selectedSite }: {
     <section className="evatime" aria-label="Best EVA start">
       <h2 className="planner__title">Best EVA start</h2>
       <p className="note">{eva.text}</p>
+      {!planned && search.best && <p className="note">No start is typed in on the Sites page, so the EVA starts at the best window below.</p>}
 
       {chosen ? (
         <div className="review__grid">
@@ -295,13 +298,13 @@ export function EvaTime({ missionId, sites, tasks, selectedSite }: {
 
       {chosen && (
         <Button
-          disabled={isPlanned}
+          disabled={isCurrent}
           onClick={() => {
             const iso = new Date(chosen.start).toISOString().slice(0, 19) + 'Z'
             setEvaStart(missionId, iso)
             reread((n) => n + 1)
           }}
-          title={isPlanned ? 'This is the EVA start on the Sites page' : 'Sets the Schedule start on the Sites page'}
+          title={isCurrent ? 'This is the EVA start on the Sites page' : 'Sets the Schedule start on the Sites page'}
         >
           Use as EVA start
         </Button>

@@ -125,17 +125,22 @@ function limitTilt(scene) {
   camera.lookAtTransform(Matrix4.IDENTITY)
 }
 
+// A picked point some GPUs fill with NaN, from a depth buffer they read
+// back wrong. Anything that converts it to degrees then throws.
+const usable = (point) => point && Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z)
+
 /** The ground under a screen position, or undefined over empty space. */
 export function pickGround(viewer, position) {
   const { scene, camera } = viewer
   const ray = camera.getPickRay(position)
   const hit = ray && scene.globe.pick(ray, scene)
-  if (hit) return hit
+  if (usable(hit)) return hit
   if (scene.pickPositionSupported) {
     const depth = scene.pickPosition(position)
-    if (depth) return depth
+    if (usable(depth)) return depth
   }
-  return camera.pickEllipsoid(position, scene.ellipsoid)
+  const sphere = camera.pickEllipsoid(position, scene.ellipsoid)
+  return usable(sphere) ? sphere : undefined
 }
 
 function screenCenter(viewer) {

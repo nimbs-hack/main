@@ -93,8 +93,14 @@ describe('EVA windows', () => {
     expect(w.reasons[0]!.text).toBe('Sun is down during the EVA')
   })
 
-  test('finds nothing when the EVA outlasts the day', () => {
-    const { best } = findWindows({ point: GALE, duration: 13 * 3600, now: NOW })
-    expect(best).toBeNull()
+  test('starts an EVA that outlasts the day at sunrise, and calls it no-go', () => {
+    const { best, sols } = findWindows({ point: GALE, duration: 13 * 3600, now: NOW })
+    expect(best).not.toBeNull()
+    expect(best!.verdict).toBe('no-go')
+    expect(best!.reasons[0]!.text).toBe('Sun is down during the EVA')
+    // The start is the first step after a sunrise, the most light it can get.
+    const sol = sols.find((s) => s.best === best)!
+    expect(best!.start - sol.sunrise!).toBeLessThan(600_000)
+    expect(best!.start).toBeGreaterThan(NOW)
   })
 })

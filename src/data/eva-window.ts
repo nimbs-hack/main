@@ -215,7 +215,10 @@ export function findWindows(input: WindowInput & { sols?: number }): WindowSearc
     if (plan.sunrise === null || plan.sunset === null) continue
     // Starts from sunrise, or now if later, to the last that still ends an hour before sunset.
     const from = Math.max(first, Math.ceil(plan.sunrise / STEP) * STEP)
-    const to = plan.sunset - duration - DAYLIGHT_RESERVE
+    if (from >= plan.sunset) continue
+    // An EVA longer than the daylight still gets a start: at sunrise, the
+    // most light it can have. Its verdict says the Sun sets before the end.
+    const to = Math.max(from, plan.sunset - duration - DAYLIGHT_RESERVE)
     for (let start = from; start <= to; start += STEP) {
       const w = windowAt(ctx, start)
       const current = plan.best
@@ -225,10 +228,13 @@ export function findWindows(input: WindowInput & { sols?: number }): WindowSearc
   }
 
   // Fewest problems first, then the warmest, then the soonest among near-equals.
+  // All no-go: the most daylight.
   const found = sols.map((s) => s.best).filter((w): w is EvaWindow => w !== null)
   if (!found.length) return { sols, best: null }
   const rank = Math.min(...found.map((w) => RANK[w.verdict]))
   const top = found.filter((w) => RANK[w.verdict] === rank)
+  // When none can be done safely, the one that runs least past sunset.
+  if (rank === RANK['no-go']) return { sols, best: top.reduce((a, b) => (b.daylightLeft > a.daylightLeft ? b : a)) }
   const warmest = Math.max(...top.map((w) => w.warmth))
   return { sols, best: top.find((w) => w.warmth >= warmest - TIE) ?? null }
 }

@@ -44,6 +44,7 @@ import { formatDistance } from './RouteProfile'
 import { STATIONS, fetchWeather, formatPressure, formatTemp, nearestStation, pressureAt } from '../data/weather'
 import { COARSE_DETAIL, coverage, detailAt, detailLabel, detailMeters, levelAt, levelForSpacing, outline, slopeBaseline } from '../data/terrain-detail'
 import { checkSpaceWeather, fetchSpaceWeather } from '../data/space-weather'
+import { findWindows } from '../data/eva-window'
 import { TERRAIN_API_PATH } from '../data/terrain-source'
 import { addToolOverlay } from './tool-overlay'
 import { addMarker as addMapMarker, loadMarkers, removeMarker, saveMarkers, updateMarker } from '../data/markers'
@@ -89,6 +90,17 @@ function joinFields(legs) {
     elevation: legs.flatMap((leg) => leg.field.elevation),
     thermal: legs.flatMap((leg) => leg.field.thermal),
     slope: legs.flatMap((leg) => leg.field.slope),
+  }
+}
+
+// The entity under a screen position. Cesium's pick throws while the camera
+// is degenerate, mid-flight or with the canvas at zero size. Hovering runs
+// it on every move, so a throw there would repeat on every move too.
+function pickEntity(viewer, position) {
+  try {
+    return viewer.scene.pick(position)?.id
+  } catch {
+    return undefined
   }
 }
 
@@ -706,7 +718,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       const free = !placingRef.current && !toolRef.current
       const line = !overHandle && free ? planOverlay.current.alternativeAt(endPosition) : null
       onLineRef.current(line ? { id: line, x: endPosition.x, y: endPosition.y } : null)
-      const under = overHandle || line ? null : viewer.scene.pick(endPosition)?.id
+      const under = overHandle || line ? null : pickEntity(viewer, endPosition)
       const id = under?.siteId ?? null
       const overMission = free && under?.missionIndex !== undefined
       setCursor(overHandle ? 'grab' : id || line || overMission ? 'pointer' : placingRef.current || toolRef.current ? 'crosshair' : '')
@@ -922,10 +934,22 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     () => (profile.status === 'ready' && routePath ? assess(profile.samples, routePath, limits, doseRate) : null),
     [profile, routePath, limits, doseRate],
   )
-  // The EVA window: from the planned start, or now, for the route's time,
-  // or the whole budget before a route exists.
-  const evaStart = plan.when ? Date.parse(plan.when) : clock
-  const evaEnd = evaStart + (routeAssessment?.total ?? limits.eva) * 1000
+  // The EVA window: from the planned start for the route's time, or the
+  // whole budget before a route exists. With no start typed in, the start is
+  // the best window from now on (src/data/eva-window): the Sun up until an
+  // hour past the end, the warmest air from the nearest station's latest
+  // reading, and no CME forecast to arrive during it. Now, when no sol in
+  // the search has one.
+  const evaDuration = routeAssessment?.total ?? limits.eva
+  const autoWindow = useMemo(() => {
+    if (plan.when || !plan.start) return null
+    const near = nearestStation(plan.start, STATION_POSITIONS)
+    const report = near && weather[near.id]
+    const reading = report && report !== 'error' ? report.latest : null
+    return findWindows({ point: plan.start, duration: evaDuration, now: clock, reading, space: spaceWeather.data }).best
+  }, [plan.when, plan.start, evaDuration, clock, weather, spaceWeather.data])
+  const evaStart = plan.when ? Date.parse(plan.when) : (autoWindow?.start ?? clock)
+  const evaEnd = evaStart + evaDuration * 1000
   const spaceCheck = useMemo(
     () => (spaceWeather.status === 'loading' ? null : checkSpaceWeather(spaceWeather.data, evaStart, evaEnd, clock)),
     [spaceWeather, evaStart, evaEnd, clock],
@@ -1299,9 +1323,9 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   useEffect(() => {
     if (!routePath) saveHud(mission?.id, 'none', null)
     else if (assessment && profile.samples && marks) {
-      saveHud(mission?.id, 'ready', hudRoute({ plan, limits, samples: profile.samples, assessment, marks, coarseDetail: COARSE_DETAIL, peakLimitW: SUIT.limitW }))
+      saveHud(mission?.id, 'ready', hudRoute({ plan: { ...plan, when: plan.when ?? new Date(evaStart).toISOString() }, limits, samples: profile.samples, assessment, marks, coarseDetail: COARSE_DETAIL, peakLimitW: SUIT.limitW }))
     } else saveHud(mission?.id, profile.status === 'error' ? 'failed' : 'updating', null)
-  }, [mission?.id, routePath, plan, limits, profile, assessment, marksKey])
+  }, [mission?.id, routePath, plan, limits, profile, assessment, marksKey, evaStart])
   const mapLabels = useMemo(() => [
     ...crewLabels,
     ...(missionSites ?? []).flatMap((entry, index) => Number.isFinite(entry.lat + entry.lon) ? [{
@@ -1335,6 +1359,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
           weather={planWeather && { ...planWeather, atHigh: highWeather?.estimate ?? null }}
           space={{ status: spaceWeather.status, data: spaceWeather.data, check: spaceCheck, start: evaStart, end: evaEnd, now: clock }}
           when={plan.when ?? null}
+          autoStart={plan.when ? null : { window: autoWindow, searched: Boolean(plan.start) }}
           onWhen={(when) => setPlan((current) => ({ ...current, when }))}
           terrainDetail={terrainDetail}
           onPlacing={setPlacing}

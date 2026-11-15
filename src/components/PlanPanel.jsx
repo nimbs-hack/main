@@ -6,6 +6,7 @@ import { formatDistance, formatSlope } from './RouteProfile'
 import { ageDays, celsius, formatAge } from '../data/weather'
 import { CME_MARGIN, formatFrom, formatWhen, strength } from '../data/space-weather'
 import { COARSE_DETAIL, detailLabel } from '../data/terrain-detail'
+import { formatSolarTime } from '../data/mars-time'
 import './plan-panel.css'
 
 /*
@@ -30,7 +31,10 @@ import './plan-panel.css'
  *               estimates in pascals scaled to the start and highest point
  *   space       { status, data, check, start, end, now }: CME forecasts at
  *               Mars checked against the EVA window, times in ms
- *   when        planned EVA start, UTC ISO string, or null for now
+ *   when        EVA start typed in, UTC ISO string, or null for automatic
+ *   autoStart   with no start typed in: { window, searched }, the best
+ *               window found from now on (src/data/eva-window), null when
+ *               no sol has one; searched is false before there is a start
  *   terrainDetail { finest, coarsest, coarse } in meters under the route
  *   onWhen(iso | null)
  *   onPlacing(mode), onRemoveWaypoint(index), onLimits(limits),
@@ -67,16 +71,23 @@ function Icon({ name }) {
 }
 
 // Editable limits. Display units convert to and from the SI values in limits.
+// The ranges only keep out values the model cannot use, such as no time or
+// no speed. They are not mission rules: the presets and the verdict say what
+// is advisable. `why` explains a bound that comes from a standard.
 const FIELDS = {
-  slope: { unit: '°', step: 1, min: 5, max: 35, toView: (v) => v, fromView: (v) => v },
-  pace: { unit: 'km/h', step: 0.1, min: 1, max: 6, toView: (v) => +(v * 3.6).toFixed(1), fromView: (v) => v / 3.6 },
-  eva: { unit: 'h', step: 0.5, min: 0.5, max: 10, toView: (v) => +(v / 3600).toFixed(2), fromView: (v) => v * 3600 },
-  work: { unit: 'min', step: 5, min: 0, max: 240, toView: (v) => Math.round(v / 60), fromView: (v) => v * 60 },
-  range: { unit: 'km', step: 0.25, min: 0.25, max: WALK_BACK_REFERENCE / 1000, toView: (v) => +(v / 1000).toFixed(2), fromView: (v) => v * 1000 },
-  climb: { unit: 'm/h', step: 10, min: 50, max: 3000, toView: (v) => Math.round(v * 3600), fromView: (v) => v / 3600 },
-  descent: { unit: 'm/h', step: 10, min: 50, max: 3000, toView: (v) => Math.round(v * 3600), fromView: (v) => v / 3600 },
-  rocks: { unit: '%', step: 1, min: 10, max: 100, toView: (v) => Math.round(v * 100), fromView: (v) => v / 100 },
-  ripples: { unit: '%', step: 1, min: 10, max: 100, toView: (v) => Math.round(v * 100), fromView: (v) => v / 100 },
+  slope: { unit: '°', step: 1, min: 1, max: 60, toView: (v) => v, fromView: (v) => v },
+  pace: { unit: 'km/h', step: 0.1, min: 0.1, max: 20, toView: (v) => +(v * 3.6).toFixed(1), fromView: (v) => v / 3.6 },
+  eva: { unit: 'h', step: 0.5, min: 0.5, max: 24, toView: (v) => +(v / 3600).toFixed(2), fromView: (v) => v * 3600 },
+  work: { unit: 'min', step: 5, min: 0, max: 1440, toView: (v) => Math.round(v / 60), fromView: (v) => v * 60 },
+  range: {
+    unit: 'km', step: 0.25, min: 0.25, max: WALK_BACK_REFERENCE / 1000, toView: (v) => +(v / 1000).toFixed(2), fromView: (v) => v * 1000,
+    why: 'the walk-back NASA-STD-3001 sizes suit water for [V2 11030]',
+  },
+  climb: { unit: 'm/h', step: 10, min: 10, max: 10000, toView: (v) => Math.round(v * 3600), fromView: (v) => v / 3600 },
+  descent: { unit: 'm/h', step: 10, min: 10, max: 10000, toView: (v) => Math.round(v * 3600), fromView: (v) => v / 3600 },
+  // Speed on rough ground never drops under 5% of the flat speed (groundPace).
+  rocks: { unit: '%', step: 1, min: 5, max: 100, toView: (v) => Math.round(v * 100), fromView: (v) => v / 100 },
+  ripples: { unit: '%', step: 1, min: 5, max: 100, toView: (v) => Math.round(v * 100), fromView: (v) => v / 100 },
 }
 
 // Same value within float noise from unit conversion.
@@ -91,12 +102,17 @@ function NumberField({ field, value, base, presetName, onChange, label }) {
   const [draft, setDraft] = useState(null)
   const shown = draft ?? String(spec.toView(value))
   const modified = base !== undefined && !same(value, base)
+  // Typed text the limits cannot take stays in the box, unapplied, with the
+  // range under it. Nothing is changed behind the user's back.
+  const typed = draft === null || draft === '' ? null : Number(draft)
+  const outside = typed !== null && !(typed >= spec.min && typed <= spec.max)
   const commit = (text) => {
     const n = Number(text)
-    if (text !== '' && Number.isFinite(n)) onChange(spec.fromView(Math.min(spec.max, Math.max(spec.min, n))))
+    if (text !== '' && n >= spec.min && n <= spec.max) onChange(spec.fromView(n))
   }
   const presetValue = modified ? `${spec.toView(base)} ${spec.unit}` : null
   return (
+    <>
     <label className={`plan__box plan__box--edit${modified ? ' is-modified' : ''}`} title={modified ? `${presetName}: ${presetValue}` : undefined}>
       {modified && (
         <button
@@ -112,6 +128,7 @@ function NumberField({ field, value, base, presetName, onChange, label }) {
         type="number"
         inputMode="decimal"
         aria-label={label}
+        aria-invalid={outside || undefined}
         step={spec.step}
         min={spec.min}
         max={spec.max}
@@ -120,10 +137,16 @@ function NumberField({ field, value, base, presetName, onChange, label }) {
           setDraft(event.target.value)
           commit(event.target.value)
         }}
-        onBlur={() => setDraft(null)}
+        onBlur={() => !outside && setDraft(null)}
       />
       <span className="plan__unit">{spec.unit}</span>
     </label>
+    {outside && (
+      <span className="plan__invalid" role="alert">
+        Not applied. {label} takes {spec.min} to {spec.max} {spec.unit}.{spec.why ? ` ${spec.max} ${spec.unit} is ${spec.why}.` : ''} Still using {spec.toView(value)} {spec.unit}.
+      </span>
+    )}
+    </>
   )
 }
 
@@ -279,7 +302,7 @@ function stopIndex(plan, i) {
 }
 
 export default function PlanPanel({
-  plan, limits, assessment, status, placing, dose, weather, space, when, terrainDetail,
+  plan, limits, assessment, status, placing, dose, weather, space, when, autoStart = null, terrainDetail,
   onWhen, onPlacing, onRemoveWaypoint, onLimits, onRetry, onWalk, onClear, onAddToMission,
   missionSites, missionPlan, missionFlag = null, missionFocus = -1,
 }) {
@@ -374,16 +397,29 @@ export default function PlanPanel({
       { label: 'No image', group: 'Ground in HiRISE', basic: true, hint: 'No HiRISE image was read here, so rocks are unknown, not absent. The mosaics cover the four rover sites.', node: <Value unit="m" level={sum('unchecked') > 0 ? 'caution' : null}>{a ? Math.round(sum('unchecked')) : pending}</Value> },
     ],
     time: [
-      { label: 'EVA start', group: 'Schedule', basic: true, wide: true, hint: 'UTC. Empty means now. Space weather is checked against this window.', node: (
-        <span className="plan__box plan__box--edit plan__box--when">
+      { label: 'EVA start', group: 'Schedule', basic: true, wide: true, hint: 'UTC. Left to itself, the start is the best window from now on: the Sun up until an hour past the end, the warmest air, and no CME forecast during it. Type a time to set your own. Space weather is checked against this window.', node: (
+        <span className={`plan__box plan__box--edit plan__box--when${when ? ' is-modified' : ''}`}>
           <input
             type="datetime-local"
             aria-label="EVA start, UTC"
-            value={when ? when.slice(0, 16) : ''}
+            value={(when ?? (space?.start ? new Date(space.start).toISOString() : '')).slice(0, 16)}
             onChange={(event) => onWhen(event.target.value ? `${event.target.value}:00Z` : null)}
           />
-          {when ? <button type="button" onClick={() => onWhen(null)} title="Start now">Now</button> : <span className="plan__unit">UTC</span>}
+          {when ? <button type="button" onClick={() => onWhen(null)} title="Go back to the best window, worked out from the Sun, temperature and space weather">Best</button> : <span className="plan__unit">UTC</span>}
         </span>
+      ) },
+      { label: 'Start chosen', group: 'Schedule', basic: true, wide: true, hint: 'How the EVA start was set. The Review page shows the best start of each sol and why.', node: (
+        <Value level={when || !autoStart?.searched ? null : !autoStart.window ? 'caution' : { go: null, caution: 'caution', 'no-go': 'hazard' }[autoStart.window.verdict]}>
+          {when
+            ? 'Typed in'
+            : !autoStart?.searched
+              ? 'Now, until there is a start point'
+              : !autoStart.window
+                ? 'Now: no daylight in the next 7 sols'
+                : autoStart.window.verdict === 'go'
+                  ? `Best window, ${formatSolarTime(autoStart.window.startSolar)} local`
+                  : `Best available, ${formatSolarTime(autoStart.window.startSolar)} local. ${autoStart.window.reasons[0]?.text ?? ''}`}
+        </Value>
       ) },
       { label: 'EVA end', group: 'Schedule', basic: true, wide: true, hint: 'Start plus the route time, or the whole budget before there is a route.', node: <Value unit={space ? 'UTC' : undefined}>{space ? formatWhen(new Date(space.end).toISOString()).replace(' UTC', '') : '—'}</Value> },
       { label: 'EVA budget', group: 'Budget', basic: true, node: field('eva', 'EVA budget') },

@@ -447,3 +447,7 @@
 
 /* Leg rows carry distance, slope and a remove button. */
 .plan__row--wide { grid-template-columns: minmax(0, 1fr) 210px; }
+
+/* A typed limit outside its range, left unapplied: the value it still uses. */
+.plan__invalid { grid-column: 1 / -1; color: var(--color-caution); font-size: var(--text-label); }
+.plan__invalid::before { content: "△\00a0"; }
