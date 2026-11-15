@@ -20,7 +20,7 @@
 //   horizon points arrive in meters instead of ellipsoid-scaled coordinates.
 //   Rebuild both from the rendered sphere coordinates, on every tile.
 import { BoundingSphere, Cartesian3, CesiumTerrainProvider, Ellipsoid, EllipsoidalOccluder, OrientedBoundingBox, Terrain } from 'cesium'
-import { TERRAIN_API_PATH } from './terrain-source'
+import { DATUM_OFFSET, TERRAIN_API_PATH } from './terrain-source'
 import { limiter } from './performance'
 
 const RADIUS = 3_396_190
@@ -31,7 +31,7 @@ export const MARS_SPHERE = new Ellipsoid(RADIUS, RADIUS, RADIUS)
 // under it, which is how it could sink into hills.
 Ellipsoid.default = MARS_SPHERE
 
-export const DATUM_OFFSET = 8201
+export { DATUM_OFFSET }
 
 const TERRAIN_URL = `${TERRAIN_API_PATH}/`
 const QUANTIZED_MAX = 32767

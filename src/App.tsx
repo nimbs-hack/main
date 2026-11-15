@@ -2,7 +2,7 @@ import { type ReactNode, Suspense, lazy, useCallback, useEffect, useMemo, useRed
 import type { Viewer } from 'cesium'
 import StatusBar from './components/StatusBar.jsx'
 import { INITIAL_MAP_STATUS, mapStatusReducer, mapStatusState } from './globe/map-status.ts'
-import { type Astronaut, type Catalog, type Planned, PlannerError, fetchCatalog, fileBytes, requestPlan } from './api'
+import { type Astronaut, type Catalog, type Planned, PlannerError, fetchCatalog, fileBytes, plainWords, requestPlan } from './api'
 import { Mark, StageIcon } from './components/icons'
 import { MissionMenu } from './components/MissionMenu'
 import { NewMission } from './components/NewMission'
@@ -76,25 +76,6 @@ function same(a: unknown, b: unknown): boolean {
 
 // Map positions arrive with fifteen decimals. The file keeps six.
 const degrees = (value: number): number => Math.round(value * 1e6) / 1e6
-
-// The planner names fields the way the file format does. On screen they get
-// the words the form uses.
-const FIELD_WORDS: Array<[RegExp, string]> = [
-  [/\bmassKg\b/, 'mass in kg'],
-  [/\bheightCm\b/, 'height in cm'],
-  [/\bevaShare\b/, 'share of EVA hours, as a fraction'],
-  [/\bmarginPercent\b/, 'margin in percent'],
-  [/\bevaHoursPerWeek\b/, 'EVA hours per person-week'],
-  [/\bwaterRecovery\b/, 'water recycled, as a fraction'],
-  [/\boxygenRecovery\b/, 'oxygen recycled, as a fraction'],
-  [/\bhygieneWaterKg\b/, 'hygiene water in kg'],
-  [/\bbasePowerW\b/, 'vehicle base power in W'],
-  [/\bcrewPowerW\b/, 'power per person in W'],
-  [/\blat\b/, 'latitude'],
-  [/\blon\b/, 'longitude'],
-]
-const plainWords = (message: string): string =>
-  FIELD_WORDS.reduce((text, [field, words]) => text.replace(field, words), message)
 
 const count = (n: number, thing: string) => `${n} ${thing}${n === 1 ? '' : 's'}`
 

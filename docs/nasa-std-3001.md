@@ -10,12 +10,12 @@ Status: **meets** means the code does what the requirement asks. **Estimate** me
 | --- | --- | --- | --- |
 | V2 10118 | Red for the highest alert level | Meets | `--color-hazard` is red and means over a limit, NO-GO. The accent moved to magenta. `src/tokens.css` |
 | V2 10119 | Yellow for the second alert level | Meets | `--color-caution` |
-| V2 10045 | Critical meaning never by color alone | Meets | Filled and outline triangles on alert values (end of `src/styles.css`), wider red stretches on the map (`plan-overlay.ts`), hatching in the route profile, triangle rail dot, NO-GO and CAUTION written out |
+| V2 10045 | Critical meaning never by color alone | Meets | Filled and outline triangles on alert values (end of `src/styles.css`, and `src/viewer/viewer.css` for the viewer), wider red stretches on the map (`plan-overlay.ts`), hatching in the route profile, triangle rail dot, NO-GO and CAUTION written out |
 | V2 10049, Table 33 | Characters at least 0.25° high, 0.4° preferred | Meets the minimum | `--text-min` 12px. 0.4° would be 19px, which only the readouts reach |
 | V2 10020 | Mark stale, missing or unavailable data | Meets | Weather and space weather `stale`, unknown terrain is a caution, coarse terrain dashed |
 | V2 10018 | Specific, informative messages | Meets | Every NO-GO and caution names the value and the limit, `src/data/plan.ts` |
 | V2 10008, 10046 | One unit for like items, units with values | Meets | SI in code, unit after every value |
-| V2 10028 | Recover from accidental changes | Meets | Undo, redo, reset to preset |
+| V2 10028 | Recover from accidental changes | Meets | Undo, redo, reset to preset. The viewer has undo, and a way back to a file replaced while it had unsaved edits |
 | V2 10080 | Confirm destructive commands | Meets | Mission delete asks first |
 | V2 10129 | Crew backup and restore of mission data | Meets | Mission file download and import |
 | V2 10040 | Only the information the task needs | Meets | "No filler" rules in AGENTS.md |

@@ -24,4 +24,9 @@ export default defineConfig({
   define: {
     CESIUM_BASE_URL: JSON.stringify(`/${CESIUM_BASE}`),
   },
+  // Two pages: the editor, and the mission viewer at /viewer.html, which
+  // loads neither React nor Cesium.
+  build: {
+    rolldownOptions: { input: ['index.html', 'viewer.html'] },
+  },
 })

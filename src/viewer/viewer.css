@@ -1,0 +1,724 @@
+/* The mission viewer. Tokens come from src/tokens.css, the look from
+   docs/visual-language.md. Nothing here loads the editor's stylesheets. */
+
+*,
+::before,
+::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.4;
+}
+
+h2,
+h3,
+p,
+ul {
+  margin: 0;
+  padding: 0;
+}
+
+ul {
+  list-style: none;
+}
+
+button,
+input,
+textarea {
+  border-radius: var(--radius);
+  color: inherit;
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* Layout: top bar, messages, the panel beside the map, status bar. */
+
+#viewer {
+  display: grid;
+  height: 100dvh;
+  grid-template:
+    'bar bar' var(--topbar-height)
+    'alerts alerts' auto
+    'panel map' minmax(0, 1fr)
+    'status status' var(--statusbar-height)
+    / minmax(0, var(--sidebar-width)) minmax(0, 1fr);
+}
+
+.bar {
+  grid-area: bar;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) 0 var(--space-4);
+  border-bottom: var(--border-width) solid var(--color-line);
+  background: var(--color-surface);
+}
+
+.bar__title {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.bar__title strong {
+  overflow: hidden;
+  font-size: var(--text-heading);
+  font-weight: 700;
+  text-overflow: ellipsis;
+}
+
+.bar__file {
+  overflow: hidden;
+  color: var(--color-text-dim);
+  font-size: var(--text-data);
+  text-overflow: ellipsis;
+}
+
+.bar__edited {
+  color: var(--color-modified);
+  font-size: var(--text-data);
+}
+
+.button {
+  flex: none;
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-surface-raised);
+  font-size: var(--text-data);
+  font-weight: 600;
+}
+
+.button--primary {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* A name for a button whose face is a sign or a shortcut, shown at once on
+   hover or keyboard focus. Below the button, or left of it on the rail. */
+[data-tip] {
+  position: relative;
+}
+
+[data-tip]:is(:hover, :focus-visible)::after {
+  content: attr(data-tip);
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  width: max-content;
+  max-width: 260px;
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--text-data);
+  font-weight: 400;
+  line-height: 1.35;
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+}
+
+.rail [data-tip]::after {
+  top: 50%;
+  right: calc(100% + var(--space-2));
+  translate: 0 -50%;
+}
+
+/* Messages. Each starts with a word saying what it is and offers what to do. */
+
+.alerts {
+  grid-area: alerts;
+}
+
+.alerts p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: var(--border-width) solid var(--color-line);
+  border-left: 3px solid var(--color-warning);
+  background: var(--color-surface);
+}
+
+.alerts b {
+  color: var(--color-warning);
+  font-size: var(--text-label);
+}
+
+/* The panel. */
+
+.panel {
+  grid-area: panel;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  border-right: var(--border-width) solid var(--color-line);
+  background: var(--color-surface);
+}
+
+.tabs {
+  display: flex;
+  overflow-x: auto;
+  border-bottom: var(--border-width) solid var(--color-line);
+  scrollbar-width: none;
+}
+
+.tabs button {
+  flex: none;
+  height: 44px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: var(--text-data);
+  font-weight: 600;
+}
+
+.tabs button[aria-current] {
+  border-bottom-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+.tabs__flag {
+  margin-left: var(--space-2);
+  color: var(--color-caution);
+  font-weight: 400;
+}
+
+.tabs__flag::before,
+.cautions li::before {
+  content: '△\00a0';
+  color: var(--color-caution);
+}
+
+.panel__body {
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.page {
+  display: grid;
+  gap: var(--space-6);
+  align-content: start;
+}
+
+.page h2 {
+  margin-bottom: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-data);
+  font-weight: 600;
+}
+
+.page h3 {
+  margin-top: var(--space-3);
+  color: var(--color-text-dim);
+  font-size: var(--text-label);
+  font-weight: 600;
+}
+
+.empty {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: start;
+  color: var(--color-text-muted);
+}
+
+.note {
+  color: var(--color-text-muted);
+}
+
+.cautions {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.cautions li {
+  padding: var(--space-1) var(--space-3);
+  border-left: 3px solid var(--color-caution);
+}
+
+/* Rows: label on the left, value on the right. Only a value that can be
+   typed over sits in a box. */
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: var(--control-height);
+  padding: var(--space-1) 0;
+  border-bottom: var(--border-width) solid var(--color-line);
+}
+
+.row__label {
+  color: var(--color-text-muted);
+}
+
+.row__value,
+.table,
+.readout__value,
+.status,
+.site__leg,
+.site__place {
+  font-variant-numeric: tabular-nums;
+}
+
+.row__value {
+  text-align: right;
+}
+
+.unit {
+  color: var(--color-text-dim);
+}
+
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-bg);
+}
+
+.field:focus-within {
+  border-color: var(--color-accent);
+}
+
+.field input {
+  width: 7ch;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.field input.field__text {
+  width: 24ch;
+  text-align: left;
+}
+
+.is-hazard {
+  color: var(--color-hazard);
+}
+
+.is-hazard::before {
+  content: '▲\00a0';
+}
+
+/* Numbers from before an edit the planner has not accepted. */
+.panel.is-stale :is(.readout__value, .row__value, .table td) {
+  color: var(--color-text-dim);
+}
+
+.readouts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+.readout {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-3);
+  background: var(--color-surface-raised);
+}
+
+.readout__label {
+  color: var(--color-text-dim);
+  font-size: var(--text-label);
+}
+
+.readout__value {
+  font-size: var(--text-section);
+  font-weight: 600;
+}
+
+.readout__value .unit {
+  font-size: var(--text-data);
+  font-weight: 400;
+}
+
+.readout__sub {
+  min-height: 1lh;
+  color: var(--color-text-muted);
+  font-size: var(--text-label);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-data);
+}
+
+.table :is(th, td) {
+  padding: var(--space-2) 0 var(--space-2) var(--space-4);
+  border-bottom: var(--border-width) solid var(--color-line);
+  font-weight: 400;
+  text-align: right;
+}
+
+.table :is(th, td):first-child {
+  padding-left: 0;
+  text-align: left;
+}
+
+.table thead th {
+  color: var(--color-text-dim);
+  font-size: var(--text-label);
+}
+
+/* Sites and their tasks. */
+
+.site__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.site__name {
+  padding: var(--space-1) var(--space-2);
+  margin-left: calc(-1 * var(--space-2));
+  border: 0;
+  background: none;
+  font-size: var(--text-heading);
+  font-weight: 600;
+  text-align: left;
+}
+
+.site__name[aria-pressed='true'] {
+  outline: 2px solid var(--color-accent);
+}
+
+.site__leg {
+  color: var(--color-text-muted);
+  font-size: var(--text-data);
+}
+
+.site__place {
+  color: var(--color-text-dim);
+  font-size: var(--text-label);
+}
+
+.task {
+  margin-top: var(--space-3);
+  padding: 0 var(--space-3) var(--space-1);
+  background: var(--color-surface-raised);
+}
+
+.task h3 {
+  margin: 0;
+  padding-top: var(--space-3);
+}
+
+.task .row:last-child,
+.person .row:last-child {
+  border-bottom: 0;
+}
+
+.checks {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1) var(--space-3);
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-data);
+}
+
+.check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+.symbols li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: var(--border-width) solid var(--color-line);
+}
+
+.symbols .link {
+  text-align: left;
+}
+
+/* Crew. */
+
+.person {
+  border-bottom: var(--border-width) solid var(--color-line);
+}
+
+.person summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: var(--space-3) 0;
+  cursor: pointer;
+  list-style: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.person summary::-webkit-details-marker {
+  display: none;
+}
+
+.person__name {
+  font-weight: 600;
+}
+
+.person__role {
+  flex: 1;
+  color: var(--color-text-muted);
+  font-size: var(--text-data);
+}
+
+.person__more {
+  color: var(--color-text-muted);
+  font-size: var(--text-data);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.briefing {
+  display: block;
+  width: 100%;
+  min-height: 60dvh;
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-bg);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+/* The map: the ground, then what is drawn on it, then the controls. */
+
+.map {
+  grid-area: map;
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+  background: var(--color-bg);
+}
+
+.map canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.map__overlay {
+  cursor: grab;
+  outline-offset: -2px;
+  touch-action: none;
+}
+
+.rail {
+  position: absolute;
+  top: 50%;
+  right: var(--space-3);
+  display: grid;
+  translate: 0 -50%;
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-surface);
+}
+
+.rail__button {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-top: var(--border-width) solid var(--color-line);
+  background: none;
+  font-size: var(--text-data);
+  font-weight: 600;
+}
+
+.rail__button:first-child {
+  border-top: 0;
+}
+
+.rail__button[aria-pressed='true'] {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.key {
+  position: absolute;
+  bottom: var(--space-3);
+  left: var(--space-3);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: calc(100% - 2 * var(--space-3));
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-width) solid var(--color-line);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--text-label);
+}
+
+/* The line as the map draws it: dashes of 6 on 5 on a dark band. */
+.key__line {
+  flex: none;
+  width: 28px;
+  height: 2.5px;
+  background: repeating-linear-gradient(90deg, var(--color-accent) 0 6px, var(--color-bg) 6px 11px);
+  box-shadow: 0 0 0 1.5px var(--color-bg);
+}
+
+.status {
+  grid-area: status;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-4);
+  border-top: var(--border-width) solid var(--color-line);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--text-label);
+  white-space: nowrap;
+}
+
+.status [role='status'] {
+  display: flex;
+  gap: var(--space-3);
+  color: var(--color-warning);
+}
+
+.status [role='status']:empty {
+  display: none;
+}
+
+.credits {
+  position: relative;
+  flex: 1;
+}
+
+.credits summary {
+  width: max-content;
+  cursor: pointer;
+  list-style: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.credits summary::-webkit-details-marker {
+  display: none;
+}
+
+.credits div {
+  position: absolute;
+  z-index: 5;
+  bottom: calc(100% + var(--space-2));
+  left: 0;
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--color-line-strong);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.status__scale {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text);
+}
+
+.scale {
+  height: 6px;
+  border: var(--border-width) solid var(--color-text);
+  border-top: 0;
+}
+
+.status__cursor {
+  min-width: 30ch;
+  color: var(--color-text);
+  text-align: right;
+}
+
+/* A narrow screen stacks the map over the panel. */
+@media (max-width: 860px) {
+  #viewer {
+    height: auto;
+    min-height: 100dvh;
+    grid-template:
+      'bar' var(--topbar-height)
+      'alerts' auto
+      'map' 55dvh
+      'panel' auto
+      'status' auto
+      / minmax(0, 1fr);
+  }
+
+  .panel {
+    border-right: 0;
+  }
+
+  .bar__file,
+  .status__cursor {
+    display: none;
+  }
+
+  .status {
+    min-height: var(--statusbar-height);
+    flex-wrap: wrap;
+  }
+
+  .field input.field__text {
+    width: 16ch;
+  }
+}

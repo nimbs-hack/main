@@ -150,6 +150,25 @@ export class PlannerError extends Error {
   }
 }
 
+// The planner names fields the way the file format does. On screen they get
+// the words the form uses.
+const FIELD_WORDS: Array<[RegExp, string]> = [
+  [/\bmassKg\b/, 'mass in kg'],
+  [/\bheightCm\b/, 'height in cm'],
+  [/\bevaShare\b/, 'share of EVA hours, as a fraction'],
+  [/\bmarginPercent\b/, 'margin in percent'],
+  [/\bevaHoursPerWeek\b/, 'EVA hours per person-week'],
+  [/\bwaterRecovery\b/, 'water recycled, as a fraction'],
+  [/\boxygenRecovery\b/, 'oxygen recycled, as a fraction'],
+  [/\bhygieneWaterKg\b/, 'hygiene water in kg'],
+  [/\bbasePowerW\b/, 'vehicle base power in W'],
+  [/\bcrewPowerW\b/, 'power per person in W'],
+  [/\blat\b/, 'latitude'],
+  [/\blon\b/, 'longitude'],
+]
+export const plainWords = (message: string): string =>
+  FIELD_WORDS.reduce((text, [field, words]) => text.replace(field, words), message)
+
 const BASE = '/api/planner'
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {

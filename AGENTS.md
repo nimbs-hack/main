@@ -53,6 +53,7 @@ Before you say a task is done, run typecheck, lint and tests. Report a failure a
 
 ```
 src/            Mission editor: React and TypeScript. Stage pages in src/steps, the map in src/components and src/data, tokens in src/tokens.css
+src/viewer/     Mission viewer, the page at /viewer.html: plain TypeScript with its own WebGL map. It must not import React, Cesium or a module that does.
 apps/api/       Go server: mission planner, hr-planner CLI, tile proxy and disk cache
 scripts/        Basemap tile download, Go process launcher, gofmt check
 docs/           Visual language, design notes for the editor

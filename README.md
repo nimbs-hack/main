@@ -2,10 +2,11 @@
 
 Plans what a crew needs for a mission: food energy and nutrients, water, oxygen and electricity. You describe the crew, the phases of the mission and the places the crew works at, and the planner works out the supplies and packs the mission into one small file.
 
-It has three parts:
+It has four parts:
 
 - The planner, in Go, in `apps/api/internal/planner`. It has a command line and an HTTP API. Its [README](apps/api/internal/planner/README.md) covers the model, the mission file format, the sources of every rate and the limits.
 - The editor, in React and TypeScript, in `src`. It opens on Home, which lists the mission files kept in this browser. A mission is then made in four stages, each its own page with a tab in the top bar: Crew, Phases, Sites and Review. Sites is the 3D Mars map with EVA route planning, map tools and science layers.
+- The viewer, in plain TypeScript, in `src/viewer`. It is a second, small page at `/viewer.html` that opens a mission file, shows its sites on a 3D map and what the mission needs, and takes small edits. [Mission viewer](#mission-viewer) below covers it.
 - The API server, in Go, in `apps/api`. It serves the planner and proxies and caches the globe's imagery and terrain tiles.
 
 Everything the planner reports is a planning estimate built from published NASA rates.
@@ -48,7 +49,7 @@ bun run lint
 bun run test
 ```
 
-Typecheck runs `tsc` on the editor and compiles the Go packages. Lint runs `go vet` and checks `gofmt`. Tests cover the globe helpers and the API launcher, and run Go's race detector on the planner and the tile proxy. The editor's components have no automated tests.
+Typecheck runs `tsc` on the editor and the viewer and compiles the Go packages. Lint runs `go vet` and checks `gofmt`. Tests cover the globe helpers, the viewer's terrain decoder and camera, and the API launcher, and run Go's race detector on the planner and the tile proxy. The editor's components and the viewer's page have no automated tests.
 
 ## Making a mission
 
@@ -85,6 +86,42 @@ The status bar reports loading, missing terrain or imagery, and when the older C
 Coordinates are planetocentric latitude and east-positive longitude on the sphere the terrain tiles use. Sites are stored with longitude from -180 to 180; the screen shows 0 to 360 east, the usual convention for Mars.
 
 Mission sites are points with a label: number, name, task count. The selected one is larger, red, and its label starts with a check mark. On the Review globe the readout says "Terrain safety not assessed" for every site. Slope is checked only along an EVA route planned on the Sites page.
+
+## Mission viewer
+
+`/viewer.html` reads a mission file on a device that cannot carry the editor. It loads neither React nor the map library. Its script and style are about 22 kB over the wire, plus the font. The editor with its map is about 1.3 MB. In development it is at the address Vite prints, with `/viewer.html` added. It needs the API server, which does the planning and serves the tiles.
+
+**Open** reads a `.mhr` or JSON file. So does Ctrl+O, and so does dropping a file on the page. With nothing open, the page also offers the example mission. The planner checks the file. A damaged file is refused with the reason, and the mission on screen is left alone. The last file opened is kept in the browser and opens again on the next visit, with any edits it had.
+
+| Tab | What it shows | What you can change |
+| --- | --- | --- |
+| Overview | Cautions, supplies with the margin, loads on the vehicle, file size | Name, margin |
+| Sites | Each site with its coordinates, the distance from the site before it and its tasks. Then the mission's symbols | A task's hours, crew and note |
+| Crew | Each person's radiation dose against the career limit, mission totals and daily needs | Nothing |
+| Phases | Supplies by phase | Days in a phase |
+| Briefing | The briefing text | The text |
+
+A change is sent when you leave the field or press Enter, and the planner answers as it does for the editor. If it refuses the change, the page says why, offers **Undo the edit**, and greys the numbers, which are then from before the change. **Undo** and Ctrl+Z step back one edit at a time. **Save file** downloads the `.mhr`. A name beside the mission says when edits are not saved to a file yet. Opening another file over unsaved edits offers the way back to them.
+
+The viewer does not add or remove crew, phases, sites or tasks, and does not move a site. The editor does that.
+
+### The viewer's map
+
+- The ground is the same terrain and CTX imagery as the editor's globe, drawn by about 600 lines of WebGL 1 code. Close in at the four rover sites it shows the HiRISE mosaics. The cursor readout gives coordinates and elevation above the MOLA areoid.
+- Sites are numbered squares in file order, joined by a dashed straight line. A mission file holds sites, not a walked route: the route the editor's Sites page finds stays in the editor's browser. The key on the map says so.
+- Drag to move, scroll to zoom, right-drag or Shift+drag to turn and tilt. On a touch screen, pinch to zoom and twist to turn. The arrow keys move the map, with Shift they turn and tilt it, and + and - zoom. The buttons on the right zoom, show the whole mission, face north, tilt, and draw heights three times taller. Taller heights exaggerate slopes and are for looking, not for judging them.
+- Clicking a site's name in the panel brings it to the middle of the map. Clicking a pin opens the site in the panel.
+- The ground is a flat map around the middle of the mission, not a globe. That is exact enough for one site and the routes around it. Far from the middle, east-west distances stretch.
+- The status bar reports loading and missing terrain or imagery, with **Retry**. Ground with no terrain is drawn level. Imagery arrives tile by tile, and the coarser ground stays under it until it does.
+
+### On a weak device
+
+- Nothing is drawn unless the camera moved or a tile arrived.
+- A view is at most 25 tiles, each a mesh of 1,089 points and one picture, with no lighting.
+- When frames take longer than about 45 ms, the ground is drawn at half resolution while the camera moves and sharp again when it stops. In Chromium's software renderer that brings a frame from about 100 ms to about 40 ms at 960 by 810 pixels.
+- Without WebGL the same tiles are drawn flat, seen from above, and the status bar says the map is flat. Adding `?flat` to the address asks for that on a device whose 3D is broken.
+
+Nobody outside the team has used the viewer yet. A walkthrough with a first-time reader still has to check that the dashed line is not taken for a walked route, and that a refused edit is understood.
 
 ## Route search
 
