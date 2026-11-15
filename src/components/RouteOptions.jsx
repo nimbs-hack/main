@@ -17,12 +17,12 @@ import './route-options.css'
  * `groundPending` is true while HiRISE tiles are still being read for rocks
  * and ripples. Routes shown before then are from terrain alone and can move.
  */
-export default function RouteOptions({ status, thermalPending, groundPending, options, chosen, measured, hover, limit, note, needs, onHover, onChoose, onRaise, onRetry }) {
+export default function RouteOptions({ status, searchFailed, thermalPending, groundPending, options, chosen, measured, hover, limit, note, needs, onHover, onChoose, onRaise, onRetry }) {
   if (status === 'loading') return <p className="routes routes--note" role="status">Finding routes…</p>
   if (status === 'error') {
     return (
       <p className="routes routes--note" role="status">
-        No terrain for routes. <button type="button" onClick={onRetry}>Retry</button>
+        {searchFailed ? 'Route search failed.' : 'No terrain for routes.'} <button type="button" onClick={onRetry}>Retry</button>
       </p>
     )
   }

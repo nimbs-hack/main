@@ -35,7 +35,7 @@ import './plan-panel.css'
  *   when        EVA start typed in, UTC ISO string, or null for automatic
  *   calendar    Map of UTC date to the best EVA window of that date's sol,
  *               over the next six weeks, or null before there is a start
- *   startCheck  { window, picked, searched }: the EVA start's window
+ *   startCheck  { window, picked, searched, pending, failed }: the EVA start's window
  *               (src/data/eva-window), picked on the calendar or worked out
  *               from the next seven sols. Null when none was found, and
  *               searched false before there is a start point
@@ -511,6 +511,10 @@ export default function PlanPanel({
         <Value level={!startCheck?.searched ? null : !startCheck.window ? 'caution' : { go: null, caution: 'caution', 'no-go': 'hazard' }[startCheck.window.verdict]}>
           {!startCheck?.searched
             ? 'Now, until there is a start point'
+            : startCheck.pending
+              ? 'Finding a start window…'
+              : startCheck.failed
+                ? <>Start window unavailable. <button type="button" onClick={onRetry}>Retry</button></>
             : !startCheck.window
               ? 'Now: no daylight in the next 7 sols'
               : `${startCheck.picked ? 'Your pick' : startCheck.window.verdict === 'go' ? 'Best window' : 'Best available'}, ${formatSolarTime(startCheck.window.startSolar)} local${startCheck.window.reasons.length ? `. ${startCheck.window.reasons[0].text}` : ''}`}
@@ -700,9 +704,14 @@ export default function PlanPanel({
                 </ul>
               )}
             </div>
+          ) : startCheck?.failed ? (
+            <div className="plan__verdict is-caution" role="status">
+              <strong>Start window unavailable</strong>
+              <button type="button" className="plan__link" onClick={onRetry}>Retry</button>
+            </div>
           ) : (
             <div className="plan__verdict">
-              <span>{status === 'loading' ? 'Sampling terrain…' : !plan.start ? 'Right-click the map or use a site to set a start' : 'Right-click the map or use a site to set a target'}</span>
+              <span>{status === 'loading' ? 'Sampling terrain…' : startCheck?.pending ? 'Finding a start window…' : !plan.start ? 'Right-click the map or use a site to set a start' : 'Right-click the map or use a site to set a target'}</span>
             </div>
           )}
           <div className="plan__actions">

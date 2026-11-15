@@ -100,3 +100,18 @@ test('elevation-first sampling matches full surface sampling and fallback levels
   expect(elevations).toEqual(surface.map((s) => s.elevation))
   expect(elevations.every((height) => height !== null)).toBe(true)
 })
+
+test('canceling a dense cached grid stops before another batch or fallback level', async () => {
+  const controller = new AbortController()
+  let samples = 0
+  const provider = {
+    tilingScheme: new GeographicTilingScheme(),
+    requestTileGeometry: async () => ({ interpolateHeight() {
+      samples++
+      if (samples === 512) controller.abort()
+      return DATUM_OFFSET + 100
+    } }),
+  }
+  await expect(sampleElevations(provider, Array.from({ length: 5000 }, () => [18.4, 77.4]), 14, controller.signal)).rejects.toThrow()
+  expect(samples).toBe(512)
+})

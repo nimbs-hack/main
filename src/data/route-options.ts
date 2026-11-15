@@ -138,13 +138,13 @@ export type Area = {
   thermalHigh: number
 }
 
-export function areaStats(field: Field): Area {
+export function areaStats(field: Pick<Field, 'slope' | 'thermal'>): Area {
   const slopes = field.slope.filter((s): s is number => s !== null)
   const thermal = field.thermal.filter((t): t is number => t !== null)
   return {
     slopeTypical: quantile(slopes, 0.5),
     slopeSteep: quantile(slopes, 0.9),
-    slopeMax: slopes.length ? Math.max(...slopes) : 0,
+    slopeMax: slopes.reduce((max, slope) => Math.max(max, slope), slopes.length ? -Infinity : 0),
     thermalLow: quantile(thermal, 0.05),
     thermalHigh: quantile(thermal, 0.95),
   }

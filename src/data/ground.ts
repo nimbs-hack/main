@@ -206,7 +206,8 @@ function measuredTile(url: string, pixelMeters: number, load: TileLoader) {
  * where its tile is missing, or where the points span too many tiles to
  * read at GROUND_MIN_LEVEL.
  */
-export async function sampleGround(points: LatLon[], options: { radius?: number, load?: TileLoader, maxTiles?: number } = {}) {
+export async function sampleGround(points: LatLon[], options: { radius?: number, load?: TileLoader, maxTiles?: number, signal?: AbortSignal } = {}) {
+  options.signal?.throwIfAborted()
   const load = options.load ?? fetchTile
   const result: (Ground | null)[] = points.map(() => null)
   const byMosaic = new Map<Mosaic, number[]>()
@@ -233,6 +234,7 @@ export async function sampleGround(points: LatLon[], options: { radius?: number,
     }
     await Promise.all([...groups].map(async ([url, group]) => {
       const tile = await measuredTile(url, pixelMeters, load)
+      options.signal?.throwIfAborted()
       if (!tile) return
       for (const { index, px, py } of group) result[index] = groundAt(tile, px, py, options.radius)
     }))

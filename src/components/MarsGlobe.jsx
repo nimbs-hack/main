@@ -38,13 +38,13 @@ import { buildProfile, slopeLevel, summarize } from '../data/route-profile'
 import { DEFAULT_LIMITS, EMPTY_PLAN, SUIT, assess, withReasons, withMissionSites, insertWaypoint, isGenerated, moveVertex, planPath, removeWaypoint, stopPath, stopsOnly } from '../data/plan'
 import { planStops } from '../data/stops'
 import { addPlanOverlay } from './plan-overlay'
-import { areaStats, buildGrid, joinLegs, routeOptions, sameReason } from '../data/route-options'
+import { buildGrid } from '../data/route-options'
 import RouteOptions from './RouteOptions'
 import { formatDistance } from './RouteProfile'
 import { STATIONS, fetchWeather, formatPressure, formatTemp, nearestStation, pressureAt } from '../data/weather'
 import { COARSE_DETAIL, coverage, detailAt, detailLabel, detailMeters, levelAt, levelForSpacing, outline, slopeBaseline } from '../data/terrain-detail'
 import { checkSpaceWeather, fetchSpaceWeather } from '../data/space-weather'
-import { assessStart, bestOf, findWindows } from '../data/eva-window'
+import { assessStart, bestOf } from '../data/eva-window'
 import { windowsByDate } from '../data/eva-calendar'
 
 import { TERRAIN_API_PATH } from '../data/terrain-source'
@@ -55,6 +55,9 @@ import MapTools, { ToolButtons } from './MapTools'
 import { sampleRaster } from '../data/raster-sample'
 import { sampleElevations, sampleSurface } from '../data/terrain-sample'
 import { loadRouteField } from '../data/route-field'
+import { createRouteFields } from '../data/route-fields'
+import { createRouteSearch } from '../data/route-search'
+import { useWindowSearch } from '../data/use-window-search'
 import { GROUND_RADIUS, sampleGround } from '../data/ground'
 import RouteProfile from './RouteProfile'
 import PointReadout from './PointReadout'
@@ -87,15 +90,6 @@ const DEFAULT_OVERLAYS = Object.fromEntries(SCIENCE_RASTERS.map((layer) => [laye
 // A new start this far from the old target starts a new plan.
 const NEW_PLAN_DISTANCE = 20_000
 const HOVER_MS = 50
-
-// Every leg's samples in one field, for the note on why routes agree.
-function joinFields(legs) {
-  return {
-    elevation: legs.flatMap((leg) => leg.field.elevation),
-    thermal: legs.flatMap((leg) => leg.field.thermal),
-    slope: legs.flatMap((leg) => leg.field.slope),
-  }
-}
 
 // The entity under a screen position. Cesium's pick throws while the camera
 // is degenerate, mid-flight or with the canvas at zero size. Hovering runs
@@ -542,7 +536,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   // Minute clock for time-relative checks such as CME arrivals.
   const [clock, setClock] = useState(() => Date.now())
   const markerEntities = useRef(new Map())
-  const [profile, setProfile] = useState({ status: 'idle', samples: null })
+  const [sampledProfile, setProfile] = useState({ status: 'idle', samples: null })
   const [profileAttempt, setProfileAttempt] = useState(0)
   const [profileOpen, setProfileOpen] = useState(true)
   const [hoverIndex, setHoverIndex] = useState(null)
@@ -869,7 +863,8 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   const routePath = useMemo(() => {
     const path = planPath(plan)
     return plan.start && plan.target ? path : null
-  }, [plan])
+  }, [plan.start, plan.target, plan.waypoints])
+  const profile = useMemo(() => sampledProfile.path === routePath ? sampledProfile : { status: routePath ? 'loading' : 'idle', samples: null }, [sampledProfile, routePath])
 
   const crewStarted = useRef(performance.now() / 1000)
   const crewSite = missionSites?.[missionSelected] ?? missionSites?.[0]
@@ -904,31 +899,35 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   useEffect(() => {
     setHoverIndex(null)
     if (!terrainProvider || !routePath) {
-      setProfile({ status: routePath ? 'loading' : 'idle', samples: null })
+      setProfile({ path: routePath, status: routePath ? 'loading' : 'idle', samples: null })
       return
     }
-    let cancelled = false
-    setProfile({ status: 'loading', samples: null })
+    const controller = new AbortController()
+    const { signal } = controller
+    setProfile({ path: routePath, status: 'loading', samples: null })
     // Sample at the finest terrain anywhere on the route. Where the route
     // leaves it, sampling falls back to coarser levels and the legs say so.
     const finest = Math.max(9, ...resample(routePath, 24).map(({ point }) => levelAt(terrainProvider, point) ?? 9))
     const level = Math.min(17, finest)
-    buildProfile(routePath, {
-      provider: terrainProvider,
-      rasters: PROFILE_RASTERS,
-      count: 200,
-      level,
-      baseline: slopeBaseline(detailMeters(level)),
-      detail: (point) => detailAt(terrainProvider, point),
-      ground: (points) => sampleGround(points),
-    }).then((samples) => {
-      if (cancelled) return
-      const known = samples.some((s) => s.elevation !== null)
-      setProfile({ status: known ? 'ready' : 'error', samples })
-    }, () => {
-      if (!cancelled) setProfile({ status: 'error', samples: null })
-    })
-    return () => { cancelled = true }
+    const timer = setTimeout(() => {
+      buildProfile(routePath, {
+        provider: terrainProvider,
+        rasters: PROFILE_RASTERS,
+        count: 200,
+        level,
+        baseline: slopeBaseline(detailMeters(level)),
+        detail: (point) => detailAt(terrainProvider, point),
+        signal,
+        ground: (points) => sampleGround(points, { signal }),
+      }).then((samples) => {
+        if (signal.aborted) return
+        const known = samples.some((s) => s.elevation !== null)
+        setProfile({ path: routePath, status: known ? 'ready' : 'error', samples })
+      }, () => {
+        if (!signal.aborted) setProfile({ path: routePath, status: 'error', samples: null })
+      })
+    }, 100)
+    return () => { clearTimeout(timer); controller.abort() }
   }, [terrainProvider, routePath, profileAttempt])
 
   useEffect(() => {
@@ -961,7 +960,8 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   // One search: the best start of each sol over the next six weeks, for the
   // calendar, and the best of the first seven, the start when none is picked.
   // So the worked-out start is always one of the calendar's.
-  const search = useMemo(() => (windowInput ? findWindows({ ...windowInput, sols: CALENDAR_SOLS }) : null), [windowInput])
+  const { search, failed: windowFailed } = useWindowSearch(windowInput, CALENDAR_SOLS, profileAttempt)
+  const windowPending = Boolean(windowInput && !plan.when && !search && !windowFailed)
   const calendar = useMemo(() => (search ? windowsByDate(search) : null), [search])
   const autoWindow = useMemo(() => (plan.when || !search ? null : bestOf(search.sols.slice(0, 7).map((sol) => sol.best))), [plan.when, search])
   // A picked start gets the same checks as a worked-out one.
@@ -976,10 +976,10 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   // The verdict takes the space weather and the daylight at the start: an
   // EVA that runs into the dark is no-go, whatever the ground.
   const assessment = useMemo(() => {
-    if (!routeAssessment) return routeAssessment
+    if (!routeAssessment || windowPending || (!plan.when && windowFailed)) return null
     const reasons = [...(startWindow?.daylight ? [startWindow.daylight] : []), ...(spaceCheck?.reasons ?? [])]
     return reasons.length ? withReasons(routeAssessment, reasons) : routeAssessment
-  }, [routeAssessment, spaceCheck, startWindow])
+  }, [routeAssessment, spaceCheck, startWindow, windowPending, windowFailed, plan.when])
   // Finest and coarsest terrain under the route, for the Terrain tab.
   const terrainDetail = useMemo(() => {
     const details = (profile.samples ?? []).map((sample) => sample.detail).filter((d) => d != null)
@@ -988,73 +988,70 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     return { finest: Math.min(...details), coarsest: Math.max(...details), coarse }
   }, [profile.samples, routeAssessment])
 
-  // Sample one grid per leg between stops: start, the user's waypoints, then
-  // the target. Limits only rerun the search.
+  // Preserve unchanged legs, including their in-flight samples, across edits.
   const stopsKey = JSON.stringify(plan.start && plan.target ? stopPath(plan) : [])
+  const fields = useRef(null)
   useEffect(() => {
-    const stops = JSON.parse(stopsKey)
-    if (!terrainProvider || stops.length < 2) {
-      setRouteField({ status: 'idle' })
-      return
-    }
-    const controller = new AbortController()
-    setRouteField({ status: 'loading' })
-    const legs = stops.slice(1).map(() => null)
-    let failed = false
-    const publish = () => {
-      if (controller.signal.aborted) return
-      if (failed) return setRouteField({ status: 'error' })
-      if (legs.some((leg) => !leg)) return
-      setRouteField({
-        status: 'ready',
-        key: stopsKey,
-        legs: [...legs],
-        thermalPending: legs.some((leg) => leg.thermalPending),
-        slopesPending: legs.some((leg) => leg.slopesPending),
-        groundPending: legs.some((leg) => leg.groundPending),
-      })
-    }
+    if (!terrainProvider) return
     const night = SAMPLED_RASTERS.find((layer) => layer.id === 'themis-night')
-    stops.slice(1).forEach((target, i) => {
-      const start = stops[i]
-      // On fine terrain the grid gets finer too, up to 160 cells between the
-      // leg's ends, so routes can thread between scarps the terrain shows.
+    const loader = createRouteFields(async (start, target, publish, signal) => {
       const length = distance(start, target)
       const finest = Math.max(9, ...[start, target, resample([start, target], 3)[1].point].map((point) => levelAt(terrainProvider, point) ?? 9))
       const along = Math.min(160, Math.max(40, Math.round(length / Math.max(4 * detailMeters(finest), length / 160))))
       const grid = buildGrid(start, target, along)
       const level = levelForSpacing(grid.cell, finest)
-      // Slope probes cost five samples a node. On a dense grid the search
-      // already reads slope between nodes, so skip them.
       const probeSlopes = grid.points.length <= 6000
-      loadRouteField(grid, {
-        elevations: () => sampleElevations(terrainProvider, grid.points, level),
-        surface: () => (probeSlopes ? sampleSurface(terrainProvider, grid.points, level) : Promise.resolve([])),
-        thermal: () => night ? sampleRaster(night, grid.points) : Promise.resolve(grid.points.map(() => null)),
-        // One reading covers the ground a node stands for, half a cell around.
-        ground: () => sampleGround(grid.points, { radius: Math.max(GROUND_RADIUS, grid.cell / 2) }),
+      await loadRouteField(grid, {
+        elevations: () => sampleElevations(terrainProvider, grid.points, level, signal),
+        surface: () => (probeSlopes ? sampleSurface(terrainProvider, grid.points, level, undefined, signal) : Promise.resolve([])),
+        thermal: () => night ? sampleRaster(night, grid.points, undefined, signal) : Promise.resolve(grid.points.map(() => null)),
+        ground: () => sampleGround(grid.points, { radius: Math.max(GROUND_RADIUS, grid.cell / 2), signal }),
       }, (result) => {
-        if (result.field.elevation.some((elevation) => elevation !== null)) legs[i] = result
-        else failed = true
-        publish()
-      }, controller.signal).catch(() => {
-        failed = true
-        publish()
-      })
+        if (!result.field.elevation.some((value) => value !== null)) throw new Error('No terrain for route')
+        publish(result)
+      }, signal)
     })
-    return () => controller.abort()
+    fields.current = loader
+    return () => { loader.destroy(); fields.current = null }
+  }, [terrainProvider, routeAttempt])
+
+  useEffect(() => {
+    const stops = JSON.parse(stopsKey)
+    if (!terrainProvider || stops.length < 2) {
+      fields.current?.update([], () => {}, () => {})
+      setRouteField({ status: 'idle' })
+      return
+    }
+    setRouteField({ status: 'loading' })
+    fields.current.update(stops, (legs) => {
+      setRouteField({
+        status: 'ready', key: stopsKey, legs,
+        thermalPending: legs.some((leg) => leg.thermalPending),
+        slopesPending: legs.some((leg) => leg.slopesPending),
+        groundPending: legs.some((leg) => leg.groundPending),
+      })
+    }, () => setRouteField({ status: 'error' }))
   }, [terrainProvider, stopsKey, routeAttempt])
 
-  const routePlan = useMemo(() => {
-    // Legs for older stops would join wrong, so wait for the new ones.
-    if (routeField.status !== 'ready' || routeField.key !== stopsKey) return null
-    const legs = routeField.legs.map((leg) => routeOptions(leg.grid, leg.field, limits, leg.thermalPending))
-    return joinLegs(legs, JSON.parse(stopsKey).slice(1, -1))
+  const searcher = useRef(null)
+  const [searchedRoute, setSearchedRoute] = useState(null)
+  useEffect(() => {
+    const search = createRouteSearch()
+    searcher.current = search
+    return () => { search.destroy(); searcher.current = null }
+  }, [])
+  useEffect(() => {
+    if (routeField.status !== 'ready' || routeField.key !== stopsKey) return
+    searcher.current.update(routeField.legs, limits, JSON.parse(stopsKey).slice(1, -1), (plan, note) => {
+      setSearchedRoute({ field: routeField, limits, plan, note })
+    }, () => setSearchedRoute({ field: routeField, limits, error: true }))
+    return () => searcher.current.cancel()
   }, [routeField, limits, stopsKey])
+  const currentSearch = routeField.key === stopsKey && searchedRoute?.field === routeField && searchedRoute?.limits === limits ? searchedRoute : null
+  const routePlan = currentSearch?.plan ?? null
+  const routeStatus = routeField.status !== 'ready' ? routeField.status : currentSearch?.error ? 'error' : routePlan?.status === 'blocked' ? 'blocked' : routePlan ? 'ready' : 'loading'
   const options = routePlan?.options ?? []
-  // Why every strategy found the same path, shown when they all agree.
-  const allSame = options.length > 1 && options.slice(1).every((option) => option.sameAs)
-  const sameNote = allSame && !routeField.thermalPending && !routeField.slopesPending ? sameReason(areaStats(joinFields(routeField.legs))) ?? 'All four strategies agree here.' : null
+  const sameNote = currentSearch?.note ?? null
   // The route on the map is the picked one once its waypoints match. Plans
   // saved before picks were stored are matched by value alone.
   const matches = (option) => samePoints(option.waypoints, plan.waypoints)
@@ -1384,7 +1381,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
           weather={planWeather && { ...planWeather, atHigh: highWeather?.estimate ?? null }}
           space={{ status: spaceWeather.status, data: spaceWeather.data, check: spaceCheck, start: evaStart, end: evaEnd, now: clock }}
           when={plan.when ?? null}
-          startCheck={{ window: startWindow, picked: Boolean(plan.when), searched: Boolean(plan.start) }}
+          startCheck={{ window: startWindow, picked: Boolean(plan.when), searched: Boolean(plan.start), pending: windowPending, failed: !plan.when && windowFailed }}
           calendar={calendar}
           onWhen={(when) => setPlan((current) => ({ ...current, when }))}
           terrainDetail={terrainDetail}
@@ -1504,7 +1501,8 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
 
           {routePath && !suit && (
             <RouteOptions
-              status={routePlan?.status === 'blocked' ? 'blocked' : routeField.status}
+              status={routeStatus}
+              searchFailed={currentSearch?.error}
               needs={routePlan?.status === 'blocked' ? routePlan.needs : null}
               thermalPending={routeField.thermalPending}
               groundPending={routeField.groundPending}

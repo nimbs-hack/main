@@ -92,7 +92,8 @@ export function tileUrl(source: ScienceRaster, level: number, x: number, y: numb
   return source.url.replace('{z}', String(level)).replace('{y}', String(y)).replace('{x}', String(x))
 }
 
-export async function sampleRaster(source: ScienceRaster, points: LatLon[], load: TileLoader = loadTile) {
+export async function sampleRaster(source: ScienceRaster, points: LatLon[], load: TileLoader = loadTile, signal?: AbortSignal) {
+  signal?.throwIfAborted()
   const level = source.maxLevel
   const groups = new Map<string, { index: number; px: number; py: number }[]>()
   points.forEach((point, index) => {
@@ -105,6 +106,7 @@ export async function sampleRaster(source: ScienceRaster, points: LatLon[], load
   const values: (number | null)[] = points.map(() => null)
   await Promise.all([...groups].map(async ([url, group]) => {
     const pixels = await load(url)
+    signal?.throwIfAborted()
     if (!pixels) return
     for (const { index, px, py } of group) values[index] = pixelValue(pixels, px, py, source.legend.colors)
   }))

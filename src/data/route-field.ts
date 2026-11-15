@@ -29,12 +29,12 @@ export async function loadRouteField(grid: Grid, load: Loaders, publish: (field:
   let thermalPending = true
   let ground: (Ground | null)[] | undefined
   let groundPending = Boolean(load.ground)
+  let slope: (number | null)[] = grid.points.map(() => null)
   const update = () => {
     if (!elevation || signal.aborted) return
-    const coarse = surface ? gridSlopes(grid, elevation) : []
     publish({
       grid,
-      field: { elevation, thermal, slope: grid.points.map((_, i) => surface ? surface[i]?.slope ?? coarse[i] : null), ...(ground ? { ground } : {}) },
+      field: { elevation, thermal, slope, ...(ground ? { ground } : {}) },
       thermalPending,
       slopesPending: !surface,
       groundPending,
@@ -46,6 +46,9 @@ export async function loadRouteField(grid: Grid, load: Loaders, publish: (field:
       update()
       if (signal.aborted || !elevation.some((value) => value !== null)) return
       surface = await load.surface().catch(() => [])
+      if (signal.aborted) return
+      const coarse = gridSlopes(grid, elevation)
+      slope = grid.points.map((_, i) => surface![i]?.slope ?? coarse[i])
       update()
     }),
     load.thermal().catch(() => thermal).then((values) => {

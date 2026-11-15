@@ -35,15 +35,17 @@ export async function buildProfile(path: LatLon[], options: {
   detail?: (point: LatLon) => number | null
   ground?: (points: LatLon[]) => Promise<(Ground | null)[]>
   load?: TileLoader
+  signal?: AbortSignal
 }): Promise<ProfileSample[]> {
   const stations = resample(path, options.count ?? 160)
   const points = stations.map((s) => s.point)
   const [surface, ground, ...layers] = await Promise.all([
-    sampleSurface(options.provider, points, options.level, options.baseline),
+    sampleSurface(options.provider, points, options.level, options.baseline, options.signal),
     // A failed ground check leaves the ground unknown, not the profile empty.
     options.ground?.(points).catch(() => points.map(() => null)),
-    ...options.rasters.map((source) => sampleRaster(source, points, options.load)),
+    ...options.rasters.map((source) => sampleRaster(source, points, options.load, options.signal)),
   ])
+  options.signal?.throwIfAborted()
   return stations.map((station, i) => ({
     ...station,
     elevation: surface[i].elevation,
