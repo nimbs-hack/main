@@ -57,7 +57,7 @@ import RouteProfile from './RouteProfile'
 import PointReadout from './PointReadout'
 import SuitView, { PLAY_TICK_MS } from './SuitView'
 import PlanPanel from './PlanPanel'
-import { loadEva, saveEva } from '../data/eva-storage'
+import { EVA_START_EVENT, loadEva, saveEva } from '../data/eva-storage'
 import { hudRoute, saveHud } from '../data/hud-snapshot'
 import MapLabels from './MapLabels'
 import { StageIcon } from './icons'
@@ -488,9 +488,11 @@ function followWalker(viewer, point, heading, playing, elevation) {
  * one EVA walks to one site, and Add EVA to mission records it there.
  * `mission.flag` puts a caution dot on the Sites tab.
  * `missionPanel` renders the mission's sites and tasks as a tab of the plan
- * panel and gets { placing, onPlacing, onRouteTo } to drive the map from it.
- * While placing is 'site' every click adds a site, until Esc or onPlacing(null).
- * onRouteTo([lat, lon]) makes that point the EVA target.
+ * panel and gets { placing, onPlacing, start, target, onStart, onTarget } to
+ * drive the map from it. While placing is 'site' every click adds a site,
+ * until Esc or onPlacing(null). onStart([lat, lon], name) and
+ * onTarget([lat, lon]) set the ends of the EVA route; start and target are
+ * the current ends, or null.
  */
 export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onScienceSource, onViewer, mission = null, missionPanel = null }) {
   const container = useRef(null)
@@ -550,7 +552,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   const [saved] = useState(() => loadEva(mission?.id))
   const [plan, setPlan] = useState(saved.plan)
   const [limits, setLimits] = useState(saved.limits)
-  // What the next map click does: 'start', 'target', 'waypoint' or null to probe.
+  // What the next map click does: 'waypoint', 'site' or null to probe.
   const [placing, setPlacingState] = useState(null)
   // Map tool in use: 'ruler', 'range', 'sight' or null. It takes map clicks
   // the way placement does, so turning one on turns the other off.
@@ -564,9 +566,6 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     setToolState(id)
     if (id) setPlacingState(null)
   }, [])
-  // Where to fly after the site flight. The map opens on the whole planet,
-  // also with a saved plan: Fit route goes to it.
-  const [focus, setFocus] = useState(null)
   const marker = useRef(null)
   const planOverlay = useRef(null)
   const [terrainProvider, setTerrainProvider] = useState(null)
@@ -763,11 +762,6 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     else flyHome(viewer)
   }, [viewer, site])
 
-  // Runs after the site flight above, so it replaces it.
-  useEffect(() => {
-    if (viewer && focus) flyToPoint(viewer, focus.point)
-  }, [viewer, focus])
-
   useEffect(() => {
     if (viewer && site) return warmSiteImagery(viewer, site, imagerySource)
   }, [viewer, site, imagerySource])
@@ -842,6 +836,15 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     saveEva(mission?.id, { plan, limits })
   }, [mission?.id, plan, limits])
 
+  // The Review page can set the EVA start while this map stays open.
+  useEffect(() => {
+    const onStart = (event) => {
+      if (event.detail.missionId === mission?.id) setPlan((current) => ({ ...current, when: event.detail.when }))
+    }
+    window.addEventListener(EVA_START_EVENT, onStart)
+    return () => window.removeEventListener(EVA_START_EVENT, onStart)
+  }, [mission?.id])
+
   // Route from start through waypoints to target, once both ends exist.
   const routePath = useMemo(() => {
     const path = planPath(plan)
@@ -861,7 +864,6 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       text: track.name,
       point: positionAt(performance.now() / 1000),
       positionAt,
-      onSelect: () => viewer && flyToPoint(viewer, positionAt(performance.now() / 1000), viewer.camera.positionCartographic.height > SITE_RANGE ? 6000 : 1000),
     }
   }), [mission?.crew, routePath, crewAnchor[0], crewAnchor[1], viewer])
 
@@ -1061,29 +1063,16 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       // A new start elsewhere drops the route but keeps the planned time.
       return far ? { ...EMPTY_PLAN, when: current.when, start: point, startName } : { ...stopsOnly(current), start: point, startName }
     })
-    setPlacing((current) => (current === 'start' ? null : current))
   }
 
   const actions = {
-    start: (point) => {
-      startAt(point)
-      if (!plan.target || distance(plan.target, point) > NEW_PLAN_DISTANCE) setPlacing('target')
-    },
-    target: (point) => {
-      setPlan((current) => ({ ...stopsOnly(current), target: point }))
-      setPlacing(null)
-    },
+    start: (point) => startAt(point),
+    target: (point) => setPlan((current) => ({ ...stopsOnly(current), target: point })),
     waypoint: (point) => setPlan((current) => insertWaypoint(current, point)),
     // Stays on, so several sites can be added in a row.
     site: (point) => mission?.onAddSite(point),
   }
 
-  // A mission site becomes the EVA target. Without a start yet, the next
-  // click places one.
-  const routeTo = (point) => {
-    actions.target(point)
-    if (!plan.start) setPlacing('start')
-  }
 
   onMapClickRef.current = ({ siteId, point }) => {
     if (tool && point) return toolClickRef.current?.(point)
@@ -1099,17 +1088,6 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   const closeProbe = useCallback(() => setProbe(null), [])
   // Handles are the start, the stops and the target, as moveVertex counts them.
   onMoveVertexRef.current = (index, point) => setPlan((current) => moveVertex(current, index, point))
-
-  // A site sets the start: the rover's last position, or the landing point.
-  const chooseSite = (id) => {
-    const chosen = SITES.find((s) => s.id === id)
-    const point = chosen.traverse ? chosen.traverse.position : [chosen.lat, chosen.lon]
-    const far = !plan.target || distance(plan.target, point) > NEW_PLAN_DISTANCE
-    startAt(point, chosen.traverse ? `${chosen.name} · sol ${chosen.traverse.lastSol}` : chosen.name)
-    if (id !== site?.id) onSite(id)
-    setFocus({ point })
-    setPlacing(far ? 'target' : null)
-  }
 
   useEffect(() => {
     if (!placing) return
@@ -1339,7 +1317,6 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
           onWhen={(when) => setPlan((current) => ({ ...current, when }))}
           terrainDetail={terrainDetail}
           onPlacing={setPlacing}
-          onSite={chooseSite}
           onRemoveWaypoint={(index) => setPlan((current) => removeWaypoint(current, index))}
           onLimits={setLimits}
           onRetry={() => setProfileAttempt((attempt) => attempt + 1)}
@@ -1352,7 +1329,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
             maxSlope: assessment.maxSlope,
             verdict: assessment.verdict,
           }) : null}
-          missionSites={missionPanel?.({ placing, onPlacing: setPlacing, onRouteTo: routeTo })}
+          missionSites={missionPanel?.({ placing, onPlacing: setPlacing, start: plan.start, target: plan.target, onStart: startAt, onTarget: actions.target })}
           missionFlag={mission?.flag ?? null}
           missionFocus={missionSelected}
         />

@@ -22,7 +22,7 @@ func TestPackPlanUnpack(t *testing.T) {
 
 	code, out, _ := cli("pack", examples+"ares-3.json", "--roster", examples+"roster.json", "-o", file)
 	data, err := os.ReadFile(file)
-	if code != 0 || err != nil || len(data) != 225 || !strings.Contains(out, "PACKET  225 bytes") {
+	if code != 0 || err != nil || len(data) != 268 || !strings.Contains(out, "PACKET  268 bytes") {
 		t.Fatalf("pack: code %d, %d bytes, %v\n%s", code, len(data), err, out)
 	}
 

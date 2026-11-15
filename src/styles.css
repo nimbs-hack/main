@@ -585,5 +585,5 @@ button {
 /* Alert values carry a shape as well as a color, since color alone may not
    carry critical meaning (NASA-STD-3001 Vol 2, V2 10045). Filled triangle
    for over a limit, outline for near one. */
-:is(.plan__box.is-hazard > output, .profile__stats dd.is-hazard, .routes span.is-hazard, .tools__row dd.is-hazard, .pointmenu__terrain span.is-hazard, .crew-needs span.is-hazard)::before { content: "▲\00a0"; }
-:is(.plan__box.is-caution > output, .profile__stats dd.is-caution, .routes span.is-caution, .tools__row dd.is-caution, .pointmenu__terrain span.is-caution, .crew-needs span.is-caution)::before { content: "△\00a0"; }
+:is(.plan__box.is-hazard > output, .profile__stats dd.is-hazard, .routes span.is-hazard, .tools__row dd.is-hazard, .pointmenu__terrain span.is-hazard, .crew-needs span.is-hazard, .evatime :is(.readout__value, .evatime__time, .evatime__facts dd, .evatime__reasons li).is-hazard)::before { content: "▲\00a0"; }
+:is(.plan__box.is-caution > output, .profile__stats dd.is-caution, .routes span.is-caution, .tools__row dd.is-caution, .pointmenu__terrain span.is-caution, .crew-needs span.is-caution, .evatime :is(.readout__value, .evatime__time, .evatime__facts dd, .evatime__reasons li).is-caution)::before { content: "△\00a0"; }

@@ -2,8 +2,6 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { distance } from '../data/geo'
 import { DEFAULT_PRESET, PRESETS, SUIT, WALK_BACK_REFERENCE, formatDuration, isGenerated, presetFor, userWaypoints } from '../data/plan'
 import { slopeLevel } from '../data/route-profile'
-import { SITES } from '../data/sites'
-import { formatLatLon } from '../format'
 import { formatDistance, formatSlope } from './RouteProfile'
 import { ageDays, celsius, formatAge } from '../data/weather'
 import { CME_MARGIN, formatFrom, formatWhen, strength } from '../data/space-weather'
@@ -11,9 +9,10 @@ import { COARSE_DETAIL, detailLabel } from '../data/terrain-detail'
 import './plan-panel.css'
 
 /*
- * EVA settings laid out like a 3D-printer slicer's settings panel. A site
- * block on top, then a limits block with a preset picker, an Advanced
- * switch and a search. The icon rail picks one tab of settings at a time,
+ * EVA settings laid out like a 3D-printer slicer's settings panel: a limits
+ * block with a preset picker, an Advanced switch and a search. The route's
+ * start and target are set from the map's right-click menu or from a
+ * mission site. The icon rail picks one tab of settings at a time,
  * and the tab shows only its own groups, so you focus on one concern.
  * Search looks across all tabs. A dot on a rail icon flags a tab with a
  * problem. The verdict and Walk it button sit in a dock at the bottom,
@@ -25,7 +24,7 @@ import './plan-panel.css'
  *               ripples as a share of pace }
  *   assessment  result of assess() in src/data/plan.ts, or null
  *   status      profile sampling: 'idle' | 'loading' | 'ready' | 'error'
- *   placing     'start' | 'target' | 'waypoint' | null, what a map click does
+ *   placing     'waypoint' | 'site' | null, what a map click does
  *   dose        { site, when, measurement } for the radiation reference
  *   weather     nearest rover station: { report, distance, estimate, atHigh },
  *               estimates in pascals scaled to the start and highest point
@@ -34,7 +33,7 @@ import './plan-panel.css'
  *   when        planned EVA start, UTC ISO string, or null for now
  *   terrainDetail { finest, coarsest, coarse } in meters under the route
  *   onWhen(iso | null)
- *   onPlacing(mode), onSite(id), onRemoveWaypoint(index), onLimits(limits),
+ *   onPlacing(mode), onRemoveWaypoint(index), onLimits(limits),
  *   onRetry(), onWalk(), onClear()
  *   onAddToMission  adds this EVA to the mission. Null while there is no
  *                   assessed route, undefined when no mission is open.
@@ -208,43 +207,6 @@ function minutes(seconds) {
   return Math.round(seconds / 60)
 }
 
-function SiteCard({ plan, placing, onPlacing, onSite }) {
-  const siteId = SITES.find((s) => plan.startName?.startsWith(s.name))?.id ?? ''
-  const pick = (mode) => onPlacing(placing === mode ? null : mode)
-  return (
-    <section className="plan__card" aria-label="Site">
-      <h2 className="plan__card-title"><Icon name="site" />Site</h2>
-      <div className="plan__line">
-        <label className="plan__line-label" htmlFor="plan-site">Start</label>
-        <select
-          id="plan-site"
-          className="plan__select"
-          value={siteId}
-          onChange={(event) => event.target.value && onSite(event.target.value)}
-        >
-          <option value="">{plan.start ? 'Custom point' : 'Choose a site'}</option>
-          {SITES.map((s) => (
-            <option key={s.id} value={s.id}>{s.name} · {s.traverse ? `sol ${s.traverse.lastSol}` : s.landed}</option>
-          ))}
-        </select>
-        <button type="button" className="plan__tool" aria-pressed={placing === 'start'} onClick={() => pick('start')} aria-label="Pick start on map" title="Pick start on map">
-          <Icon name="pick" />
-        </button>
-      </div>
-      <div className="plan__line">
-        <span className="plan__line-label">Target</span>
-        <span className={`plan__select plan__select--static${plan.target ? '' : ' is-empty'}`}>
-          {placing === 'target' ? 'Click the map · Esc' : plan.target ? formatLatLon(...plan.target) : 'Not set'}
-        </span>
-        <button type="button" className="plan__tool" aria-pressed={placing === 'target'} disabled={!plan.start} onClick={() => pick('target')} aria-label="Pick target on map" title="Pick target on map">
-          <Icon name="pick" />
-        </button>
-      </div>
-      {placing === 'start' && <p className="plan__placing">Click the map to set the start. Esc cancels.</p>}
-    </section>
-  )
-}
-
 const BASE_KEY = 'nimbs.plan-b.preset'
 
 function loadBase() {
@@ -314,7 +276,7 @@ function stopIndex(plan, i) {
 
 export default function PlanPanel({
   plan, limits, assessment, status, placing, dose, weather, space, when, terrainDetail,
-  onWhen, onPlacing, onSite, onRemoveWaypoint, onLimits, onRetry, onWalk, onClear, onAddToMission,
+  onWhen, onPlacing, onRemoveWaypoint, onLimits, onRetry, onWalk, onClear, onAddToMission,
   missionSites, missionFlag = null, missionFocus = -1,
 }) {
   const searchId = useId()
@@ -501,8 +463,6 @@ export default function PlanPanel({
       </div>
 
       <div className="plan__main">
-        <SiteCard plan={plan} placing={placing} onPlacing={onPlacing} onSite={onSite} />
-
         {showMission && (
           <section className="plan__card plan__card--limits" aria-label="Mission sites">
             <div className="plan__scroll" id="plan-panel" role="tabpanel" aria-labelledby="plan-tab-mission">
@@ -604,7 +564,7 @@ export default function PlanPanel({
             </div>
           ) : (
             <div className="plan__verdict">
-              <span>{status === 'loading' ? 'Sampling terrain…' : !plan.start ? 'Choose a start' : 'Pick a target'}</span>
+              <span>{status === 'loading' ? 'Sampling terrain…' : !plan.start ? 'Right-click the map or use a site to set a start' : 'Right-click the map or use a site to set a target'}</span>
             </div>
           )}
           <div className="plan__actions">

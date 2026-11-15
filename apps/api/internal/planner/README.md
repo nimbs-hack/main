@@ -2,7 +2,7 @@
 
 Works out what a crew needs for a mission: food energy and nutrients, water, oxygen, electricity, plus the carbon dioxide and body heat the vehicle has to deal with. It starts from one profile per astronaut and a description of the mission.
 
-The mission travels as a single small binary file. A six-person Mars mission with three sites and six tasks is 225 bytes.
+The mission travels as a single small binary file. A six-person Mars mission with three sites and six tasks is 268 bytes.
 
 Everything is a planning estimate built from published NASA rates. The [sources](#sources) and the [limits](#limits) are listed below.
 
@@ -131,7 +131,7 @@ Any type accepts its own `phases` list, and any phase can override any parameter
 ```json
 {
   "type": "custom",
-  "crew": ["NAKAMURA", "OKAFOR"],
+  "crew": ["Jessica Meir", "Victor Glover"],
   "phases": [
     { "kind": "rover", "days": 10, "evaHoursPerWeek": 28, "basePowerW": 1500 },
     { "kind": "custom", "days": 2, "hygieneWaterKg": 0.4 }
@@ -212,13 +212,13 @@ Curiosity's relay link through the Mars orbiters runs the CCSDS Proximity-1 prot
 
 Size matters because the direct link from Earth is slow. Rates from the MSL telecom design summary:
 
-| Link | Rate | 225-byte mission |
+| Link | Rate | 268-byte mission |
 | --- | --- | --- |
-| X-band, low-gain antenna, safe mode at maximum range | 15 bit/s | 120 s |
-| X-band, high-gain antenna, typical | 1,000 bit/s | 1.8 s |
-| UHF relay through MRO, baseline forward link | 32,000 bit/s | 56 ms |
+| X-band, low-gain antenna, safe mode at maximum range | 15 bit/s | 143 s |
+| X-band, high-gain antenna, typical | 1,000 bit/s | 2.1 s |
+| UHF relay through MRO, baseline forward link | 32,000 bit/s | 67 ms |
 
-The daily command session through the high-gain antenna carries about 225 kilobits. The example mission takes 0.8% of it. These times count the file's own bits; channel coding and frame headers add to them.
+The daily command session through the high-gain antenna carries about 225 kilobits. The example mission takes 0.95% of it. These times count the file's own bits; channel coding and frame headers add to them.
 
 Nothing here has been sent over a radio. For now it is a file with the right shape.
 

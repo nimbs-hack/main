@@ -16,7 +16,7 @@ Judges will look for these things, so keep them in mind when deciding what to bu
 
 Product decisions (site, science objective, form factor, layer list) live in Notion, not here. See [Context](#context).
 
-The app is a mission planner laid out like a 3D printer slicer: stage tabs across the top, one per planning step. Home lists the mission files. A mission is made on four stages: Crew, Phases, Sites and Review. Its name, type and margin are edited in the top bar. Sites is the EVA map, with route planning, map tools and science layers. The mission's sites and tasks are the first tab of the map's plan panel. The EVA route stays separate from the site list: Route here makes a site the route's target, and Add EVA to mission records an assessed route as a site and a task, whose hours the planner then counts.
+The app is a mission planner laid out like a 3D printer slicer: stage tabs across the top, one per planning step. Home lists the mission files. A mission is made on four stages: Crew, Phases, Sites and Review. Its name, type and margin are edited in the top bar. Sites is the EVA map, with route planning, map tools and science layers. The mission's sites and tasks are the first tab of the map's plan panel. The EVA route stays separate from the site list: Start here and Target here on a site, or the right-click menu, set the route's ends, and Add EVA to mission records an assessed route as a site and a task, whose hours the planner then counts.
 
 ## Context
 

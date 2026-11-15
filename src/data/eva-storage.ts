@@ -53,3 +53,15 @@ export function saveEva(missionId: string | undefined, eva: SavedEva, storage: S
     // A blocked or full browser store must not interrupt editing.
   }
 }
+
+// Sent when another page sets the EVA start, so an open map picks it up.
+export const EVA_START_EVENT = 'nimbs:eva-start'
+export type EvaStartDetail = { missionId?: string, when: string | null }
+
+// Sets the Schedule start of a mission's EVA. `when` is a UTC ISO string,
+// or null for now.
+export function setEvaStart(missionId: string | undefined, when: string | null, storage: Storage = localStorage): void {
+  const eva = loadEva(missionId, storage)
+  saveEva(missionId, { ...eva, plan: { ...eva.plan, when } }, storage)
+  window.dispatchEvent(new CustomEvent<EvaStartDetail>(EVA_START_EVENT, { detail: { missionId, when } }))
+}

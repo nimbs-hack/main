@@ -3,6 +3,10 @@ import { kcal, kwh, meters, num, range, words } from '../numbers'
 import { siteLegs, totalLegs } from './legs'
 import { Readout } from '../components/controls'
 import { FactRow } from './parts'
+import { lazy, Suspense } from 'react'
+
+// Its own chunk, so the HUD page, which shares hud-snapshot, never loads the editor.
+const EvaTime = lazy(() => import('./EvaTime').then((m) => ({ default: m.EvaTime })))
 
 const SECONDS_PER_DAY = 86400
 
@@ -101,6 +105,7 @@ export function ReviewStep({
   onExportJson,
   selectedSite,
   onSite,
+  missionId,
 }: {
   catalog: Catalog
   planned: Planned
@@ -112,6 +117,8 @@ export function ReviewStep({
   // The site shown as selected on the globe beside this page.
   selectedSite: number
   onSite: (index: number) => void
+  // Key of the mission's EVA plan in browser storage, as the Sites page uses it.
+  missionId: string
 }) {
   const { mission, plan, cautions: warnings } = planned
   const legs = siteLegs(mission.sites)
@@ -132,6 +139,10 @@ export function ReviewStep({
             ))}
           </ul>
         )}
+
+        <Suspense fallback={null}>
+          <EvaTime missionId={missionId} sites={mission.sites} tasks={mission.tasks} selectedSite={selectedSite} />
+        </Suspense>
 
         <section>
           <h2 className="planner__title">To supply, {plan.marginPercent}% margin included</h2>

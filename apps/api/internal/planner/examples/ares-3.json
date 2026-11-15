@@ -3,12 +3,12 @@
   "name": "ARES-3",
   "type": "mars-long-stay",
   "crew": [
-    "VEGA",
-    "ORLOV",
-    "NAKAMURA",
-    "OKAFOR",
-    "LINDQVIST",
-    "REYES"
+    "Christina Koch",
+    "Robert Hines",
+    "Jessica Meir",
+    "Victor Glover",
+    "Kjell Lindgren",
+    "Jessica Watkins"
   ],
   "sites": [
     {
@@ -31,7 +31,7 @@
     {
       "site": "BASE",
       "phase": 1,
-      "crew": "ORLOV",
+      "crew": "Robert Hines",
       "kind": "repair",
       "hours": 6,
       "note": "antenna mast"
@@ -39,7 +39,7 @@
     {
       "site": "BASE",
       "phase": 1,
-      "crew": "LINDQVIST",
+      "crew": "Kjell Lindgren",
       "kind": "other",
       "hours": 4,
       "eva": false,
@@ -48,21 +48,21 @@
     {
       "site": "SITE-A",
       "phase": 1,
-      "crew": "NAKAMURA",
+      "crew": "Jessica Meir",
       "kind": "sample",
       "hours": 8
     },
     {
       "site": "SITE-A",
       "phase": 1,
-      "crew": "OKAFOR",
+      "crew": "Victor Glover",
       "kind": "survey",
       "hours": 8
     },
     {
       "site": "SITE-B",
       "phase": 1,
-      "crew": "OKAFOR",
+      "crew": "Victor Glover",
       "kind": "drill",
       "hours": 12,
       "note": "2 m core"
@@ -70,7 +70,7 @@
     {
       "site": "SITE-B",
       "phase": 1,
-      "crew": "REYES",
+      "crew": "Jessica Watkins",
       "kind": "image",
       "hours": 4
     }

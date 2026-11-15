@@ -105,16 +105,16 @@ func TestTheFileStaysSmall(t *testing.T) {
 	mission := bare(t)
 	data := encode(t, mission)
 	// 6 header, 6 mission, 7 name, 6 crew at 7 bytes plus names, 3 phases at 4, 2 checksum.
-	if len(data) != 112 {
-		t.Errorf("bare mission is %d bytes, want 112", len(data))
+	if len(data) != 155 {
+		t.Errorf("bare mission is %d bytes, want 155", len(data))
 	}
 	asJSON, _ := json.Marshal(mission)
-	if len(asJSON)/len(data) < 10 {
+	if len(asJSON)/len(data) < 8 {
 		t.Errorf("JSON is only %d bytes against %d", len(asJSON), len(data))
 	}
-	// Three sites and six tasks, two of them with notes, double it.
-	if got := len(encode(t, example(t, "ares-3.json"))); got != 225 {
-		t.Errorf("example mission is %d bytes, want 225", got)
+	// Three sites and six tasks, two of them with notes, add 113 bytes.
+	if got := len(encode(t, example(t, "ares-3.json"))); got != 268 {
+		t.Errorf("example mission is %d bytes, want 268", got)
 	}
 }
 
@@ -350,7 +350,7 @@ func TestPlanRoute(t *testing.T) {
 	if err := json.Unmarshal(raw, &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Plan.Days != 960 || response.FileBytes != 225 || len(response.Links) != 3 || len(response.Cautions) != 1 || !strings.Contains(response.Cautions[0], "1,064 mSv") {
+	if response.Plan.Days != 960 || response.FileBytes != 268 || len(response.Links) != 3 || len(response.Cautions) != 1 || !strings.Contains(response.Cautions[0], "1,064 mSv") {
 		t.Errorf("days %d, file %d bytes, %d links, cautions %v", response.Plan.Days, response.FileBytes, len(response.Links), response.Cautions)
 	}
 	file, err := base64.StdEncoding.DecodeString(response.File)

@@ -1,8 +1,8 @@
 {
-  "note": "Fictional sample crew. No real people.",
+  "note": "Real NASA astronaut names and portraits with fictional mission roles and planning inputs. Ages, measurements and assignments are illustrative, not biographical data. Portrait credits: src/assets/crew/README.md.",
   "astronauts": [
     {
-      "name": "VEGA",
+      "name": "Christina Koch",
       "sex": "female",
       "age": 41,
       "massKg": 63.5,
@@ -10,7 +10,7 @@
       "role": "commander"
     },
     {
-      "name": "ORLOV",
+      "name": "Robert Hines",
       "sex": "male",
       "age": 38,
       "massKg": 84,
@@ -18,7 +18,7 @@
       "role": "pilot"
     },
     {
-      "name": "NAKAMURA",
+      "name": "Jessica Meir",
       "sex": "female",
       "age": 35,
       "massKg": 58.2,
@@ -27,7 +27,7 @@
       "evaShare": 1.5
     },
     {
-      "name": "OKAFOR",
+      "name": "Victor Glover",
       "sex": "male",
       "age": 44,
       "massKg": 91.3,
@@ -37,7 +37,7 @@
       "evaShare": 1.5
     },
     {
-      "name": "LINDQVIST",
+      "name": "Kjell Lindgren",
       "sex": "male",
       "age": 52,
       "massKg": 77,
@@ -46,7 +46,7 @@
       "evaShare": 0
     },
     {
-      "name": "REYES",
+      "name": "Jessica Watkins",
       "sex": "female",
       "age": 33,
       "massKg": 70.4,
@@ -54,7 +54,7 @@
       "role": "mission-specialist"
     },
     {
-      "name": "HADDAD",
+      "name": "Frank Rubio",
       "sex": "male",
       "age": 36,
       "massKg": 80.5,
@@ -63,7 +63,7 @@
       "activity": "low"
     },
     {
-      "name": "KOWALSKI",
+      "name": "Kathleen Rubins",
       "sex": "female",
       "age": 47,
       "massKg": 66,

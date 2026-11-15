@@ -9,6 +9,17 @@ const WHERE = ['eva', 'inside'] as const
 // The mission file counts the people on a task after the first in four bits.
 const MOST_ON_A_TASK = 16
 
+type Point = [number, number] | null
+
+const at = (point: Point, site: Site): boolean => point !== null && point[0] === site.lat && point[1] === site.lon
+
+// Which end of the EVA route a site is, for its row.
+function role(site: Site, start: Point, target: Point): string {
+  const isStart = at(start, site)
+  const isTarget = at(target, site)
+  return isStart && isTarget ? 'Start and target' : isStart ? 'Start' : isTarget ? 'Target' : ''
+}
+
 export function SitesStep({
   catalog,
   draft,
@@ -17,7 +28,10 @@ export function SitesStep({
   onSelect,
   placing,
   onPlacing,
-  onRouteTo,
+  routeStart,
+  routeTarget,
+  onStart,
+  onTarget,
   onUpdateSite,
   onRemoveSite,
   onAddTask,
@@ -31,8 +45,12 @@ export function SitesStep({
   onSelect: (selection: Selection) => void
   placing: boolean
   onPlacing: (placing: boolean) => void
-  // Makes the site the target of the EVA route.
-  onRouteTo: (site: Site) => void
+  // The ends of the EVA route, as [lat, lon], or null.
+  routeStart: Point
+  routeTarget: Point
+  // Make the site the start or the target of the EVA route.
+  onStart: (site: Site) => void
+  onTarget: (site: Site) => void
   onUpdateSite: (index: number, patch: Partial<Site>, field: string) => void
   onRemoveSite: (index: number) => void
   onAddTask: (site: number) => void
@@ -56,16 +74,17 @@ export function SitesStep({
           const tasks = draft.tasks.map((task, index) => ({ task, index })).filter(({ task }) => task.site === i)
           const hours = tasks.reduce((sum, { task }) => sum + task.hours, 0)
           const validPosition = !Number.isNaN(site.lat) && !Number.isNaN(site.lon)
+          const end = role(site, routeStart, routeTarget)
+          const work =
+            tasks.length === 0
+              ? 'no task'
+              : `${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}, ${num(hours, 1)} h`
           return (
             <Row
               key={i}
               index={i + 1}
               name={site.name || 'Unnamed'}
-              meta={
-                tasks.length === 0
-                  ? 'no task'
-                  : `${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}, ${num(hours, 1)} h`
-              }
+              meta={end ? `${end}, ${work}` : work}
               open={isOpen(selection, 'site', i)}
               onToggle={() => onSelect(isOpen(selection, 'site', i) ? null : { list: 'site', index: i })}
             >
@@ -177,14 +196,23 @@ export function SitesStep({
               </ul>
 
               <div className="actions">
-                <Button onClick={() => onAddTask(i)}>Add task</Button>
                 <Button
+                  aria-pressed={at(routeStart, site)}
                   disabled={!validPosition}
-                  title="Makes this site the EVA target. The Route tab assesses the walk"
-                  onClick={() => onRouteTo(site)}
+                  title="The EVA route starts here"
+                  onClick={() => onStart(site)}
                 >
-                  Route here
+                  Start here
                 </Button>
+                <Button
+                  aria-pressed={at(routeTarget, site)}
+                  disabled={!validPosition}
+                  title="The EVA route ends here. The Route tab assesses the walk"
+                  onClick={() => onTarget(site)}
+                >
+                  Target here
+                </Button>
+                <Button onClick={() => onAddTask(i)}>Add task</Button>
                 <Button className="button--remove" onClick={() => onRemoveSite(i)}>
                   Remove site{tasks.length > 0 ? ` and ${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}` : ''}
                 </Button>

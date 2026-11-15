@@ -90,10 +90,35 @@ const isProfile = (value: unknown): value is Astronaut =>
   typeof (value as Astronaut).sex === 'string' &&
   typeof (value as Astronaut).massKg === 'number'
 
-// The roster starts with the planner's fictional sample crew.
-export function loadRoster(catalog: Catalog): Astronaut[] {
+// Replace the former sample names while keeping edited planning inputs.
+const FORMER_CREW = new Map([
+  ['VEGA', 'Christina Koch'],
+  ['ORLOV', 'Robert Hines'],
+  ['NAKAMURA', 'Jessica Meir'],
+  ['OKAFOR', 'Victor Glover'],
+  ['LINDQVIST', 'Kjell Lindgren'],
+  ['REYES', 'Jessica Watkins'],
+  ['HADDAD', 'Frank Rubio'],
+  ['KOWALSKI', 'Kathleen Rubins'],
+])
+
+// Names and portraits are NASA astronauts; their planning inputs are examples.
+export function loadRoster(catalog: Pick<Catalog, 'sampleRoster'>): Astronaut[] {
   const saved = stored(ROSTER_KEY)
-  return Array.isArray(saved) ? saved.filter(isProfile) : catalog.sampleRoster
+  if (!Array.isArray(saved)) return catalog.sampleRoster
+  const roster = saved.filter(isProfile)
+  const names = new Set(roster.map((person) => person.name))
+  return roster.flatMap((person) => {
+    const name = FORMER_CREW.get(person.name)
+    if (!name) return [person]
+    // Keep an existing profile under the new name instead of duplicating it.
+    return names.has(name) ? [] : [{ ...person, name }]
+  })
+}
+
+function isRetiredExample(mission: unknown): boolean {
+  return typeof mission === 'object' && mission !== null && 'name' in mission
+    && typeof mission.name === 'string' && mission.name.trim().toUpperCase() === 'ARES-3'
 }
 
 // A mission file kept on the home page: made here, or received as a file.
@@ -132,7 +157,7 @@ const isEntry = (value: unknown): value is LibraryEntry => {
 // from a library the user emptied.
 export function loadLibrary(): LibraryEntry[] | undefined {
   const saved = stored(LIBRARY_KEY)
-  return Array.isArray(saved) ? saved.filter(isEntry).map(withCrewLists) : undefined
+  return Array.isArray(saved) ? saved.filter(isEntry).filter((entry) => !isRetiredExample(entry.mission)).map(withCrewLists) : undefined
 }
 
 // A task kept before tasks could have several people has one person or null.
@@ -163,7 +188,10 @@ export const storedCurrent = (): string | null => {
 }
 
 // The mission in progress from an earlier version, unchecked.
-export const storedDraft = (): unknown => stored(DRAFT_KEY)
+export const storedDraft = (): unknown => {
+  const draft = stored(DRAFT_KEY)
+  return isRetiredExample(draft) ? undefined : draft
+}
 
 function freeName(taken: string[], prefix: string): string {
   for (let n = taken.length + 1; ; n++) {

@@ -314,6 +314,16 @@ The Go planner multiplies days by a dose rate per phase (`apps/api/internal/plan
 We do not estimate storm doses. The EVA dose stays the quiet-sun Curiosity RAD average, and the UI says so.
 
 
+## Sun position and best EVA start
+
+`src/data/mars-time.ts` ports NASA GISS's [Mars24 algorithm](https://www.giss.nasa.gov/tools/mars24/help/algorithm.html) (Allison and McEwen 2000): season Ls, solar declination, equation of time, local solar time and Sun elevation. It matches the algorithm's worked example for 2000-01-06 and puts sunrise at Gale within two minutes of the 06:46 LMST that REMS reported on sol 4995. It ignores refraction, dust and terrain, so a crater wall can shade a spot the model calls lit.
+
+`src/data/eva-window.ts` searches the next 7 sols in 10 minute steps for starts where the Sun is up from the start to an hour after the end. The hour is a planning assumption. Each start is checked against the CME forecast as above, and among equals the warmest wins. Temperatures are the nearest station's latest low and high laid on an assumed daily curve, coldest at sunrise and warmest at 14:00 (air) or 13:00 (ground) local solar time. They are estimates, not forecasts, and every sol uses the same reading. The feeds carry no wind, so wind shows as no data.
+
+## Crew portraits
+
+Eight NASA Image and Video Library portraits replace the movie photos. Names, NASA image IDs, credits, source URLs, original dimensions and square display crops are recorded in `src/assets/crew/sources.json` and `src/assets/crew/README.md`. These are studio portraits, not instrument or terrain data. The bundled SVG files embed the original JPEGs. `bun scripts/fetch-crew-portraits.ts` restores them. Reuse terms are linked in the portrait README. The astronauts' mission assignments and body measurements in the sample roster are fictional planning inputs.
+
 ## Yellowknife Bay example mission references
 
 The briefing in `apps/api/internal/planner/examples/yellowknife-science.json` records seven references and their limits. The packed `.mhr` preserves the same text. These are manually reviewed references, not new runtime layers; no image products are downloaded or bundled.

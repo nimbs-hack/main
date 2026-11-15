@@ -25,8 +25,12 @@ interface Eva {
 interface MapHooks {
   placing: string | null
   onPlacing: (mode: string | null) => void
-  // Planetocentric latitude and east longitude, -180 to 180.
-  onRouteTo: (point: [number, number]) => void
+  // The ends of the EVA route, or null. Points are planetocentric latitude
+  // and east longitude, -180 to 180.
+  start: [number, number] | null
+  target: [number, number] | null
+  onStart: (point: [number, number], name: string) => void
+  onTarget: (point: [number, number]) => void
 }
 
 // MarsGlobe is plain JavaScript. These are the props this page relies on.
@@ -147,7 +151,7 @@ export function SitesPage({
         onScienceSource={setScienceCredit}
         onViewer={setViewer}
         mission={mission}
-        missionPanel={({ placing, onPlacing, onRouteTo }: MapHooks) => (
+        missionPanel={({ placing, onPlacing, start, target, onStart, onTarget }: MapHooks) => (
           <div className="sites" onBlur={onSettle}>
             <SitesStep
               catalog={catalog}
@@ -157,7 +161,10 @@ export function SitesPage({
               onSelect={onSelect}
               placing={placing === 'site'}
               onPlacing={(on) => onPlacing(on ? 'site' : null)}
-              onRouteTo={(entry) => onRouteTo([entry.lat, entry.lon])}
+              routeStart={start}
+              routeTarget={target}
+              onStart={(entry) => onStart([entry.lat, entry.lon], entry.name)}
+              onTarget={(entry) => onTarget([entry.lat, entry.lon])}
               onUpdateSite={onUpdateSite}
               onRemoveSite={onRemoveSite}
               onAddTask={onAddTask}

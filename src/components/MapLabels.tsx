@@ -1,10 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { BoundingSphere, Cartesian2, Cartesian3, Cartographic, EllipsoidalOccluder, HeadingPitchRange, type Viewer } from 'cesium'
 import type { LatLon } from '../data/geo'
 import { DATUM_OFFSET } from '../data/terrain.js'
 import { symbolImage } from '../data/markers'
 import { clusterAnchors, leaderPath, placeMapLabels, type LabelAnchor, type Offset, type PlacedLabel, type Rect } from './map-label-layout'
 import './map-labels.css'
+import CrewReadout from './CrewReadout'
 
 export type MapLabel = {
   id: string
@@ -67,6 +68,8 @@ function countText(rows: { item: MapLabel }[]) {
 // HTML rows make the names readable, clickable and keyboard accessible.
 export default function MapLabels({ viewer, items }: { viewer: Viewer | null; items: MapLabel[] }) {
   const root = useRef<HTMLDivElement>(null)
+  const [crew, setCrew] = useState<{ item: MapLabel; trigger: HTMLButtonElement } | null>(null)
+  const closeCrew = useCallback(() => setCrew(null), [])
   useEffect(() => {
     const element = root.current
     if (!element || !viewer || viewer.isDestroyed()) return
@@ -85,6 +88,8 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
       button.setAttribute('aria-label', item.text)
       if (item.selected !== undefined) button.setAttribute('aria-pressed', String(item.selected))
       if (item.kind === 'crew') {
+        button.setAttribute('aria-haspopup', 'dialog')
+        button.setAttribute('aria-expanded', 'false')
         const initials = document.createElement('span')
         initials.className = 'map-label__portrait map-label__initials'
         initials.textContent = item.text.slice(0, 2)
@@ -118,7 +123,10 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
       linkHover(button, line, svg)
       const location = Cartographic.fromDegrees(item.point[1], item.point[0], DATUM_OFFSET)
       const row = { item, button, line, pin, location, terrainHeight: DATUM_OFFSET, width: Math.min(320, button.scrollWidth + 8), position: new Cartesian3(), screen: { x: 0, y: 0 } }
-      button.onclick = () => item.onSelect?.(row.screen)
+      button.onclick = () => {
+        if (item.kind === 'crew') setCrew({ item, trigger: button })
+        else item.onSelect?.(row.screen)
+      }
       button.oncontextmenu = (event) => {
         if (!item.onContext) return
         event.preventDefault()
@@ -213,7 +221,7 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
       if (!width || !height) return
       const stageBox = stage.getBoundingClientRect()
       const obstacles: Rect[] = []
-      for (const node of stage.querySelectorAll('.nav, .routes, .profile, .readout, .switcher, .pointmenu, .tools')) {
+      for (const node of stage.querySelectorAll('.nav, .routes, .profile, .readout, .switcher, .pointmenu, .tools, .crew-readout')) {
         const box = node.getBoundingClientRect()
         if (box.width && box.height) obstacles.push({ x: box.left - stageBox.left, y: box.top - stageBox.top, width: box.width, height: box.height })
       }
@@ -294,8 +302,12 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
       removeMove()
       removeMoveStart()
       removeRender()
+      setCrew(null)
       element.replaceChildren()
     }
   }, [viewer, items])
-  return <div className="map-labels" ref={root} aria-label="Map locations" />
+  return <>
+    <div className="map-labels" ref={root} aria-label="Map locations" />
+    {crew && viewer && <CrewReadout key={crew.item.id} name={crew.item.text} trigger={crew.trigger} viewer={viewer} onClose={closeCrew} />}
+  </>
 }

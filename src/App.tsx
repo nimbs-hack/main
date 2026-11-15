@@ -144,8 +144,7 @@ async function planStored(mission: unknown): Promise<Planned | undefined> {
 async function start(): Promise<Start> {
   const catalog = await fetchCatalog()
   const kept = loadLibrary()
-  // A first run starts with the example mission as its one file.
-  let library = kept ?? [newEntry(catalog.example, 'saved')]
+  let library = kept ?? []
   let fileId = storedCurrent()
 
   // The mission in progress of an earlier version becomes a file, and stays open.
@@ -732,6 +731,7 @@ function Editor({ catalog, planned: opening, library: kept, fileId: openingId }:
                 onExportJson={exportJson}
                 selectedSite={selection?.list === 'site' ? selection.index : -1}
                 onSite={(index) => setSelection({ list: 'site', index })}
+                missionId={fileId ?? 'draft'}
               />
             </aside>
             <Suspense fallback={mapLoading}>
