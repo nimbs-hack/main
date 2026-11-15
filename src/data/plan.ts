@@ -1,9 +1,11 @@
 import { cumulative, distance } from './geo'
 import type { LatLon } from './geo'
+import type { Ground } from './ground'
 import { slopeLevel } from './route-profile'
 import { COARSE_DETAIL, detailLabel } from './terrain-detail'
 import type { ProfileSample } from './route-profile'
 import { SLOPE_BASELINE } from './terrain-sample'
+import { formatDuration } from './duration'
 
 // An EVA plan: walk from start through the waypoints to the target, work
 // there, then walk the same path back. Coordinates are planetocentric
@@ -28,7 +30,8 @@ export type Plan = {
 
 // SI units: degrees for slope, m/s for the three speeds, seconds for time,
 // meters for range. `pace` is speed over flat ground. `climb` and `descent`
-// are vertical rates, meters of height per second.
+// are vertical rates, meters of height per second. `rocks` and `ripples`
+// are the share of `pace` kept on that ground, from 0 to 1.
 export type Limits = {
   slope: number
   pace: number
@@ -37,6 +40,8 @@ export type Limits = {
   eva: number
   work: number
   range: number
+  rocks: number
+  ripples: number
 }
 
 export const EMPTY_PLAN: Plan = { start: null, target: null, waypoints: [] }
@@ -59,12 +64,21 @@ export const WALK_BACK_REFERENCE = 10_000
 // The other three came with the route planner. Their slope limits follow
 // lunar traverse studies, and they use the algorithms branch's default
 // climb and descent rates.
+//
+// Speed on rough ground is the same share of the flat speed in every preset.
+// Ripples are loose sand. Soule and Goldman (J Appl Physiol 1972) measured
+// walking on loose sand at 2.1 times the energy of a paved road, and at the
+// same effort that is 1 / sqrt(2.1) of the speed, by the speed-squared term
+// of the Pandolf load carriage equation. The share on rocks is ASSUMED: no
+// suited walking speed over rocks is published.
+export const ROUGH_PACE = { rocks: 0.5, ripples: 0.69 }
+
 export const PRESETS: { id: string, name: string, limits: Limits }[] = [
-  { id: 'human', name: 'Human, EVA suit', limits: { slope: 7, pace: perHour(2500), climb: perHour(350), descent: perHour(800), eva: 4 * 3600, work: 60 * 60, range: 3000 } },
-  { id: 'rover', name: 'Rover, pressurized', limits: { slope: 15, pace: perHour(5000), climb: perHour(700), descent: perHour(1200), eva: 8 * 3600, work: 60 * 60, range: WALK_BACK_REFERENCE } },
-  { id: 'conservative', name: 'Conservative', limits: { slope: 15, pace: 0.7, climb: perHour(350), descent: perHour(800), eva: 3 * 3600, work: 45 * 60, range: 1500 } },
-  { id: 'nominal', name: 'Nominal', limits: { slope: 20, pace: 0.85, climb: perHour(350), descent: perHour(800), eva: 4 * 3600, work: 60 * 60, range: 3000 } },
-  { id: 'extended', name: 'Extended', limits: { slope: 25, pace: 1, climb: perHour(350), descent: perHour(800), eva: 6 * 3600, work: 90 * 60, range: 5000 } },
+  { id: 'human', name: 'Human, EVA suit', limits: { slope: 7, pace: perHour(2500), climb: perHour(350), descent: perHour(800), eva: 4 * 3600, work: 60 * 60, range: 3000, ...ROUGH_PACE } },
+  { id: 'rover', name: 'Rover, pressurized', limits: { slope: 15, pace: perHour(5000), climb: perHour(700), descent: perHour(1200), eva: 8 * 3600, work: 60 * 60, range: WALK_BACK_REFERENCE, ...ROUGH_PACE } },
+  { id: 'conservative', name: 'Conservative', limits: { slope: 15, pace: 0.7, climb: perHour(350), descent: perHour(800), eva: 3 * 3600, work: 45 * 60, range: 1500, ...ROUGH_PACE } },
+  { id: 'nominal', name: 'Nominal', limits: { slope: 20, pace: 0.85, climb: perHour(350), descent: perHour(800), eva: 4 * 3600, work: 60 * 60, range: 3000, ...ROUGH_PACE } },
+  { id: 'extended', name: 'Extended', limits: { slope: 25, pace: 1, climb: perHour(350), descent: perHour(800), eva: 6 * 3600, work: 90 * 60, range: 5000, ...ROUGH_PACE } },
 ]
 
 export const DEFAULT_PRESET = 'nominal'
@@ -140,9 +154,16 @@ export function removeWaypoint(input: Plan, index: number): Plan {
 // meters. The model of the algorithms branch (evaluateEvaWeather in
 // apps/api/src/weather/generator.ts): the distance at the flat speed, plus
 // the height gained at the climb rate, plus the height lost at the descent
-// rate.
-export function stepTime(run: number, rise: number, limits: Limits) {
-  return run / limits.pace + Math.max(0, rise) / limits.climb + Math.max(0, -rise) / limits.descent
+// rate. Rocks and ripples under the step slow the flat speed.
+export function stepTime(run: number, rise: number, limits: Limits, ground?: Ground | null) {
+  return run / groundPace(limits, ground) + Math.max(0, rise) / limits.climb + Math.max(0, -rise) / limits.descent
+}
+
+// Speed over the ground in m/s. Never faster than the flat speed, and never
+// under a twentieth of it, so a zero in a limit cannot stop the clock.
+export function groundPace(limits: Limits, ground?: Ground | null) {
+  const share = ground === 'rocks' ? limits.rocks : ground === 'ripples' ? limits.ripples : 1
+  return limits.pace * Math.min(1, Math.max(0.05, share))
 }
 
 // Seconds to travel the samples in order, or in reverse for the way back.
@@ -154,7 +175,7 @@ export function traverseTime(samples: ProfileSample[], limits: Limits, reverse =
     const run = b.d - a.d
     if (run <= 0) continue
     const rise = a.elevation !== null && b.elevation !== null ? b.elevation - a.elevation : 0
-    total += stepTime(run, reverse ? -rise : rise, limits)
+    total += stepTime(run, reverse ? -rise : rise, limits, b.ground)
   }
   return total
 }
@@ -172,6 +193,11 @@ export type Leg = {
   // on the leg in meters. Slope there is a smoothed lower bound.
   coarse: number
   coarsest: number | null
+  // Distance over rocks and over ripples seen in HiRISE, and distance where
+  // no image was read, so rocks there are unknown.
+  rocks: number
+  ripples: number
+  unchecked: number
 }
 
 // Per-leg slope stats. Leg i runs from vertex i to vertex i + 1 of the path.
@@ -194,6 +220,9 @@ export function legStats(samples: ProfileSample[], path: LatLon[], limit: number
     unknown: 0,
     coarse: 0,
     coarsest: null,
+    rocks: 0,
+    ripples: 0,
+    unchecked: 0,
   }))
   if (!legs.length) return legs
   for (let i = 1; i < samples.length; i++) {
@@ -210,6 +239,10 @@ export function legStats(samples: ProfileSample[], path: LatLon[], limit: number
       leg.coarsest = Math.max(leg.coarsest ?? 0, s.detail)
       if (s.detail > COARSE_DETAIL) leg.coarse += step
     }
+    // Undefined means the profile was built without a ground check.
+    if (s.ground === 'rocks') leg.rocks += step
+    else if (s.ground === 'ripples') leg.ripples += step
+    else if (s.ground === null) leg.unchecked += step
   }
   return legs
 }
@@ -234,12 +267,8 @@ export type Assessment = {
   suit: SuitLoad
 }
 
-export function formatDuration(seconds: number) {
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes} min`
-  const m = minutes % 60
-  return `${Math.floor(minutes / 60)} h${m ? ` ${String(m).padStart(2, '0')} min` : ''}`
-}
+// In its own file so the HUD page can use it without the terrain code.
+export { formatDuration }
 
 // ESTIMATED suit load, from [V2 11037] and [V2 11038] of NASA-STD-3001 Vol 2:
 // the system has to work out and show the suited crew's metabolic rate. We
@@ -357,6 +386,10 @@ export function assess(samples: ProfileSample[], path: LatLon[], limits: Limits,
     if (leg.coarse > 0 && leg.coarsest !== null) {
       reasons.push({ level: 'caution', text: `Leg ${leg.index}: ${meters(leg.coarse)} on ${detailLabel(leg.coarsest)} terrain` })
     }
+    // Read from image shadows, so these caution and never block.
+    if (leg.rocks > 0) reasons.push({ level: 'caution', text: `Leg ${leg.index}: ${meters(leg.rocks)} over rocks` })
+    if (leg.ripples > 0) reasons.push({ level: 'caution', text: `Leg ${leg.index}: ${meters(leg.ripples)} over ripples` })
+    if (leg.unchecked > 0) reasons.push({ level: 'caution', text: `Leg ${leg.index}: no HiRISE image for ${meters(leg.unchecked)}. Rocks unknown` })
   }
   if (total <= limits.eva && total > limits.eva * 0.85) {
     reasons.push({ level: 'caution', text: `EVA uses ${Math.round((total / limits.eva) * 100)}% of the time budget` })

@@ -14,10 +14,13 @@ const BY_NAME = new Map(
 // True when a photo of this call sign ships with the app.
 export const hasPortrait = (name: string): boolean => BY_NAME.has(name.trim().toLowerCase())
 
+// Map labels and crew tiles resolve uploaded and bundled photos the same way.
+export const portraitUrl = (name: string, photo?: string): string | undefined => photo ?? BY_NAME.get(name.trim().toLowerCase())
+
 // The photo of a crew member: the one added on the crew page, or the file
 // that ships with the app, or their first two letters when there is neither.
 export function Portrait({ name, photo }: { name: string; photo?: string }) {
-  const url = photo ?? BY_NAME.get(name.trim().toLowerCase())
+  const url = portraitUrl(name, photo)
   return url ? (
     <img className="portrait" src={url} alt={`Portrait of ${name}`} />
   ) : (

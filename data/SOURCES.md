@@ -38,7 +38,8 @@ Viking stays below CTX and at the poles. CTX starts at terrain level 6. Missing 
 - Coordinates: planetocentric latitude, east longitude -180..180, the same 2 by 1 geographic grid as Viking and CTX, rows increasing southward.
 - Terms/credit: NASA/JPL/University of Arizona, via NASA Mars Trek.
 - Fetch/cache implementation: `apps/api/internal/tiles/hirise.go`, which reuses the science tile handler. Requests go through `/api/imagery/hirise/{id}/{z}/{y}/{x}.png` and persist under `data/cache/hirise-v1/`.
-- Use: drawn above CTX only while street view is open, from terrain level 10. Outside the footprints, and where a mosaic has gaps, CTX shows through. Street view names the imagery source and terrain spacing at the camera.
+- Demo film: `output/film/hirise-stack.py` reads cached Gale level-16 tiles and downloads missing ones from the same service into `data/film/hirise-gale/`. It builds a georeferenced grayscale crop around the saved EVA route. The film keeps the ground zoom within the imagery's useful scale, then dissolves to the separately generated helmet scene.
+- Use: drawn above CTX only while street view is open, from terrain level 10. Outside the footprints, and where a mosaic has gaps, CTX shows through. Street view names the imagery source and terrain spacing at the camera. The route planner also reads these tiles for rocks and ripples, see [Rocks and ripples from HiRISE](#rocks-and-ripples-from-hirise).
 
 ## Mars Trek terrain
 
@@ -258,6 +259,35 @@ Mars Trek's terrain tileset (`mars_v14`) only has deep levels where a high resol
 - Legs on terrain coarser than 20 m are a caution. That threshold is a planning assumption.
 
 Where a fine model meets the global one, Trek left vertical walls (about 357 m around Curiosity). The renderer smooths them, but slopes sampled across a seam are not real. The coarse-terrain caution covers most of these crossings.
+
+## Rocks and ripples from HiRISE
+
+Derived in the browser from the HiRISE mosaics above (`src/data/ground.ts`). It is an estimate from image shadows, not a rock count and not a NASA product. Mars Trek has no rock abundance layer for these sites: its search API returned none for "rock", "boulder" or "hazard" on 2026-11-15, and TES thermal inertia stops at level 1.
+
+- Method: a pixel is in shadow when it is under 85% of the mean brightness within 2.5 m. Ground is rough when at least 10% of a window about 16 m wide is in shadow. Rough ground whose image gradients line up (structure tensor coherence of 0.35 or more) is ripples, wind-blown sand. The rest is rocks: boulders, blocks and ledges. Shadow segmentation is how the HiRISE rock maps for landing site selection were made (Golombek et al. 2008, JGR 113, E00A09). We keep only the shadow share and do not fit rock sizes.
+- Resolution: tiles are read at the deepest level that keeps one request under 160 tiles, never coarser than level 15, 1.3 m/pixel. Readings at levels 15, 16 and 17 agree (correlation 0.95 or more on a 1.3 km block at Jezero). Level 14 does not, so a leg too long for level 15 is left unread.
+- Checked on 2026-11-15 against real tiles. At Jezero the Séítah ripple and outcrop field reads as ripples and rocks, and the crater floor Perseverance drove on reads as nothing seen. A route across Séítah on flat test terrain went from 72% of its nodes on rough ground to 39% once the ground was read.
+- Limits: rocks under about 1 m do not show. Low-contrast ground does not show either: the ripples near Curiosity at Gale and the plains at Meridiani read as nothing seen. Crater walls and scarps in shadow read as rocks. The thresholds were set on the Jezero mosaic and are planning assumptions. So "nothing seen" is not "clear", and the app never says clear.
+- Coordinates: planetocentric latitude, east longitude -180..180, on the HiRISE tile grid. Pixels are narrower east to west by the cosine of latitude, under 5% at the four sites, and the reading ignores that.
+- Use: every route strategy counts a step onto rocks or ripples as longer by the walking time it adds. Walking time uses a share of the flat speed there, editable in the Time tab: 69% on ripples, from the loose sand terrain coefficient of 2.1 in Soule and Goldman, "Terrain coefficients for energy cost prediction" (J Appl Physiol 32, 1972) at constant effort, and 50% on rocks, which is assumed. Legs over rocks, over ripples, or with no image are cautions and never a NO-GO. The right-click menu and the profile tooltip name rocks and ripples at a spot.
+
+## Helmet view ground
+
+Not a dataset. `helmet.html` draws its ground from noise in `src/helmet/shader.ts`: swells, layered buttes, a mountain, rocks in four sizes, sand ripples and cracked bedrock. It reads no elevation model and no image, and its rocks and slopes are unrelated to the site the route crosses. The sun sits at azimuth 285° and 24° up whatever the planned time is. The dust streaks, the dust devil and the grains drifting past the visor are generated as well, not weather data. The page labels the view "Generated ground, not terrain data". The HUD over it shows the planner's assessed route unchanged.
+
+The page adds a compass tape and a block headed "Suit, simulated": elapsed time, heart rate, suit pressure and carbon dioxide. These are curves around typical values in `src/helmet/suit-sim.ts` (29.6 kPa is the 4.3 psi of NASA's current EVA suits). No sensor, no model and no dataset is behind them.
+
+### Helmet view sound
+
+The breathing in recorded videos is a recording from Freesound, mixed over a fan hum that `scripts/breath-sound.ts` makes from sines and filtered noise. Neither is a recording of a spacesuit. Without `--sound` the recorder makes the breathing from noise as well.
+
+- "Mask Breathing Sound" by Kodack: https://freesound.org/people/Kodack/sounds/256519/. A person breathing in a heavy mask, 15.8 s, about 3.3 s a breath. Creative Commons 0. Used from 3.15 s in `output/helmet-quick.mp4`.
+- `output/film/navigation.ts` also uses Kodack's recording from 3.15 s, at its original speed, for `output/film/mars-film-navigation.mp4`. It mixes a quiet generated fan underneath. The video-only map marker stays at the planned start and follows the recorded head pose; its legend says "You · simulated".
+- "Soft Wind" by florianreichelt: https://freesound.org/people/florianreichelt/sounds/459977/, Creative Commons 0. Downloaded the HQ preview from https://cdn.freesound.org/previews/459/459977_6253486-hq.mp3 to `data/audio/freesound-459977-soft-wind.mp3`. `output/film/recorded-wind.py` uses seconds 6–13 at original speed, with 16 dB gain and fades, during seconds 5–12 of `output/film/mars-film-recorded-wind.mp4`. This replaces the synthetic descent wind while retaining Kodack's breathing and the video. It is an Earth wind effect, not recorded Mars sound.
+- "Mask breathing 1" by Diramus: https://freesound.org/people/Diramus/sounds/426297/. A man breathing through an ABC mask, 45 s. Creative Commons 0. Used from 3.8 s in `output/helmet-quick-b.mp4`.
+- Both licenses were read on the sound's own page on 2026-11-15. CC0 asks for no credit; we name the authors anyway.
+- Files: Freesound's MP3 previews, since the original files need an account. They are kept under `data/audio/`, which is not committed. Fetch them again with `curl -o data/audio/freesound-256519-mask-breathing.mp3 https://cdn.freesound.org/previews/256/256519_2276808-hq.mp3` and `curl -o data/audio/freesound-426297-mask-breathing-1.mp3 https://cdn.freesound.org/previews/426/426297_5690194-hq.mp3`.
+- Rejected: "space_breathing.wav" by Snapper4298 (582214) is a stretched drum loop, not breathing.
 
 ## Mission dose rates
 

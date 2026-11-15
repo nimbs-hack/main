@@ -1,11 +1,12 @@
 import { type ComponentType, type ReactNode, useMemo, useState } from 'react'
 import type { Viewer } from 'cesium'
-import type { Catalog, MissionPlan, Site, Task } from '../api'
+import type { Astronaut, Catalog, MissionPlan, Site, Task } from '../api'
 import UntypedGlobe from '../components/MarsGlobe.jsx'
 import StatusBar from '../components/StatusBar.jsx'
+import { portraitUrl } from '../components/Portrait'
 import { SITES } from '../data/sites.js'
 import type { Marker } from '../data/markers'
-import type { Draft, Selection } from '../state'
+import { loadPhotos, photoKey, type Draft, type Selection } from '../state'
 import { SitesStep } from './SitesStep'
 
 // What the map hands over when an assessed EVA is added to the mission.
@@ -38,6 +39,7 @@ const MarsGlobe = UntypedGlobe as unknown as ComponentType<{
   onViewer: (viewer: Viewer | null) => void
   mission: {
     id: string
+    crew: (Astronaut & { photo?: string })[]
     markers: Marker[]
     onMarkers: (markers: Marker[]) => void
     sites: Site[]
@@ -106,6 +108,7 @@ export function SitesPage({
   const [imagerySource, setImagerySource] = useState('V01')
   const [scienceCredit, setScienceCredit] = useState('')
   const [viewer, setViewer] = useState<Viewer | null>(null)
+  const [photos] = useState(loadPhotos)
 
   const site = SITES.find((entry) => entry.id === siteId) ?? null
   const credits = [
@@ -117,6 +120,7 @@ export function SitesPage({
   const mission = useMemo(
     () => ({
       id: missionId,
+      crew: draft.crew.map((person) => ({ ...person, photo: portraitUrl(person.name, photos[photoKey(person.name)]) })),
       markers: draft.markers ?? [],
       onMarkers,
       sites: draft.sites,
@@ -129,7 +133,7 @@ export function SitesPage({
       flag: plan && (plan.unassignedTaskHours > 0 || plan.evaOverruns.length > 0) ? ('caution' as const) : null,
     }),
     // The handlers close over the current draft, so they change with it.
-    [missionId, draft, plan, taskCounts, selection, onMarkers],
+    [missionId, draft, plan, taskCounts, selection, onMarkers, photos],
   )
 
   return (

@@ -10,6 +10,9 @@ export type MapLabel = {
   id: string
   point: LatLon
   text: string
+  kind?: 'crew'
+  portrait?: string
+  positionAt?: (seconds: number) => LatLon
   symbol?: string
   selected?: boolean
   onSelect?: (screen: { x: number; y: number }) => void
@@ -53,9 +56,10 @@ function linkHover(button: HTMLButtonElement, line: Leader, svg: SVGSVGElement) 
 }
 
 function countText(rows: { item: MapLabel }[]) {
+  const crew = rows.filter((row) => row.item.kind === 'crew').length
   const symbols = rows.filter((row) => row.item.symbol).length
-  const sites = rows.length - symbols
-  return [sites && `${sites} ${sites === 1 ? 'site' : 'sites'}`, symbols && `${symbols} ${symbols === 1 ? 'symbol' : 'symbols'}`]
+  const sites = rows.length - symbols - crew
+  return [crew && `${crew} crew`, sites && `${sites} ${sites === 1 ? 'site' : 'sites'}`, symbols && `${symbols} ${symbols === 1 ? 'symbol' : 'symbols'}`]
     .filter(Boolean).join(' · ')
 }
 
@@ -80,6 +84,20 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
       button.title = item.text
       button.setAttribute('aria-label', item.text)
       if (item.selected !== undefined) button.setAttribute('aria-pressed', String(item.selected))
+      if (item.kind === 'crew') {
+        const initials = document.createElement('span')
+        initials.className = 'map-label__portrait map-label__initials'
+        initials.textContent = item.text.slice(0, 2)
+        initials.setAttribute('aria-hidden', 'true')
+        if (item.portrait) {
+          const photo = document.createElement('img')
+          photo.className = 'map-label__portrait'
+          photo.src = item.portrait
+          photo.alt = ''
+          photo.onerror = () => photo.replaceWith(initials)
+          button.appendChild(photo)
+        } else button.appendChild(initials)
+      }
       if (item.symbol) {
         const icon = document.createElement('img')
         icon.src = symbolImage(item.symbol, text, background)
@@ -91,9 +109,15 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
       button.appendChild(name)
       element.appendChild(button)
       const line = leader(svg)
+      const pin = item.kind === 'crew' ? document.createElementNS(SVG, 'circle') : null
+      if (pin) {
+        pin.setAttribute('class', 'map-label__crew-pin')
+        pin.setAttribute('r', '5')
+        svg.appendChild(pin)
+      }
       linkHover(button, line, svg)
       const location = Cartographic.fromDegrees(item.point[1], item.point[0], DATUM_OFFSET)
-      const row = { item, button, line, location, terrainHeight: DATUM_OFFSET, width: Math.min(320, button.scrollWidth + 8), position: new Cartesian3(), screen: { x: 0, y: 0 } }
+      const row = { item, button, line, pin, location, terrainHeight: DATUM_OFFSET, width: Math.min(320, button.scrollWidth + 8), position: new Cartesian3(), screen: { x: 0, y: 0 } }
       button.onclick = () => item.onSelect?.(row.screen)
       button.oncontextmenu = (event) => {
         if (!item.onContext) return
@@ -198,16 +222,29 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
       if (refresh) { lastHeights = now; heightsDirty = false }
       const anchors: LabelAnchor[] = []
       for (const row of rows) {
-        if (refresh) row.terrainHeight = viewer.scene.globe.getHeight(row.location) ?? DATUM_OFFSET
+        row.pin?.setAttribute('display', 'none')
+        if (row.item.positionAt) {
+          const [lat, lon] = row.item.positionAt(now / 1000)
+          row.location.latitude = lat * Math.PI / 180
+          row.location.longitude = lon * Math.PI / 180
+        }
+        if (refresh || row.item.positionAt) row.terrainHeight = viewer.scene.globe.getHeight(row.location) ?? DATUM_OFFSET
         const relative = viewer.scene.verticalExaggerationRelativeHeight
         row.location.height = relative + (row.terrainHeight - relative) * viewer.scene.verticalExaggeration
         viewer.scene.ellipsoid.cartographicToCartesian(row.location, row.position)
         const at = occluder.isPointVisible(row.position) && viewer.scene.cartesianToCanvasCoordinates(row.position, projected)
         if (!at || at.x < 0 || at.y < 0 || at.x > width || at.y > height) continue
         row.screen = { x: at.x, y: at.y }
+        if (row.pin) {
+          row.pin.setAttribute('cx', String(at.x))
+          row.pin.setAttribute('cy', String(at.y))
+          row.pin.removeAttribute('display')
+        }
         anchors.push({ id: row.item.id, x: at.x, y: at.y, width: row.width, selected: row.item.selected })
       }
-      const grouped = clusterAnchors(anchors, clusterWidth, expanded, memberOf)
+      // Crew keep their pictures and names when they gather at the start.
+      const unclustered = new Set([...expanded, ...rows.filter((row) => row.item.kind === 'crew').map((row) => row.item.id)])
+      const grouped = clusterAnchors(anchors, clusterWidth, unclustered, memberOf)
       const placed = placeMapLabels(grouped, width, height, obstacles, offsets)
       offsets = new Map(placed.map((label) => [label.id, label.offset]))
       memberOf = new Map(grouped.flatMap((a) => (a.members ?? []).map((id) => [id, a.id] as const)))
@@ -245,8 +282,13 @@ export default function MapLabels({ viewer, items }: { viewer: Viewer | null; it
       }
     }
     const removeRender = viewer.scene.postRender.addEventListener(draw)
+    // Update ground positions without rebuilding rows or losing keyboard focus.
+    const timer = items.some((item) => item.positionAt) ? window.setInterval(() => {
+      if (!document.hidden) viewer.scene.requestRender()
+    }, 100) : undefined
     viewer.scene.requestRender()
     return () => {
+      window.clearInterval(timer)
       resize.disconnect()
       removeTiles()
       removeMove()

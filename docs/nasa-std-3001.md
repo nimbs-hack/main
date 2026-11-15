@@ -10,8 +10,8 @@ Status: **meets** means the code does what the requirement asks. **Estimate** me
 | --- | --- | --- | --- |
 | V2 10118 | Red for the highest alert level | Meets | `--color-hazard` is red and means over a limit, NO-GO. The accent moved to magenta. `src/tokens.css` |
 | V2 10119 | Yellow for the second alert level | Meets | `--color-caution` |
-| V2 10045 | Critical meaning never by color alone | Meets | Filled and outline triangles on alert values (end of `src/styles.css`), wider red stretches on the map (`plan-overlay.ts`), hatching in the route profile, triangle rail dot, NO-GO and CAUTION written out |
-| V2 10049, Table 33 | Characters at least 0.25° high, 0.4° preferred | Meets the minimum | `--text-min` 12px. 0.4° would be 19px, which only the readouts reach |
+| V2 10045 | Critical meaning never by color alone | Meets | Filled and outline triangles on alert values (end of `src/styles.css`), wider red stretches on the map (`plan-overlay.ts`), hatching in the route profile, triangle rail dot, NO-GO and CAUTION written out. The HUD (`src/hud/hud.css`) uses the same triangles and hatching |
+| V2 10049, Table 33 | Characters at least 0.25° high, 0.4° preferred | Meets the minimum | `--text-min` 12px. 0.4° would be 19px, which only the readouts reach. The HUD's smallest text is also 12px, at weight 600 on a dark casing; whether that reads on a real visor needs people |
 | V2 10020 | Mark stale, missing or unavailable data | Meets | Weather and space weather `stale`, unknown terrain is a caution, coarse terrain dashed |
 | V2 10018 | Specific, informative messages | Meets | Every NO-GO and caution names the value and the limit, `src/data/plan.ts` |
 | V2 10008, 10046 | One unit for like items, units with values | Meets | SI in code, unit after every value |
@@ -24,7 +24,7 @@ Status: **meets** means the code does what the requirement asks. **Estimate** me
 
 | Requirement | What it asks | Status | Where |
 | --- | --- | --- | --- |
-| V2 11005 | EVA paths free from hazards | Meets for slope | Slope limit per leg. Rocks show only through terrain detail; a rock abundance layer would close the gap |
+| V2 11005 | EVA paths free from hazards | Meets for slope, estimate for rocks | Slope limit per leg. Rocks and ripples are read from HiRISE shadows at the four rover sites (`src/data/ground.ts`): routes go around them when that is quicker, and legs over them, or with no image, are cautions. Rocks under about 1 m and low-contrast ground do not show, so this never clears a path |
 | V2 11030 rationale | Water for a 10 km walk-back after a rover failure | Meets | Walk-back is measured along the route, and no preset or field goes past 10 km. `WALK_BACK_REFERENCE` in `src/data/plan.ts` |
 | V2 11037 | Measure or calculate suited metabolic rate | Estimate | `suitLoad` in `src/data/plan.ts`: Apollo EVA average plus lifting work in Mars gravity |
 | V2 11038 | Show metabolic data to the crew | Estimate | Suit load tab: peak and average watts, energy |

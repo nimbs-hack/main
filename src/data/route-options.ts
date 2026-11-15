@@ -1,6 +1,7 @@
 import { MARS_RADIUS, distance } from './geo'
 import type { LatLon } from './geo'
-import { stepTime } from './plan'
+import type { Ground } from './ground'
+import { groundPace, stepTime } from './plan'
 import type { Limits } from './plan'
 
 // Route alternatives between a start and a target. A grid is laid along the
@@ -8,14 +9,16 @@ import type { Limits } from './plan'
 // value. The search is ported from TerrainGraph on the deploy-v1 branch
 // (packages/shared/src/terrain/engine.ts): A* over 8-connected nodes, a hard
 // slope limit per edge, four strategies, and overlap checks that drop
-// near-duplicate routes. Coordinates are planetocentric latitude and east
+// near-duplicate routes. Rocks and ripples seen in HiRISE are not on
+// deploy-v1: here a step onto them costs every strategy the extra time it
+// takes to walk. Coordinates are planetocentric latitude and east
 // longitude, -180 to 180. Meters, SI.
 
 export type Strategy = 'fast' | 'flat' | 'thermal' | 'detour'
 
 // deploy-v1 names in brackets: shortest, gentlest, weather-safe, alternate.
 export const STRATEGIES: { id: Strategy, name: string, note: string }[] = [
-  { id: 'fast', name: 'Fast', note: 'Shortest path under the slope limit' },
+  { id: 'fast', name: 'Fast', note: 'Shortest path under the slope limit, counting rocks and ripples as extra distance' },
   { id: 'flat', name: 'Flat', note: 'Lowest slopes under the limit' },
   { id: 'thermal', name: 'Thermal', note: 'Avoids ground that reads cold in night IR' },
   { id: 'detour', name: 'Detour', note: 'A separate corridor from the other routes' },
@@ -110,6 +113,9 @@ export type Field = {
   elevation: (number | null)[]
   slope: (number | null)[]
   thermal: (number | null)[]
+  // Rocks and ripples at each node, null where no image was read. Missing
+  // before the ground check has come back.
+  ground?: (Ground | null)[]
 }
 
 // Night IR spread below this is noise, not a signal to route on.
@@ -225,12 +231,23 @@ export function thermalRisk(field: Field) {
   return field.thermal.map((t) => (t === null ? 0.5 : 1 - Math.min(1, Math.max(0, (t - area.thermalLow) / spread))))
 }
 
-type SearchOptions = { risk?: number[] | null, penalty?: Uint8Array }
+// `slow` is how many times longer a step onto each node takes than on clear
+// ground, 1 or more.
+type SearchOptions = { risk?: number[] | null, penalty?: Uint8Array, slow?: Float32Array | null }
+
+// Walking time on each node's ground relative to clear ground, or null when
+// no node has rocks or ripples.
+export function groundSlow(field: Field, limits: Limits) {
+  if (!field.ground?.some((ground) => ground === 'rocks' || ground === 'ripples')) return null
+  return Float32Array.from(field.ground, (ground) => limits.pace / groundPace(limits, ground))
+}
 
 /**
  * A* from start to target. Steps steeper than the limit are impassable.
  * Every step costs at least its length, so the straight-line heuristic in
- * meters never overestimates.
+ * meters never overestimates. A step onto rocks or ripples counts as longer
+ * by the time it adds, so every strategy goes around them when that is
+ * quicker than walking through.
  *
  * On deploy-v1 the grid is a 20 m elevation model, so the slope of a step
  * is the slope of the ground. Here a cell can be 200 m, and a step between
@@ -277,15 +294,16 @@ export function findPath(grid: Grid, field: Field, strategy: Strategy, limit: nu
       const run = Math.hypot(dr, dc) * cell
       const dh = ev - eu
       if (Math.abs(dh) > run * tanMax + 1e-9) continue
-      let step = run
+      const walk = run * (options.slow?.[v] ?? 1)
+      let step = walk
       if (strategy === 'flat') {
         const ratio = edgeSlope(dh, run) / Math.max(1, limit)
-        step = run * (1 + GENTLE_WEIGHT * ratio * ratio)
+        step = walk * (1 + GENTLE_WEIGHT * ratio * ratio)
       } else if (strategy === 'thermal') {
         const ratio = edgeSlope(dh, run) / Math.max(1, limit)
-        step = run * (1 + THERMAL_GAIN * (options.risk?.[v] ?? 0) + THERMAL_SLOPE_WEIGHT * ratio * ratio)
+        step = walk * (1 + THERMAL_GAIN * (options.risk?.[v] ?? 0) + THERMAL_SLOPE_WEIGHT * ratio * ratio)
       } else if (strategy === 'detour' && options.penalty?.[v]) {
-        step = run * ALTERNATE_COST
+        step = walk * ALTERNATE_COST
       }
       const next = g[u] + step
       if (next < g[v]) {
@@ -403,6 +421,9 @@ export type RouteOption = {
   distance: number
   time: number
   maxSlope: number | null
+  // Meters over rocks or ripples on the search grid. Null when the ground
+  // was not read anywhere on the route.
+  rough: number | null
   // Name of the earlier route this one overlaps, when it was dropped as a
   // near-duplicate. Its line and numbers are those of the earlier route.
   sameAs: string | null
@@ -426,14 +447,17 @@ function summarize(grid: Grid, field: Field, nodes: number[], limits: Limits, st
   let length = 0
   let time = 0
   let maxSlope: number | null = null
+  let rough: number | null = null
   for (let k = 1; k < nodes.length; k++) {
     const a = nodes[k - 1]
     const b = nodes[k]
     const run = distance(grid.points[a], grid.points[b])
     const rise = (field.elevation[b] ?? 0) - (field.elevation[a] ?? 0)
+    const ground = field.ground?.[b]
     length += run
-    time += stepTime(run, rise, limits)
+    time += stepTime(run, rise, limits, ground)
     maxSlope = Math.max(maxSlope ?? 0, edgeSlope(rise, run))
+    if (ground != null) rough = (rough ?? 0) + (ground === 'none' ? 0 : run)
   }
   return {
     ...strategy,
@@ -443,6 +467,7 @@ function summarize(grid: Grid, field: Field, nodes: number[], limits: Limits, st
     distance: length,
     time,
     maxSlope,
+    rough,
     sameAs: null,
   }
 }
@@ -456,7 +481,8 @@ function summarize(grid: Grid, field: Field, nodes: number[], limits: Limits, st
 export function routeOptions(grid: Grid, field: Field, limits: Limits, thermalPending = false): RoutePlan {
   const limit = Math.max(0.5, Math.min(89, limits.slope))
   const meta = (id: Strategy) => STRATEGIES.find((s) => s.id === id)!
-  const fastPath = findPath(grid, field, 'fast', limit)
+  const slow = groundSlow(field, limits)
+  const fastPath = findPath(grid, field, 'fast', limit, { slow })
   if (!fastPath) return { status: 'blocked', options: [], needs: minRequiredSlope(grid, field) }
 
   const fast = summarize(grid, field, fastPath, limits, meta('fast'))
@@ -475,14 +501,14 @@ export function routeOptions(grid: Grid, field: Field, limits: Limits, thermalPe
     found.push({ path, option })
   }
 
-  consider('flat', findPath(grid, field, 'flat', limit), KEEP_FLAT)
+  consider('flat', findPath(grid, field, 'flat', limit, { slow }), KEEP_FLAT)
   // Fast and Flat need no infrared image. Detour waits because its corridor
   // penalty includes the Thermal route, when one exists.
   if (thermalPending) return { status: 'ok', options }
   const risk = thermalRisk(field)
-  if (risk) consider('thermal', findPath(grid, field, 'thermal', limit, { risk }), KEEP_THERMAL)
+  if (risk) consider('thermal', findPath(grid, field, 'thermal', limit, { risk, slow }), KEEP_THERMAL)
   const penalty = corridorPenalty(grid, found.map((f) => f.path))
-  consider('detour', findPath(grid, field, 'detour', limit, { penalty }), KEEP_DETOUR)
+  consider('detour', findPath(grid, field, 'detour', limit, { penalty, slow }), KEEP_DETOUR)
   return { status: 'ok', options }
 }
 
@@ -516,6 +542,7 @@ export function joinLegs(legs: RoutePlan[], stops: LatLon[]): RoutePlan {
       if (i < stops.length) waypoints.push(stops[i])
     })
     const slopes = legOptions.map((part) => part.maxSlope).filter((slope): slope is number => slope !== null)
+    const rough = legOptions.map((part) => part.rough).filter((meters): meters is number => meters !== null)
     options.push({
       ...strategy,
       waypoints,
@@ -524,6 +551,7 @@ export function joinLegs(legs: RoutePlan[], stops: LatLon[]): RoutePlan {
       distance: legOptions.reduce((sum, part) => sum + part.distance, 0),
       time: legOptions.reduce((sum, part) => sum + part.time, 0),
       maxSlope: slopes.length ? Math.max(...slopes) : null,
+      rough: rough.length ? rough.reduce((sum, meters) => sum + meters, 0) : null,
       sameAs,
     })
   }

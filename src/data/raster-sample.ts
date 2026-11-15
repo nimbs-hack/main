@@ -50,6 +50,25 @@ export function pixelValue(pixels: Pixels, px: number, py: number, stops: string
   return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
 }
 
+// Downloads and decodes one tile, with no cache. Null when it is missing.
+export const fetchTile: TileLoader = (url) => fetch(url)
+  .then((response) => (response.ok ? response.blob() : null))
+  .then((blob) => (blob ? createImageBitmap(blob) : null))
+  .then((bitmap) => {
+    if (!bitmap) return null
+    try {
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+      const context = canvas.getContext('2d')
+      if (!context) return null
+      context.drawImage(bitmap, 0, 0)
+      const { width, height, data } = context.getImageData(0, 0, bitmap.width, bitmap.height)
+      return { width, height, data }
+    } finally {
+      bitmap.close()
+    }
+  })
+  .catch(() => null)
+
 const cache = new Map<string, Promise<Pixels | null>>()
 
 export const loadTile: TileLoader = (url) => {
@@ -59,28 +78,11 @@ export const loadTile: TileLoader = (url) => {
     cache.set(url, hit)
     return hit
   }
-  const promise = fetch(url)
-    .then((response) => (response.ok ? response.blob() : null))
-    .then((blob) => (blob ? createImageBitmap(blob) : null))
-    .then((bitmap) => {
-      if (!bitmap) return null
-      try {
-        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
-        const context = canvas.getContext('2d')
-        if (!context) return null
-        context.drawImage(bitmap, 0, 0)
-        const { width, height, data } = context.getImageData(0, 0, bitmap.width, bitmap.height)
-        return { width, height, data }
-      } finally {
-        bitmap.close()
-      }
-    })
-    .catch(() => null)
-    .then((pixels) => {
-      // A failed request must not turn Retry into a permanent cache hit.
-      if (!pixels && cache.get(url) === promise) cache.delete(url)
-      return pixels
-    })
+  const promise = fetchTile(url).then((pixels) => {
+    // A failed request must not turn Retry into a permanent cache hit.
+    if (!pixels && cache.get(url) === promise) cache.delete(url)
+    return pixels
+  })
   cache.set(url, promise)
   if (cache.size > 256) cache.delete(cache.keys().next().value as string)
   return promise

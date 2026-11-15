@@ -138,3 +138,55 @@ test('a leg a quarter of the way around the planet still ends on its target', ()
   // A node a row to the side is one cell off the line.
   expect(distance(grid.points[grid.start + grid.cols], start) / grid.cell).toBeCloseTo(1, 6)
 })
+
+// Flat ground with rocks or ripples where `ground(row, col)` says so.
+function groundField(grid, ground) {
+  return { ...field(grid), ground: grid.points.map((_, i) => ground(Math.floor(i / grid.cols), i % grid.cols)) }
+}
+
+test('routes go around a patch of rocks when that is quicker', () => {
+  const grid = buildGrid(start, target)
+  const middle = Math.floor(grid.rows / 2)
+  // Rocks across the straight line: 7 rows deep, 10 columns long.
+  const rocky = (r, c) => (Math.abs(r - middle) <= 3 && c >= 25 && c < 35 ? 'rocks' : 'none')
+  const plan = routeOptions(grid, groundField(grid, rocky), DEFAULT_LIMITS)
+  const fast = plan.options[0]
+  expect(fast.rough).toBe(0)
+  expect(fast.distance).toBeGreaterThan(grid.cell * 40)
+  // Going around costs less than the 10 extra cells the rocks would.
+  expect(fast.distance).toBeLessThan(grid.cell * 50)
+  // With no slowdown on rocks the straight line wins again.
+  const unslowed = routeOptions(grid, groundField(grid, rocky), { ...DEFAULT_LIMITS, rocks: 1 })
+  expect(unslowed.options[0].distance).toBeCloseTo(grid.cell * 40, 0)
+  expect(unslowed.options[0].rough).toBeCloseTo(grid.cell * 10, 0)
+})
+
+test('rocks that cannot be passed around are crossed, and the time says so', () => {
+  const grid = buildGrid(start, target)
+  const wall = (r, c) => (c >= 25 && c < 35 ? 'rocks' : 'none')
+  const clear = routeOptions(grid, groundField(grid, () => 'none'), DEFAULT_LIMITS).options[0]
+  const fast = routeOptions(grid, groundField(grid, wall), DEFAULT_LIMITS).options[0]
+  expect(fast.distance).toBeCloseTo(clear.distance, 0)
+  expect(fast.rough).toBeCloseTo(grid.cell * 10, 0)
+  // Ten cells at half speed take as long as twenty.
+  expect(fast.time).toBeCloseTo(clear.time * (50 / 40), 0)
+})
+
+test('ripples slow a route less than rocks, and unread ground does not slow it', () => {
+  const grid = buildGrid(start, target)
+  const all = (ground) => routeOptions(grid, groundField(grid, () => ground), DEFAULT_LIMITS).options[0]
+  expect(all('rocks').time).toBeGreaterThan(all('ripples').time)
+  expect(all('ripples').time).toBeGreaterThan(all('none').time)
+  expect(all(null).time).toBeCloseTo(all('none').time, 6)
+  expect(all(null).rough).toBeNull()
+  expect(routeOptions(grid, field(grid), DEFAULT_LIMITS).options[0].rough).toBeNull()
+})
+
+test('joined legs add up their rough ground', () => {
+  const grid = buildGrid(start, target)
+  const wall = routeOptions(grid, groundField(grid, (r, c) => (c >= 25 && c < 35 ? 'ripples' : 'none')), DEFAULT_LIMITS)
+  const unread = routeOptions(grid, field(grid), DEFAULT_LIMITS)
+  expect(joinLegs([wall, wall], [target]).options[0].rough).toBeCloseTo(grid.cell * 20, 0)
+  expect(joinLegs([wall, unread], [target]).options[0].rough).toBeCloseTo(grid.cell * 10, 0)
+  expect(joinLegs([unread, unread], [target]).options[0].rough).toBeNull()
+})

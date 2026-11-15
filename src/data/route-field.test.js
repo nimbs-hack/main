@@ -94,3 +94,34 @@ test('optional data failures preserve terrain routes and the existing slope fall
   expect(final.field.slope).toEqual(gridSlopes(grid, elevation))
   expect(routeOptions(grid, final.field, DEFAULT_LIMITS).status).toBe('ok')
 })
+
+test('routes arrive before the ground check, and a failed check leaves the ground unknown', async () => {
+  const groundData = deferred()
+  const first = deferred()
+  const updates = []
+  const ground = grid.points.map((_, i) => (i % 7 ? 'none' : 'rocks'))
+  const done = loadRouteField(grid, {
+    elevations: async () => elevation,
+    surface: async () => surface,
+    thermal: async () => thermal,
+    ground: () => groundData.promise,
+  }, (update) => { updates.push(update); first.resolve() }, new AbortController().signal)
+  await first.promise
+  expect(updates[0].groundPending).toBe(true)
+  expect(updates[0].field.ground).toBeUndefined()
+  groundData.resolve(ground)
+  await done
+  expect(updates.at(-1).groundPending).toBe(false)
+  expect(updates.at(-1).field.ground).toEqual(ground)
+
+  const failed = []
+  await loadRouteField(grid, {
+    elevations: async () => elevation,
+    surface: async () => surface,
+    thermal: async () => thermal,
+    ground: async () => { throw Error('HiRISE unavailable') },
+  }, (update) => failed.push(update), new AbortController().signal)
+  expect(failed.at(-1).groundPending).toBe(false)
+  expect(failed.at(-1).field.ground).toEqual(grid.points.map(() => null))
+  expect(routeOptions(grid, failed.at(-1).field, DEFAULT_LIMITS).status).toBe('ok')
+})

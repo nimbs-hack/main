@@ -4,6 +4,7 @@ import { formatElevation, formatLatLon } from '../format'
 import { MIL2525C_BY_ID, MIL2525C_SYMBOLS, MIL2525C_THEMES } from '../data/mil2525c'
 import { formatPressure, formatTemp } from '../data/weather'
 import { COARSE_DETAIL, detailLabel } from '../data/terrain-detail'
+import { GROUND_NAME } from '../data/ground'
 import { formatDistance, formatSlope } from './RouteProfile'
 import './point-menu.css'
 
@@ -89,6 +90,11 @@ export default function PointReadout({
                 title={probe.detail > COARSE_DETAIL ? 'Coarse terrain hides boulders and small scarps. Slope here is a smoothed lower bound.' : 'Ground spacing of the elevation model here'}
               >
                 {detailLabel(probe.detail)} terrain
+              </span>
+            )}
+            {GROUND_NAME[probe.ground] && (
+              <span className="is-caution" title="Estimated from shadows in the HiRISE image here. Rocks under about 1 m do not show.">
+                {GROUND_NAME[probe.ground]}
               </span>
             )}
           </>

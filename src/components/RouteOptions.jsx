@@ -13,8 +13,11 @@ import './route-options.css'
  * is the plan, and `measured` holds the plan's distance and steepest slope
  * on the full terrain. The picked row shows those, so it never disagrees
  * with the profile and the verdict.
+ *
+ * `groundPending` is true while HiRISE tiles are still being read for rocks
+ * and ripples. Routes shown before then are from terrain alone and can move.
  */
-export default function RouteOptions({ status, thermalPending, options, chosen, measured, hover, limit, note, needs, onHover, onChoose, onRaise, onRetry }) {
+export default function RouteOptions({ status, thermalPending, groundPending, options, chosen, measured, hover, limit, note, needs, onHover, onChoose, onRaise, onRetry }) {
   if (status === 'loading') return <p className="routes routes--note" role="status">Finding routes…</p>
   if (status === 'error') {
     return (
@@ -45,7 +48,7 @@ export default function RouteOptions({ status, thermalPending, options, chosen, 
           <button
             type="button"
             aria-pressed={picked}
-            title={`${option.note}. Times are one way. ${picked ? 'Slope measured along the plan.' : 'Slope estimated on the search grid. Pick the route to measure it on full terrain.'}`}
+            title={`${option.note}. Times are one way. ${picked ? 'Slope measured along the plan.' : 'Slope estimated on the search grid. Pick the route to measure it on full terrain.'}${option.rough ? ` ${formatDistance(option.rough)} over rocks or ripples on the search grid.` : ''}`}
             onPointerEnter={() => onHover(option.id)}
             onFocus={() => onHover(option.id)}
             onBlur={() => onHover(null)}
@@ -73,6 +76,7 @@ export default function RouteOptions({ status, thermalPending, options, chosen, 
         <span><i className="routes__solid routes__solid--hazard" aria-hidden="true" />Over {limit}°</span>
       </li>
       {thermalPending && <li className="routes__why" role="status">Loading night IR for Thermal and Detour…</li>}
+      {groundPending && <li className="routes__why" role="status">Reading HiRISE for rocks and ripples. Routes may move…</li>}
       {note && <li className="routes__why">{note}</li>}
     </ul>
   )

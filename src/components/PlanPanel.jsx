@@ -21,7 +21,8 @@ import './plan-panel.css'
  *
  * Props:
  *   plan        { start, startName, target, waypoints } in [lat, lon] degrees
- *   limits      { slope °, pace m/s, eva s, work s, range m }
+ *   limits      { slope °, pace m/s, eva s, work s, range m, and rocks and
+ *               ripples as a share of pace }
  *   assessment  result of assess() in src/data/plan.ts, or null
  *   status      profile sampling: 'idle' | 'loading' | 'ready' | 'error'
  *   placing     'start' | 'target' | 'waypoint' | null, what a map click does
@@ -72,6 +73,8 @@ const FIELDS = {
   range: { unit: 'km', step: 0.25, min: 0.25, max: WALK_BACK_REFERENCE / 1000, toView: (v) => +(v / 1000).toFixed(2), fromView: (v) => v * 1000 },
   climb: { unit: 'm/h', step: 10, min: 50, max: 3000, toView: (v) => Math.round(v * 3600), fromView: (v) => v / 3600 },
   descent: { unit: 'm/h', step: 10, min: 50, max: 3000, toView: (v) => Math.round(v * 3600), fromView: (v) => v / 3600 },
+  rocks: { unit: '%', step: 1, min: 10, max: 100, toView: (v) => Math.round(v * 100), fromView: (v) => v / 100 },
+  ripples: { unit: '%', step: 1, min: 10, max: 100, toView: (v) => Math.round(v * 100), fromView: (v) => v / 100 },
 }
 
 // Same value within float noise from unit conversion.
@@ -357,6 +360,9 @@ export default function PlanPanel({
   const set = (key) => (value) => onLimits({ ...limits, [key]: value })
   const match = (label) => !query || label.toLowerCase().includes(query.toLowerCase())
 
+  // A leg stat added up over the route.
+  const sum = (key) => (a ? a.legs.reduce((total, leg) => total + leg[key], 0) : 0)
+
   // Rows per category. Basic rows always show. Advanced rows need the switch
   // or a search that matches them.
   const rows = {
@@ -396,6 +402,9 @@ export default function PlanPanel({
       { label: 'Finest', group: 'Detail', basic: false, hint: 'Ground spacing of the best elevation model under the route. Fine terrain shows scarps a few meters high.', node: <Value>{terrainDetail ? detailLabel(terrainDetail.finest) : pending}</Value> },
       { label: 'Coarsest', group: 'Detail', basic: true, hint: `Coarser than ${COARSE_DETAIL} m hides boulders and small scarps, so slope there is a smoothed lower bound. Dashed outlines on the map mark fine terrain.`, node: <Value level={terrainDetail && terrainDetail.coarsest > COARSE_DETAIL ? 'caution' : null}>{terrainDetail ? detailLabel(terrainDetail.coarsest) : pending}</Value> },
       { label: 'On coarse terrain', group: 'Detail', basic: true, node: <Value unit="m" level={terrainDetail?.coarse > 0 ? 'caution' : null}>{terrainDetail ? Math.round(terrainDetail.coarse) : pending}</Value> },
+      { label: 'Over rocks', group: 'Ground in HiRISE', basic: true, hint: 'Sharp shadows that point every way: boulders, blocks and ledges. Estimated from the image. Rocks under about 1 m and low-contrast ground do not show.', node: <Value unit="m" level={sum('rocks') > 0 ? 'caution' : null}>{a ? Math.round(sum('rocks')) : pending}</Value> },
+      { label: 'Over ripples', group: 'Ground in HiRISE', basic: true, hint: 'Shadows that line up: wind ripples and dunes, usually loose sand. Estimated from the image.', node: <Value unit="m" level={sum('ripples') > 0 ? 'caution' : null}>{a ? Math.round(sum('ripples')) : pending}</Value> },
+      { label: 'No image', group: 'Ground in HiRISE', basic: true, hint: 'No HiRISE image was read here, so rocks are unknown, not absent. The mosaics cover the four rover sites.', node: <Value unit="m" level={sum('unchecked') > 0 ? 'caution' : null}>{a ? Math.round(sum('unchecked')) : pending}</Value> },
     ],
     time: [
       { label: 'EVA start', group: 'Schedule', basic: true, wide: true, hint: 'UTC. Empty means now. Space weather is checked against this window.', node: (
@@ -415,6 +424,8 @@ export default function PlanPanel({
       { label: 'Flat speed', group: 'Speed', basic: true, hint: 'Over level ground', node: field('pace', 'Flat speed') },
       { label: 'Climb rate', group: 'Speed', basic: false, hint: 'Height gained per hour, added to the time for the distance', node: field('climb', 'Climb rate') },
       { label: 'Descent rate', group: 'Speed', basic: false, hint: 'Height lost per hour, added to the time for the distance', node: field('descent', 'Descent rate') },
+      { label: 'On rocks', group: 'Speed', basic: false, hint: 'Share of the flat speed kept over rocks. Assumed: no suited walking speed over rocks is published.', node: field('rocks', 'Speed on rocks') },
+      { label: 'On ripples', group: 'Speed', basic: false, hint: 'Share of the flat speed kept over ripples. From walking on loose sand at 2.1 times the energy of a road (Soule and Goldman 1972), at the same effort.', node: field('ripples', 'Speed on ripples') },
       { label: 'Walk out', group: 'This route', basic: false, node: <Value unit="min">{a ? minutes(a.timeOut) : pending}</Value> },
       { label: 'Walk back', group: 'This route', basic: false, node: <Value unit="min">{a ? minutes(a.timeBack) : pending}</Value> },
       { label: 'EVA total', group: 'This route', basic: true, node: <Value level={a && a.total > limits.eva ? 'hazard' : null}>{a ? formatDuration(a.total) : pending}</Value> },
@@ -445,10 +456,9 @@ export default function PlanPanel({
   const weatherAge = weather?.report?.latest ? ageDays(weather.report.latest) : null
 
   // Worst state per tab, for the dot on its rail icon.
-  const sum = (key) => (a ? a.legs.reduce((total, leg) => total + leg[key], 0) : 0)
   const flags = {
     route: null,
-    terrain: !a ? null : sum('over') > 0 ? 'hazard' : sum('caution') > 0 || sum('unknown') > 0 || sum('coarse') > 0 ? 'caution' : null,
+    terrain: !a ? null : sum('over') > 0 ? 'hazard' : sum('caution') > 0 || sum('unknown') > 0 || sum('coarse') > 0 || sum('rocks') > 0 || sum('ripples') > 0 || sum('unchecked') > 0 ? 'caution' : null,
     time: !a ? null : a.total > limits.eva ? 'hazard' : a.total > limits.eva * 0.85 ? 'caution' : null,
     range: a && a.walkBack > limits.range ? 'hazard' : null,
     suit: a && a.suit.peakW > SUIT.limitW ? 'caution' : null,

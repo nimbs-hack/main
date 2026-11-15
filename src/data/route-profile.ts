@@ -1,16 +1,16 @@
 import type { TerrainProvider } from 'cesium'
 import { bearing, resample } from './geo'
 import type { LatLon } from './geo'
+import type { Ground } from './ground'
 import { sampleRaster } from './raster-sample'
 import type { TileLoader } from './raster-sample'
 import type { ScienceRaster } from './science-types'
 import { sampleSurface } from './terrain-sample'
+import { SLOPE_CAUTION, SLOPE_LIMIT, slopeLevel } from './slope-level'
 
-// Planning assumptions, not suit certifications. Lunar traverse studies plan
-// walking routes under 20°. No Mars suit limit is published, so we use the
-// same value and flag 15° as the start of caution.
-export const SLOPE_CAUTION = 15
-export const SLOPE_LIMIT = 20
+// The slope limits live in their own file so the HUD page can use them
+// without loading the terrain code this file needs.
+export { SLOPE_CAUTION, SLOPE_LIMIT, slopeLevel }
 
 export type ProfileSample = {
   d: number
@@ -21,6 +21,9 @@ export type ProfileSample = {
   // Terrain detail at the sample in meters, from the tile level available
   // there. Missing when the profile was built without it.
   detail?: number | null
+  // Rocks or ripples seen in HiRISE at the sample. Null where no image was
+  // read. Missing when the profile was built without a ground check.
+  ground?: Ground | null
 }
 
 export async function buildProfile(path: LatLon[], options: {
@@ -30,12 +33,15 @@ export async function buildProfile(path: LatLon[], options: {
   level?: number
   baseline?: number
   detail?: (point: LatLon) => number | null
+  ground?: (points: LatLon[]) => Promise<(Ground | null)[]>
   load?: TileLoader
 }): Promise<ProfileSample[]> {
   const stations = resample(path, options.count ?? 160)
   const points = stations.map((s) => s.point)
-  const [surface, ...layers] = await Promise.all([
+  const [surface, ground, ...layers] = await Promise.all([
     sampleSurface(options.provider, points, options.level, options.baseline),
+    // A failed ground check leaves the ground unknown, not the profile empty.
+    options.ground?.(points).catch(() => points.map(() => null)),
     ...options.rasters.map((source) => sampleRaster(source, points, options.load)),
   ])
   return stations.map((station, i) => ({
@@ -44,15 +50,8 @@ export async function buildProfile(path: LatLon[], options: {
     slope: surface[i].slope,
     layers: Object.fromEntries(options.rasters.map((source, k) => [source.id, layers[k][i]])),
     detail: options.detail?.(station.point) ?? null,
+    ...(ground ? { ground: ground[i] ?? null } : {}),
   }))
-}
-
-// Caution starts 5° under the limit, as SLOPE_CAUTION does under SLOPE_LIMIT.
-export function slopeLevel(slope: number | null, limit = SLOPE_LIMIT) {
-  if (slope === null) return 'unknown'
-  if (slope > limit) return 'hazard'
-  if (slope >= limit - (SLOPE_LIMIT - SLOPE_CAUTION)) return 'caution'
-  return 'ok'
 }
 
 export function summarize(samples: ProfileSample[]) {

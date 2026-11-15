@@ -13,6 +13,7 @@
     "planner": "go -C apps/api run ./cmd/hr-planner",
     "tiles": "bun scripts/fetch-tiles.js",
     "precache": "bun scripts/precache-map.ts",
+    "helmet:record": "bun scripts/record-helmet.ts",
     "typecheck": "tsc --noEmit && go -C apps/api build ./...",
     "lint": "go -C apps/api vet ./... && bun scripts/check-go-format.js",
     "test": "bun test src scripts && go -C apps/api test -race ./..."

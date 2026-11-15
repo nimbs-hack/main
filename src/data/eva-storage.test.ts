@@ -30,3 +30,10 @@ test('malformed coordinates and unavailable storage recover to an empty mission 
   expect(loadEva('a', storage).plan).toEqual(EMPTY_PLAN)
   expect(loadEva('a', { getItem: () => { throw Error('blocked') } }).plan).toEqual(EMPTY_PLAN)
 })
+
+test('a route saved before rough-ground speeds existed loads with the preset shares', () => {
+  const storage = memory()
+  const { rocks, ripples, ...older } = DEFAULT_LIMITS
+  storage.setItem('nimbs.eva-plan:a', JSON.stringify({ plan: { start: [18.44, 77.45], target: [18.45, 77.45], waypoints: [] }, limits: { ...older, pace: 0.6 } }))
+  expect(loadEva('a', storage).limits).toEqual({ ...DEFAULT_LIMITS, pace: 0.6, rocks, ripples })
+})

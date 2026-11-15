@@ -2,6 +2,7 @@ import { useRef } from 'react'
 import { SLOPE_LIMIT, slopeLevel } from '../data/route-profile'
 import { formatElevation } from '../format'
 import { COARSE_DETAIL, detailLabel } from '../data/terrain-detail'
+import { GROUND_NAME } from '../data/ground'
 import './route-profile.css'
 
 const WIDTH = 1000
@@ -109,7 +110,7 @@ function RasterStrip({ samples, layer }) {
  */
 export default function RouteProfile({
   samples, summary, rasters, status, segment, onSegment, routeName,
-  limit = SLOPE_LIMIT, marks = [], hoverIndex, onHover, onPick, onSuit, onClose, onRetry,
+  limit = SLOPE_LIMIT, marks = [], hoverIndex, onHover, onPick, onSuit, hudHref, onClose, onRetry,
 }) {
   const chart = useRef(null)
   const ready = status === 'ready' && samples?.length > 1
@@ -156,6 +157,7 @@ export default function RouteProfile({
         )}
         <div className="profile__actions">
           <button type="button" className="profile__suit" onClick={onSuit} disabled={!ready}>Suit view</button>
+          {hudHref && <a className="profile__hud" href={hudHref} target="_blank" rel="noreferrer">Open HUD</a>}
           <button type="button" className="profile__close" onClick={onClose} aria-label="Close route profile">×</button>
         </div>
       </header>
@@ -176,7 +178,7 @@ export default function RouteProfile({
             aria-valuemin={0}
             aria-valuemax={Math.round(total)}
             aria-valuenow={Math.round(hovered?.d ?? 0)}
-            aria-valuetext={hovered ? `${formatDistance(hovered.d)}, elevation ${hovered.elevation == null ? 'unknown' : formatElevation(hovered.elevation)}, slope ${formatSlope(hovered.slope)}` : 'Start of route'}
+            aria-valuetext={hovered ? `${formatDistance(hovered.d)}, elevation ${hovered.elevation == null ? 'unknown' : formatElevation(hovered.elevation)}, slope ${formatSlope(hovered.slope)}${GROUND_NAME[hovered.ground] ? `, ${GROUND_NAME[hovered.ground].toLowerCase()}` : ''}` : 'Start of route'}
             onPointerMove={(event) => onHover(indexFromEvent(event))}
             onPointerLeave={(event) => { if (event.pointerType === 'mouse') onHover(null) }}
             onClick={(event) => onPick(indexFromEvent(event))}
@@ -195,6 +197,7 @@ export default function RouteProfile({
                   {hovered.elevation != null && <>{formatElevation(hovered.elevation)}</>}
                   <i className={`is-${slopeLevel(hovered.slope, limit)}`}>{formatSlope(hovered.slope)}</i>
                   {hovered.detail != null && hovered.detail > COARSE_DETAIL && <i className="is-caution">{detailLabel(hovered.detail)} terrain</i>}
+                  {GROUND_NAME[hovered.ground] && <i className="is-caution">{GROUND_NAME[hovered.ground]}</i>}
                 </span>
               </div>
             )}

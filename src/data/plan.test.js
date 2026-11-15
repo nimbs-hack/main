@@ -172,3 +172,54 @@ test('edits act on stops and drop the turn points of a picked route', () => {
   expect(moveVertex(plan, 1, [1, 1]).waypoints).toEqual([[1, 1]])
   expect(removeWaypoint(plan, 0).waypoints).toEqual([])
 })
+
+test('rocks and ripples slow the walk by their share of the flat speed', () => {
+  const path = [[0, 0], [0, 0.02]]
+  const clear = samples(path)
+  const rocky = clear.map((s) => ({ ...s, ground: 'rocks' }))
+  const rippled = clear.map((s) => ({ ...s, ground: 'ripples' }))
+  const base = traverseTime(clear, DEFAULT_LIMITS)
+  expect(traverseTime(rocky, DEFAULT_LIMITS)).toBeCloseTo(base / DEFAULT_LIMITS.rocks, 3)
+  expect(traverseTime(rippled, DEFAULT_LIMITS)).toBeCloseTo(base / DEFAULT_LIMITS.ripples, 3)
+  // Unread ground and ground with nothing seen walk at the flat speed.
+  expect(traverseTime(clear.map((s) => ({ ...s, ground: null })), DEFAULT_LIMITS)).toBeCloseTo(base, 6)
+  expect(traverseTime(clear.map((s) => ({ ...s, ground: 'none' })), DEFAULT_LIMITS)).toBeCloseTo(base, 6)
+  // A share over 1 or of 0 cannot speed the walk up or stop it.
+  expect(traverseTime(rocky, { ...DEFAULT_LIMITS, rocks: 3 })).toBeCloseTo(base, 6)
+  expect(Number.isFinite(traverseTime(rocky, { ...DEFAULT_LIMITS, rocks: 0 }))).toBe(true)
+  expect(stepTime(100, 0, DEFAULT_LIMITS, 'rocks')).toBeCloseTo(100 / (DEFAULT_LIMITS.pace * DEFAULT_LIMITS.rocks), 6)
+})
+
+test('rough and unread ground caution per leg and never block', () => {
+  const path = [[0, 0], [0, 0.01], [0, 0.02]]
+  const length = distance(path[0], path[2])
+  const ground = (d) => (d < length * 0.25 ? 'rocks' : d < length * 0.55 ? 'none' : d < length * 0.75 ? 'ripples' : null)
+  const result = assess(samples(path).map((s) => ({ ...s, ground: ground(s.d) })), path, DEFAULT_LIMITS)
+  expect(result.verdict).toBe('caution')
+  // Stretch lengths hold to within one sample step.
+  const step = length / 100
+  expect(Math.abs(result.legs[0].rocks - length * 0.25)).toBeLessThanOrEqual(step)
+  expect(result.legs[0].ripples).toBe(0)
+  expect(Math.abs(result.legs[1].ripples - length * 0.2)).toBeLessThanOrEqual(step)
+  expect(Math.abs(result.legs[1].unchecked - length * 0.25)).toBeLessThanOrEqual(step)
+  const texts = result.reasons.map((r) => r.text)
+  expect(texts.some((t) => /^Leg 1: \d+ m over rocks$/.test(t))).toBe(true)
+  expect(texts.some((t) => /^Leg 2: \d+ m over ripples$/.test(t))).toBe(true)
+  expect(texts.some((t) => /^Leg 2: no HiRISE image for \d+ m\. Rocks unknown$/.test(t))).toBe(true)
+  expect(result.reasons.every((r) => r.level === 'caution')).toBe(true)
+})
+
+test('a profile built without a ground check says nothing about rocks', () => {
+  const path = [[0, 0], [0, 0.01]]
+  const result = assess(samples(path), path, DEFAULT_LIMITS)
+  expect(result.verdict).toBe('go')
+  expect(result.legs[0]).toMatchObject({ rocks: 0, ripples: 0, unchecked: 0 })
+})
+
+test('every preset keeps the same share of its speed on rough ground', () => {
+  for (const preset of PRESETS) {
+    expect(preset.limits.rocks).toBe(0.5)
+    expect(preset.limits.ripples).toBe(0.69)
+    expect(presetFor(preset.limits)?.id).toBe(preset.id)
+  }
+})

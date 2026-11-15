@@ -35,13 +35,13 @@ import { SAMPLED_RASTERS, SCIENCE_LAYERS, SCIENCE_RASTERS } from '../data/scienc
 import { addScienceOverlay } from '../data/science-overlay'
 import { distance, resample } from '../data/geo'
 import { buildProfile, slopeLevel, summarize } from '../data/route-profile'
-import { DEFAULT_LIMITS, EMPTY_PLAN, assess, withReasons, insertWaypoint, isGenerated, moveVertex, planPath, removeWaypoint, stopPath, stopsOnly } from '../data/plan'
+import { DEFAULT_LIMITS, EMPTY_PLAN, SUIT, assess, withReasons, insertWaypoint, isGenerated, moveVertex, planPath, removeWaypoint, stopPath, stopsOnly } from '../data/plan'
 import { addPlanOverlay } from './plan-overlay'
 import { areaStats, buildGrid, joinLegs, routeOptions, sameReason } from '../data/route-options'
 import RouteOptions from './RouteOptions'
 import { formatDistance } from './RouteProfile'
 import { STATIONS, fetchWeather, formatPressure, formatTemp, nearestStation, pressureAt } from '../data/weather'
-import { coverage, detailAt, detailLabel, detailMeters, levelAt, levelForSpacing, outline, slopeBaseline } from '../data/terrain-detail'
+import { COARSE_DETAIL, coverage, detailAt, detailLabel, detailMeters, levelAt, levelForSpacing, outline, slopeBaseline } from '../data/terrain-detail'
 import { checkSpaceWeather, fetchSpaceWeather } from '../data/space-weather'
 import { TERRAIN_API_PATH } from '../data/terrain-source'
 import { addToolOverlay } from './tool-overlay'
@@ -51,13 +51,17 @@ import MapTools, { ToolButtons } from './MapTools'
 import { sampleRaster } from '../data/raster-sample'
 import { sampleElevations, sampleSurface } from '../data/terrain-sample'
 import { loadRouteField } from '../data/route-field'
+import { GROUND_RADIUS, sampleGround } from '../data/ground'
 import SciencePanel from './SciencePanel'
 import RouteProfile from './RouteProfile'
 import PointReadout from './PointReadout'
 import SuitView, { PLAY_TICK_MS } from './SuitView'
 import PlanPanel from './PlanPanel'
 import { loadEva, saveEva } from '../data/eva-storage'
+import { hudRoute, saveHud } from '../data/hud-snapshot'
 import MapLabels from './MapLabels'
+import { StageIcon } from './icons'
+import { createCrewSimulation } from '../data/crew-simulation'
 
 const MARS = MARS_SPHERE
 const ROVERS = SITES.filter((s) => s.traverse)
@@ -477,7 +481,7 @@ function followWalker(viewer, point, heading, playing, elevation) {
 
 /*
  * `mission` ties the map to the mission being planned. It is optional:
- *   { sites, taskCounts, selected, onSelect(index), onAddSite([lat, lon]),
+ *   { crew, sites, taskCounts, selected, onSelect(index), onAddSite([lat, lon]),
  *     onAddEva({ target, seconds, distance, maxSlope, verdict }) }
  * Sites are { name, lat, lon } in planetocentric latitude and east longitude,
  * -180 to 180. They are drawn as numbered markers, apart from the EVA route:
@@ -844,6 +848,35 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
     return plan.start && plan.target ? path : null
   }, [plan])
 
+  const crewStarted = useRef(performance.now() / 1000)
+  const crewSite = missionSites?.[missionSelected] ?? missionSites?.[0]
+  const crewAnchor = plan.start ?? (site ? site.traverse?.position ?? [site.lat, site.lon]
+    : crewSite ? [crewSite.lat, crewSite.lon] : ROVERS[0].traverse.position)
+  const crewLabels = useMemo(() => createCrewSimulation(mission?.crew ?? [], routePath, crewAnchor).map((track, index) => {
+    const positionAt = (seconds) => track.positionAt(seconds - crewStarted.current)
+    return {
+      id: track.id,
+      kind: 'crew',
+      portrait: mission.crew[index].photo,
+      text: track.name,
+      point: positionAt(performance.now() / 1000),
+      positionAt,
+      onSelect: () => viewer && flyToPoint(viewer, positionAt(performance.now() / 1000), viewer.camera.positionCartographic.height > SITE_RANGE ? 6000 : 1000),
+    }
+  }), [mission?.crew, routePath, crewAnchor[0], crewAnchor[1], viewer])
+
+  const fitCrew = () => {
+    if (!viewer || !crewLabels.length) return
+    const seconds = performance.now() / 1000
+    const positions = crewLabels.map((member) => member.positionAt(seconds))
+    const terrainLoaded = positions.every(([lat, lon]) => viewer.scene.globe.getHeight(Cartographic.fromDegrees(lon, lat)) !== undefined)
+    const sphere = BoundingSphere.fromPoints(surfacePoints(viewer, positions))
+    viewer.camera.flyToBoundingSphere(sphere, {
+      // Leave room for terrain that has not loaded during a flight from orbit.
+      offset: new HeadingPitchRange(0, CesiumMath.toRadians(-60), Math.max(sphere.radius * 5, terrainLoaded ? 1000 : 6000)),
+    })
+  }
+
   // Sample the layers shown in the profile. Other layers are read on demand
   // by the point menu. Long routes sample coarser terrain tiles.
   useEffect(() => {
@@ -865,6 +898,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       level,
       baseline: slopeBaseline(detailMeters(level)),
       detail: (point) => detailAt(terrainProvider, point),
+      ground: (points) => sampleGround(points),
     }).then((samples) => {
       if (cancelled) return
       const known = samples.some((s) => s.elevation !== null)
@@ -928,6 +962,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
         legs: [...legs],
         thermalPending: legs.some((leg) => leg.thermalPending),
         slopesPending: legs.some((leg) => leg.slopesPending),
+        groundPending: legs.some((leg) => leg.groundPending),
       })
     }
     const night = SAMPLED_RASTERS.find((layer) => layer.id === 'themis-night')
@@ -947,6 +982,8 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
         elevations: () => sampleElevations(terrainProvider, grid.points, level),
         surface: () => (probeSlopes ? sampleSurface(terrainProvider, grid.points, level) : Promise.resolve([])),
         thermal: () => night ? sampleRaster(night, grid.points) : Promise.resolve(grid.points.map(() => null)),
+        // One reading covers the ground a node stands for, half a cell around.
+        ground: () => sampleGround(grid.points, { radius: Math.max(GROUND_RADIUS, grid.cell / 2) }),
       }, (result) => {
         if (result.field.elevation.some((elevation) => elevation !== null)) legs[i] = result
         else failed = true
@@ -1086,7 +1123,11 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   useEffect(() => {
     if (!terrainProvider || !probePoint) return
     let cancelled = false
-    sampleSurface(terrainProvider, [probePoint], 16).then(([surface]) => {
+    // The ground check is extra: without it the menu still shows terrain.
+    Promise.all([
+      sampleSurface(terrainProvider, [probePoint], 16),
+      sampleGround([probePoint]).catch(() => [null]),
+    ]).then(([[surface], [ground]]) => {
       if (cancelled) return
       setProbe((current) => current?.point !== probePoint ? current : {
         ...current,
@@ -1094,6 +1135,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
         status: surface.elevation === null ? 'error' : 'ready',
         elevation: surface.elevation,
         slope: surface.slope,
+        ground,
       })
     }, () => {
       if (!cancelled) setProbe((current) => (current?.point === probePoint ? { ...current, status: 'error' } : current))
@@ -1250,7 +1292,19 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
   // Profile marks at the user's waypoints and the target, not at turn points.
   const markPath = planPath(plan)
   const marks = assessment?.legs.filter((_, i) => !markPath[i + 1] || i + 1 === markPath.length - 1 || !isGenerated(plan, markPath[i + 1])).map((leg) => leg.to)
+
+  // The HUD page shows this route and nothing it worked out itself. While a
+  // changed route is still being sampled it keeps the last assessed one and
+  // says so.
+  const marksKey = marks?.join()
+  useEffect(() => {
+    if (!routePath) saveHud(mission?.id, 'none', null)
+    else if (assessment && profile.samples && marks) {
+      saveHud(mission?.id, 'ready', hudRoute({ plan, limits, samples: profile.samples, assessment, marks, coarseDetail: COARSE_DETAIL, peakLimitW: SUIT.limitW }))
+    } else saveHud(mission?.id, profile.status === 'error' ? 'failed' : 'updating', null)
+  }, [mission?.id, routePath, plan, limits, profile, assessment, marksKey])
   const mapLabels = useMemo(() => [
+    ...crewLabels,
     ...(missionSites ?? []).flatMap((entry, index) => Number.isFinite(entry.lat + entry.lon) ? [{
       id: `site-${index}`,
       point: [entry.lat, entry.lon],
@@ -1266,7 +1320,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
       onSelect: (screen) => onContextRef.current?.({ point: entry.point, markerId: entry.id, screen }),
       onContext: (screen) => onContextRef.current?.({ point: entry.point, markerId: entry.id, screen }),
     })),
-  ], [missionSites, missionCounts, missionSelected, markers])
+  ], [missionSites, missionCounts, missionSelected, markers, crewLabels])
   const nextRelief = RELIEF_STEPS[(RELIEF_STEPS.indexOf(relief) + 1) % RELIEF_STEPS.length]
 
   return (
@@ -1349,6 +1403,11 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
                 </svg>
               </button>
             )}
+            {crewLabels.length > 0 && (
+              <button type="button" aria-label="Fit crew" data-tip="Fit crew in view" onClick={fitCrew}>
+                <StageIcon id="crew" />
+              </button>
+            )}
             <button
               type="button"
               aria-label="Global view"
@@ -1398,6 +1457,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
               status={routePlan?.status === 'blocked' ? 'blocked' : routeField.status}
               needs={routePlan?.status === 'blocked' ? routePlan.needs : null}
               thermalPending={routeField.thermalPending}
+              groundPending={routeField.groundPending}
               onRaise={(slope) => setLimits((current) => ({ ...current, slope }))}
               options={options}
               chosen={chosenId}
@@ -1464,6 +1524,7 @@ export default function MarsGlobe({ site, onSite, onStatus, onImagerySource, onS
               status={profile.status}
               limit={limits.slope}
               marks={marks}
+              hudHref={mission ? `hud.html?mission=${encodeURIComponent(mission.id)}` : 'hud.html'}
               routeName="EVA plan"
               hoverIndex={hoverIndex}
               onHover={setHoverIndex}

@@ -53,6 +53,8 @@ Before you say a task is done, run typecheck, lint and tests. Report a failure a
 
 ```
 src/            Mission editor: React and TypeScript. Stage pages in src/steps, the map in src/components and src/data, tokens in src/tokens.css
+src/hud/        EVA HUD, a second page at hud.html. Read-only overlay of the assessed route. Loads no map code.
+src/helmet/     The HUD seen from inside a helmet, a third page at helmet.html. Generated ground, for demos and video.
 apps/api/       Go server: mission planner, hr-planner CLI, tile proxy and disk cache
 scripts/        Basemap tile download, Go process launcher, gofmt check
 docs/           Visual language, design notes for the editor
@@ -182,12 +184,37 @@ Each color means one thing everywhere. If a color needs a legend to read, put th
 - Pick the unit by size: meters under 1 km, kilometers above. Coordinates are decimal degrees with east longitude 0 to 360°.
 - When alternatives come out the same, collapse them into one row and say why ("Ground here varies under 2°"). Never show four identical rows.
 - Say how good the data is wherever a decision rests on it. Terrain detail shows in the right-click menu, the Terrain tab and the profile, and fine terrain is outlined on the map. A leg on terrain coarser than 20 m is a caution, because slope there is a smoothed lower bound.
+- Rocks and ripples are an estimate from HiRISE shadows (`src/data/ground.ts`), so they caution and never block. Nothing seen in the image is not clear ground, and no image means rocks are unknown. Never show either as safe.
 - Dashes mean "not settled": candidate routes, legs while terrain loads, fine-terrain outlines, and the profile line where the terrain is coarse. Solid means measured and chosen. Don't use dashes for decoration.
 - Anything that changes with time is checked against the planned EVA window, from the Schedule start (UTC, empty means now) to the end of the route's time. A forecast says what it can't see: CME forecasts only cover CMEs already launched, so an EVA beyond their horizon is a caution, not a clear.
 - Don't invent numbers to fill a gap. When storm dose can't be estimated, the panel says the dose assumes a quiet sun.
 - Every failure says what to do next. Failed tiles and samples get Retry. A route blocked by the slope limit says which limit would work and has a button that applies it. A failure also says what it costs in the user's words: "Map imagery missing in places", not "Some tiles failed".
 - No bare counters. "+4" next to the verdict meant nothing to a first-time reader. Write "4 more reasons" and make it open the list.
 - Two numbers for the same thing must agree, or one must say why it differs. A suggested route's slope comes from the search grid and the profile's from full terrain, so the tooltip says which is which.
+
+### EVA HUD
+
+`hud.html` is a second page, opened with Open HUD in the route profile. It is drawn over the astronaut's view of the ground, so its rules differ from the planner's.
+
+- No backgrounds. The page is transparent and nothing has a panel behind it. Text and lines get a dark casing, `--visor-casing`, so they read on bright ground and on dark sky.
+- The middle of the view stays clear. The verdict and its reasons run along the top, numbers down the left, the route map and legs down the right, the profile along the bottom.
+- Nothing to press. No buttons, links or fields, and `pointer-events: none` lets clicks through to what is under it.
+- No grey text. Labels are the text color at weight 600 and are told from values by size. The alert colors keep their meanings and their triangles.
+- It works nothing out. The map saves the assessed route with `saveHud` in `src/data/hud-snapshot.ts` and the HUD draws that, so the two cannot disagree. While the planner assesses a changed route the HUD keeps the last one and says so.
+- It never shows a position. There is no position feed, and the footer says the route is a plan.
+- `src/hud` and `src/data/hud-snapshot.ts` must not import terrain or Cesium code. Check that the build's `hud` chunks stay a few kilobytes.
+
+### Helmet view
+
+`helmet.html` shows the HUD in use: the view from inside a helmet, with `src/hud`'s `Hud` laid over it. It takes the same `?mission=` as `hud.html`. It exists for demos and video.
+
+- The ground is generated. `src/helmet/shader.ts` builds it from noise and reads no elevation model and no image, so nothing in it is evidence about the site. The page says "Generated ground, not terrain data" on every frame. Keep that line.
+- The HUD is not changed here. Fix HUD content in `src/hud`. This page only places it inside the helmet opening and lets it trail a fast head.
+- No route on the ground and no markers in the scene. That would claim a position feed the HUD does not have.
+- The compass tape and the "Suit, simulated" block are the only readouts this page adds. The heading is that of the generated view and the suit numbers come from `src/helmet/suit-sim.ts`, curves with no sensor behind them. Keep the word "simulated" on the block, and never move these numbers into `src/hud`.
+- The look-arounds in `src/helmet/look.ts` have no randomness, so a recording can be repeated. `?tour=quick` plays the six second one. Drag or the arrow keys take the view, and Space gives it back.
+- `bun run helmet:record --snapshot <file>` writes `output/helmet.mp4` frame by frame, with breathing over a fan hum. `--sound <file>` uses a recorded breath, listed under "Helmet view sound" in `data/SOURCES.md`; without it `scripts/breath-sound.ts` makes one from noise. The snapshot is the value under `nimbs.hud:<mission id>` in the planner's localStorage. `scripts/record-helmet.ts` lists the options.
+- `--hide-notes` and `--drop-reason` leave lines out of a recording only. A video made with them no longer says the ground is generated, so say it wherever the video is shown.
 
 ### Comparing layouts
 
