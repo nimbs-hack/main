@@ -19,8 +19,6 @@ interface PointsPanelProps {
   pendingElevM: number | null;
   editingPoint: MapPoint | null;
   selectedPointId: string | null;
-  pickMode: boolean;
-  onTogglePickMode: () => void;
   onCancelDraft: () => void;
   onSavePoint: (payload: {
     id?: string;
@@ -65,8 +63,6 @@ export function PointsPanel({
   pendingElevM,
   editingPoint,
   selectedPointId,
-  pickMode,
-  onTogglePickMode,
   onCancelDraft,
   onSavePoint,
   onStartEditPoint,
@@ -284,22 +280,9 @@ export function PointsPanel({
             <span className="chamfer-btn-arrow">→</span>
           </button>
         </form>
-      ) : !readOnly ? (
-        <button
-          type="button"
-          className={`chamfer-btn ${pickMode ? "is-primary" : ""}`}
-          onClick={onTogglePickMode}
-        >
-          <span className="chamfer-btn-body">
-            <span className="chamfer-btn-label">
-              {pickMode ? "CLICK MAP TO DROP POINT" : "ADD POINT FROM MAP"}
-            </span>
-          </span>
-          <span className="chamfer-btn-arrow">{pickMode ? "×" : "+"}</span>
-        </button>
       ) : null}
 
-      {!readOnly && <div className="divider" />}
+      {!readOnly && isDraftOpen && <div className="divider" />}
 
       <div className="poi-section">
         <div className="field-label-row">

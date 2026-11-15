@@ -110,6 +110,7 @@ describe("browserCache mission state persistence", () => {
       MISSION_STATE_STORAGE_KEY,
       JSON.stringify({
         activeLayerId: "unknown-layer",
+        activeToolId: "settings",
         maxSlopeDeg: 999,
         simLmstHour: -5,
         waypointA: { lat: 400, lon: 10 },
@@ -120,6 +121,7 @@ describe("browserCache mission state persistence", () => {
     const repaired = loadMissionState(storage);
     const defaults = createDefaultMissionState();
     expect(repaired.activeLayerId).toBe(defaults.activeLayerId);
+    expect(repaired.activeToolId).toBe(defaults.activeToolId);
     expect(repaired.unit1.maxSlopeDeg).toBe(defaults.unit1.maxSlopeDeg);
     expect(repaired.simLmstHour).toBe(defaults.simLmstHour);
     expect(repaired.unit1.waypoints).toEqual([{ lat: 18.45, lon: 77.45 }]);

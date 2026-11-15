@@ -13,17 +13,14 @@ import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } fro
 import { ContextMenu } from "./components/ContextMenu";
 import { DualSimulationPanel } from "./components/DualSimulationPanel";
 import { type MapUnitDisplay, MapView } from "./components/MapView";
-import { MaxSlopeControl } from "./components/MaxSlopeControl";
 import { PointsPanel } from "./components/PointsPanel";
 import { RoutePlannerPanel } from "./components/RoutePlannerPanel";
 import {
-  TimeSimulationControl,
   clampSimLmstHour,
   estimateLocalWeatherAtElevation,
   formatLmstClock,
   resolveSolDisplay,
 } from "./components/TimeSimulationControl";
-import { TraversePresetControl } from "./components/TraversePresetControl";
 import { WeatherPanel, evaStatusClass } from "./components/WeatherPanel";
 import { ToolRegistry } from "./registry/toolRegistry";
 import {
@@ -371,9 +368,11 @@ export function App() {
   const [unit2, setUnit2] = useState<UnitMissionState>(() =>
     createInitialUnitState(2, initialMissionState.unit2),
   );
-  const [activeToolId, setActiveToolId] = useState(initialMissionState.activeToolId);
+  const [activeToolId, setActiveToolId] = useState(
+    initialMissionState.activeToolId === "settings" ? "route" : initialMissionState.activeToolId,
+  );
   const [panelOpen, setPanelOpen] = useState(initialMissionState.panelOpen);
-  const [lonFormat, setLonFormat] = useState<LonFormat>(initialMissionState.lonFormat);
+  const lonFormat: LonFormat = initialMissionState.lonFormat;
 
   const [hoveredProfilePoint, setHoveredProfilePoint] = useState<RoutePoint | null>(null);
   const [moveWaypointsMode, setMoveWaypointsMode] = useState(initialMissionState.moveWaypointsMode);
@@ -408,7 +407,6 @@ export function App() {
   const [pendingPointElevM, setPendingPointElevM] = useState<number | null>(null);
   const [editingPoint, setEditingPoint] = useState<MapPoint | null>(null);
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
-  const [pickPointMode, setPickPointMode] = useState(false);
   const [focusPointTrigger, setFocusPointTrigger] = useState<{
     coord: MarsCoord;
     seq: number;
@@ -971,7 +969,6 @@ export function App() {
         setEditingPoint(null);
         setPendingPointCoord(null);
         setPendingPointElevM(null);
-        setPickPointMode(false);
       }
     },
     [uiMode],
@@ -983,7 +980,6 @@ export function App() {
       setEditingPoint(null);
       setPendingPointCoord(coord);
       setPendingPointElevM(null);
-      setPickPointMode(false);
       setActiveToolId("points");
       setPanelOpen(true);
 
@@ -1055,7 +1051,6 @@ export function App() {
       setPendingPointElevM(point.elevationM ?? null);
       setEditingPoint(point);
       setSelectedPointId(point.id);
-      setPickPointMode(false);
       setActiveToolId("points");
       setPanelOpen(true);
     },
@@ -1147,54 +1142,10 @@ export function App() {
     });
 
     reg.register({
-      id: "points",
-      shortLabel: "PTS",
-      title: "Points",
-      order: 2,
-      render: () => (
-        <PointsPanel
-          readOnly={uiMode === "basic"}
-          activeUnitId={activeUnitId}
-          classes={pointClasses}
-          points={points}
-          hiddenClassIds={hiddenClassIds}
-          lonFormat={lonFormat}
-          pendingCoord={pendingPointCoord}
-          pendingElevM={pendingPointElevM}
-          editingPoint={editingPoint}
-          selectedPointId={selectedPointId}
-          pickMode={pickPointMode}
-          onTogglePickMode={() => setPickPointMode((v) => !v)}
-          onCancelDraft={() => {
-            setEditingPoint(null);
-            setPendingPointCoord(null);
-            setPendingPointElevM(null);
-            setPickPointMode(false);
-          }}
-          onSavePoint={handleSavePoint}
-          onStartEditPoint={handleStartEditPoint}
-          onDeletePoint={handleDeletePoint}
-          onFocusPoint={handleFocusPoint}
-          nextWaypointNumber={activeUnit.waypoints.length + 1}
-          onAppendWaypoint={(c) => handleAppendWaypoint(c, false)}
-          onInsertIntermediate={(c) => handleInsertIntermediateWaypoint(c, false)}
-          onToggleClass={(classId) =>
-            setHiddenClassIds((prev) => toggleClassVisibility(prev, classId))
-          }
-          onSetAllClassesVisible={(visible) =>
-            setHiddenClassIds(setAllClassesVisible(pointClasses, visible))
-          }
-          onCreateClass={handleCreateCustomClass}
-          onDeleteCustomClass={handleDeleteCustomClass}
-        />
-      ),
-    });
-
-    reg.register({
       id: "weather",
       shortLabel: "WXR",
       title: "Weather & EVA",
-      order: 3,
+      order: 2,
       render: () => (
         <WeatherPanel
           activeUnitId={activeUnitId}
@@ -1230,10 +1181,105 @@ export function App() {
     });
 
     reg.register({
+      id: "sim",
+      shortLabel: "SIM",
+      title: "Dual Simulation",
+      order: 3,
+      render: () => (
+        <DualSimulationPanel
+          unit1={{
+            unitId: 1,
+            presetId: unit1.presetId,
+            route: selectedRoute1,
+            limits: unit1.weatherLimits,
+            maxSlopeDeg: unit1.maxSlopeDeg,
+            waypointCount: unit1.waypoints.length,
+          }}
+          unit2={{
+            unitId: 2,
+            presetId: unit2.presetId,
+            route: selectedRoute2,
+            limits: unit2.weatherLimits,
+            maxSlopeDeg: unit2.maxSlopeDeg,
+            waypointCount: unit2.waypoints.length,
+          }}
+          bundle={dualSimBundle}
+          frame={dualSimFrame}
+          elapsedHours={effectiveDualElapsed}
+          departureLmstHour={simDepartureLmstHour}
+          playing={dualSimPlaying}
+          speedMultiplier={dualSimSpeedMultiplier}
+          weather={weatherSnapshot}
+          onChangeElapsed={(next) => {
+            setDualSimPlaying(false);
+            setDualSimElapsedHours(next);
+          }}
+          onTogglePlay={handleToggleDualPlay}
+          onReset={() => {
+            setDualSimPlaying(false);
+            setDualSimElapsedHours(0);
+          }}
+          onChangeSpeed={setDualSimSpeedMultiplier}
+          onChangeDepartureLmst={(nextHour) => {
+            const wrapped = ((nextHour % 48) + 48) % 48;
+            setSimDepartureLmstHour(Math.round(wrapped * 2) / 2);
+          }}
+          onSyncDepartureFromWxr={() => setSimDepartureLmstHour(simLmstHour)}
+          onEditUnitRoute={(unitId) => {
+            handleChangeActiveUnit(unitId);
+            setActiveToolId("route");
+            setPanelOpen(true);
+          }}
+        />
+      ),
+    });
+
+    reg.register({
+      id: "points",
+      shortLabel: "PTS",
+      title: "Points",
+      order: 4,
+      render: () => (
+        <PointsPanel
+          readOnly={uiMode === "basic"}
+          activeUnitId={activeUnitId}
+          classes={pointClasses}
+          points={points}
+          hiddenClassIds={hiddenClassIds}
+          lonFormat={lonFormat}
+          pendingCoord={pendingPointCoord}
+          pendingElevM={pendingPointElevM}
+          editingPoint={editingPoint}
+          selectedPointId={selectedPointId}
+          onCancelDraft={() => {
+            setEditingPoint(null);
+            setPendingPointCoord(null);
+            setPendingPointElevM(null);
+          }}
+          onSavePoint={handleSavePoint}
+          onStartEditPoint={handleStartEditPoint}
+          onDeletePoint={handleDeletePoint}
+          onFocusPoint={handleFocusPoint}
+          nextWaypointNumber={activeUnit.waypoints.length + 1}
+          onAppendWaypoint={(c) => handleAppendWaypoint(c, false)}
+          onInsertIntermediate={(c) => handleInsertIntermediateWaypoint(c, false)}
+          onToggleClass={(classId) =>
+            setHiddenClassIds((prev) => toggleClassVisibility(prev, classId))
+          }
+          onSetAllClassesVisible={(visible) =>
+            setHiddenClassIds(setAllClassesVisible(pointClasses, visible))
+          }
+          onCreateClass={handleCreateCustomClass}
+          onDeleteCustomClass={handleDeleteCustomClass}
+        />
+      ),
+    });
+
+    reg.register({
       id: "layers",
       shortLabel: "LYR",
       title: "Map Layers",
-      order: 4,
+      order: 5,
       render: () => (
         <>
           <div className="panel-header">
@@ -1368,173 +1414,7 @@ export function App() {
               {showPointsOverlay ? "ON" : "OFF"}
             </span>
           </button>
-
-          <TimeSimulationControl
-            compact
-            lmstHour={simLmstHour}
-            isPlaying={isPlayingTime}
-            baseSol={weatherSnapshot?.sol}
-            weather={weatherSnapshot}
-            evaluation={activeUnit.weatherEval}
-            onChangeHour={handleChangeSimHour}
-            onJumpHour={handleJumpSimHour}
-            onTogglePlay={handleTogglePlayTime}
-          />
         </>
-      ),
-    });
-
-    reg.register({
-      id: "settings",
-      shortLabel: "SET",
-      title: "Settings",
-      order: 5,
-      render: () => (
-        <>
-          <div className="panel-header">
-            <div className="panel-title-row">
-              <h1 className="panel-title">Settings</h1>
-              <span
-                className="unit-tag-pill"
-                style={{
-                  borderColor: UNIT_ACCENT_COLORS[activeUnitId],
-                  color: UNIT_ACCENT_COLORS[activeUnitId],
-                }}
-              >
-                UNIT {activeUnitId}
-              </span>
-            </div>
-            <p className="panel-desc">
-              {uiMode === "basic"
-                ? `Mission preset filters passable edges in the ${siteLabels.sizeCompact} km terrain graph.`
-                : `Slope threshold in degrees filters passable edges in the ${siteLabels.sizeCompact} km terrain graph.`}
-            </p>
-            <div className="panel-rule" />
-          </div>
-
-          {uiMode === "basic" ? (
-            <TraversePresetControl
-              presetId={activeUnit.presetId}
-              onSelectPreset={handleSelectPreset}
-            />
-          ) : (
-            <MaxSlopeControl
-              valueDeg={activeUnit.maxSlopeDeg}
-              onChange={(deg) => patchActiveUnit({ maxSlopeDeg: deg })}
-            />
-          )}
-
-          {activeUnit.routePlan && (
-            <div className="readout-card">
-              <span className="value-label">GRAPH PASSABILITY · U{activeUnitId}</span>
-              <span className="readout-number">
-                {(activeUnit.routePlan.passableEdgeRatio * 100).toFixed(1)}%
-              </span>
-              <span className="readout-sub">
-                Edges at or below {activeUnit.maxSlopeDeg.toFixed(1)}°
-              </span>
-            </div>
-          )}
-
-          <div className="divider" />
-
-          <div className="field-label-row">
-            <span className="value-label">LONGITUDE CONVENTION</span>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button
-                type="button"
-                className={`compact-btn ${lonFormat === "180" ? "is-active" : ""}`}
-                onClick={() => setLonFormat("180")}
-              >
-                -180..180
-              </button>
-              <button
-                type="button"
-                className={`compact-btn ${lonFormat === "360" ? "is-active" : ""}`}
-                onClick={() => setLonFormat("360")}
-              >
-                0..360E
-              </button>
-            </div>
-          </div>
-
-          {site && (
-            <div className="readout-card">
-              <span className="value-label">TERRAIN GRAPH GRID</span>
-              <span className="mono-value">
-                {site.cols} x {site.rows} NODES ({site.cellSizeMeters} m)
-              </span>
-              <span className="readout-sub">
-                ELEV {site.minElevationM.toFixed(0)} m .. {site.maxElevationM.toFixed(0)} m
-              </span>
-            </div>
-          )}
-
-          <button
-            type="button"
-            className="chamfer-btn is-primary"
-            onClick={() => setFocusCount((c) => c + 1)}
-          >
-            <span className="chamfer-btn-body">
-              <span className="chamfer-btn-label">FOCUS {siteLabels.sizeUpper} SITE</span>
-            </span>
-            <span className="chamfer-btn-arrow">→</span>
-          </button>
-        </>
-      ),
-    });
-
-    reg.register({
-      id: "sim",
-      shortLabel: "SIM",
-      title: "Dual Simulation",
-      order: 6,
-      render: () => (
-        <DualSimulationPanel
-          unit1={{
-            unitId: 1,
-            presetId: unit1.presetId,
-            route: selectedRoute1,
-            limits: unit1.weatherLimits,
-            maxSlopeDeg: unit1.maxSlopeDeg,
-            waypointCount: unit1.waypoints.length,
-          }}
-          unit2={{
-            unitId: 2,
-            presetId: unit2.presetId,
-            route: selectedRoute2,
-            limits: unit2.weatherLimits,
-            maxSlopeDeg: unit2.maxSlopeDeg,
-            waypointCount: unit2.waypoints.length,
-          }}
-          bundle={dualSimBundle}
-          frame={dualSimFrame}
-          elapsedHours={effectiveDualElapsed}
-          departureLmstHour={simDepartureLmstHour}
-          playing={dualSimPlaying}
-          speedMultiplier={dualSimSpeedMultiplier}
-          weather={weatherSnapshot}
-          onChangeElapsed={(next) => {
-            setDualSimPlaying(false);
-            setDualSimElapsedHours(next);
-          }}
-          onTogglePlay={handleToggleDualPlay}
-          onReset={() => {
-            setDualSimPlaying(false);
-            setDualSimElapsedHours(0);
-          }}
-          onChangeSpeed={setDualSimSpeedMultiplier}
-          onChangeDepartureLmst={(nextHour) => {
-            const wrapped = ((nextHour % 48) + 48) % 48;
-            setSimDepartureLmstHour(Math.round(wrapped * 2) / 2);
-          }}
-          onSyncDepartureFromWxr={() => setSimDepartureLmstHour(simLmstHour)}
-          onEditUnitRoute={(unitId) => {
-            handleChangeActiveUnit(unitId);
-            setActiveToolId("route");
-            setPanelOpen(true);
-          }}
-        />
       ),
     });
 
@@ -1575,7 +1455,6 @@ export function App() {
     showTemperatureLayer,
     showSiteBounds,
     showPointsOverlay,
-    site,
     siteLabels,
     pointClasses,
     points,
@@ -1584,7 +1463,6 @@ export function App() {
     pendingPointElevM,
     editingPoint,
     selectedPointId,
-    pickPointMode,
     handleSavePoint,
     handleStartEditPoint,
     handleDeletePoint,
@@ -1694,7 +1572,6 @@ export function App() {
           points={visiblePoints}
           pointClasses={pointClasses}
           selectedPointId={selectedPointId}
-          pickMode={uiMode === "advance" && pickPointMode}
           readOnlyPoints={uiMode === "basic"}
           focusPointTrigger={focusPointTrigger}
           leftInsetPx={leftHudOffset}
@@ -1708,7 +1585,6 @@ export function App() {
             patchUnitById(unitId, { selectedRouteId: routeId });
           }}
           onDragWaypoint={handleUpdateWaypointCoord}
-          onPickPointCoord={openPointComposerAtCoord}
           onSelectPoint={(id) => setSelectedPointId(id)}
           onPointAppendWaypoint={(c) => handleAppendWaypoint(c, true)}
           onPointInsertWaypoint={(c) => handleInsertIntermediateWaypoint(c, true)}

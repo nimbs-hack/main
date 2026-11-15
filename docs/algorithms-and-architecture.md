@@ -175,13 +175,13 @@ Pressure follows `p = pScale * exp(-elev / 10800)` where `pScale = sample.pressu
 
 `apps/web/src/registry/toolRegistry.ts` manages rail tools via `ToolRegistry` methods `register`, `list` sorted ascending by `order`, and `get`. Following `docs/adding-tools.md`, `apps/web/src/App.tsx` registers five tools on the 64px vertical `.tool-rail` alongside a compact `BSC` / `ADV` mode switch:
 
-- `BSC` (basic mode): replaces parameter sliders in `RTE`, `WXR`, and `SET` with `TraversePresetControl` (`HUMAN` EVA suit vs `ROVER` pressurized vehicle presets), and switches `PTS` and marker popups/context menus to read-only point viewing while keeping `A` and `B` route waypoint placement active.
-- `ADV` (advance mode): exposes all slope, EVA threshold, and traverse speed sliders plus full map point and custom class creation, editing, and deletion.
-- `route`, rail label `RTE`, order `1`: waypoint readouts, `TraversePresetControl` (in `BSC`) or `MaxSlopeControl` (in `ADV`), a `WEATHER ROUTING` toggle with a `T >= ... / P >= ... / LMST` strip, route strategy buttons, route weather check summary, summary stats, and `ElevationProfile`.
-- `points`, rail label `PTS`, order `2`: classified map markers, per-class visibility toggles, and (in `ADV`) class creation and themed symbol selection (`ThemedIconPicker`).
-- `weather`, rail label `WXR`, order `3`: `WeatherPanel` with a full `TimeSimulationControl`, NASA/PDS weather telemetry, simulated/hybrid provenance notice, scenario selector (`auto`, `nominal`, `dust-storm`, `cold-snap`), 24-hour LMST forecast strip, the 48-hour `TraverseWindowsPanel`, and either `TraversePresetControl` (`BSC`) or 5 EVA constraint sliders plus 3 traverse speed sliders (`ADV`).
-- `layers`, rail label `LYR`, order `4`: global basemap selector and toggles for the local site hillshade, slope hazard mask, pressure overlay, temperature overlay, and site bounding box, plus a compact `TimeSimulationControl`.
-- `settings`, rail label `SET`, order `5`: `TraversePresetControl` (`BSC`) or `MaxSlopeControl` (`ADV`), graph edge passability percentage, `-180..180` versus `0..360E` longitude display toggle, DEM grid stats, and a button to re-center on the local site patch.
+- `BSC` (basic mode): replaces parameter sliders in `RTE` and `WXR` with `TraversePresetControl` (`HUMAN` EVA suit vs `ROVER` pressurized vehicle presets), and switches `PTS` and marker popups/context menus to read-only point viewing while keeping numbered route waypoint placement active.
+- `ADV` (advance mode): exposes all slope, EVA threshold, soil speed matrix, and traverse speed sliders plus full map point and custom class creation, editing, and deletion.
+- `route`, rail label `RTE`, order `1`: unit switcher (`1 / 2`), sequential waypoint list (`1..N`), `MOVE` drag toggle, `TraversePresetControl` (`BSC`) or `MaxSlopeControl` (`ADV`), `WEATHER ROUTING` toggle, route strategy cards, soil breakdown strip, and `ElevationProfile`.
+- `weather`, rail label `WXR`, order `2`: `WeatherPanel` with a full `TimeSimulationControl`, NASA/PDS weather telemetry, simulated/hybrid provenance notice, scenario selector (`auto`, `nominal`, `dust-storm`, `cold-snap`), 24-hour LMST forecast strip, the 48-hour `TraverseWindowsPanel`, and either `TraversePresetControl` (`BSC`) or 5 EVA constraint sliders, 3 traverse speed sliders, and 4 soil speed multiplier sliders (`ADV`).
+- `sim`, rail label `SIM`, order `3`: `DualSimulationPanel` for synchronized two-unit playback, live speed/departure time controls, dual timeline charts, and live telemetry cards.
+- `points`, rail label `PTS`, order `4`: classified map markers, per-class visibility toggles, active-unit waypoint assignment, and (in `ADV`) point editing from map context-menu coordinates plus custom class creation and `ThemedIconPicker`.
+- `layers`, rail label `LYR`, order `5`: global basemap selector and toggles for the local site hillshade, slope hazard mask, soil substrate matrix, pressure overlay, temperature overlay, site bounding box, and classified markers.
 
 ### Classified points and FGDC symbology
 

@@ -494,7 +494,9 @@ export function loadMissionState(storage?: Storage): PersistedMissionState {
       uiMode,
       activeUnitId: parsed.activeUnitId === 2 ? 2 : 1,
       activeToolId:
-        typeof parsed.activeToolId === "string" && parsed.activeToolId.length > 0
+        typeof parsed.activeToolId === "string" &&
+        parsed.activeToolId.length > 0 &&
+        parsed.activeToolId !== "settings"
           ? parsed.activeToolId
           : defaults.activeToolId,
       panelOpen: typeof parsed.panelOpen === "boolean" ? parsed.panelOpen : defaults.panelOpen,

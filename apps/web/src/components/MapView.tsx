@@ -57,7 +57,6 @@ interface MapViewProps {
   points: MapPoint[];
   pointClasses: MapPointClass[];
   selectedPointId: string | null;
-  pickMode: boolean;
   readOnlyPoints?: boolean;
   focusPointTrigger: { coord: MarsCoord; seq: number } | null;
   leftInsetPx?: number;
@@ -69,7 +68,6 @@ interface MapViewProps {
   onCloseContextMenu: () => void;
   onSelectRoute?: (unitId: MissionUnitId, routeId: string) => void;
   onDragWaypoint?: (unitId: MissionUnitId, index: number, coord: MarsCoord) => void;
-  onPickPointCoord: (coord: MarsCoord) => void;
   onSelectPoint: (pointId: string) => void;
   onPointAppendWaypoint: (coord: MarsCoord) => void;
   onPointInsertWaypoint: (coord: MarsCoord) => void;
@@ -290,7 +288,6 @@ export function MapView({
   points,
   pointClasses,
   selectedPointId,
-  pickMode,
   readOnlyPoints = false,
   focusPointTrigger,
   leftInsetPx = 0,
@@ -302,7 +299,6 @@ export function MapView({
   onCloseContextMenu,
   onSelectRoute,
   onDragWaypoint,
-  onPickPointCoord,
   onSelectPoint,
   onPointAppendWaypoint,
   onPointInsertWaypoint,
@@ -321,8 +317,6 @@ export function MapView({
   const hoverMarkerRef = useRef<L.Marker | null>(null);
   const leftInsetRef = useRef(leftInsetPx);
   leftInsetRef.current = leftInsetPx;
-  const pickModeRef = useRef(pickMode);
-  pickModeRef.current = pickMode;
   const activeNextNumRef = useRef(1);
   activeNextNumRef.current =
     (activeUnitId === 1 ? unit1.waypoints.length : unit2.waypoints.length) + 1;
@@ -334,7 +328,6 @@ export function MapView({
     onCloseContextMenu,
     onSelectRoute,
     onDragWaypoint,
-    onPickPointCoord,
     onSelectPoint,
     onPointAppendWaypoint,
     onPointInsertWaypoint,
@@ -348,7 +341,6 @@ export function MapView({
     onCloseContextMenu,
     onSelectRoute,
     onDragWaypoint,
-    onPickPointCoord,
     onSelectPoint,
     onPointAppendWaypoint,
     onPointInsertWaypoint,
@@ -411,14 +403,8 @@ export function MapView({
       });
     });
 
-    map.on("click", (e: L.LeafletMouseEvent) => {
+    map.on("click", () => {
       callbacksRef.current.onCloseContextMenu();
-      if (pickModeRef.current) {
-        callbacksRef.current.onPickPointCoord({
-          lat: e.latlng.lat,
-          lon: normalizeLon180(e.latlng.lng),
-        });
-      }
     });
 
     map.on("movestart zoomstart", () => {
@@ -854,13 +840,6 @@ export function MapView({
       }).addTo(map);
     }
   }, [hoveredProfilePoint]);
-
-  // Toggle crosshair cursor when picking a point coordinate on the map
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    map.getContainer().style.cursor = pickMode ? "crosshair" : "";
-  }, [pickMode]);
 
   // Pan map when user clicks FOCUS on a classified point card
   useEffect(() => {
